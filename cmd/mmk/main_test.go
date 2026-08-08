@@ -35,6 +35,24 @@ func TestRepositoryIdentitySurfaces(t *testing.T) {
 		t.Error("flake.nix still exports packages.slk")
 	}
 
+	gitignore := readIdentityFile(t, filepath.Join(root, ".gitignore"))
+	for _, want := range []string{"/mmk", "mmk-debug.log"} {
+		if !strings.Contains(gitignore, want) {
+			t.Errorf(".gitignore missing %q", want)
+		}
+	}
+	for _, stale := range []string{"/slk", "slk-debug.log"} {
+		if strings.Contains(gitignore, stale) {
+			t.Errorf(".gitignore still contains %q", stale)
+		}
+	}
+
+	status := readIdentityFile(t, filepath.Join(root, "docs", "STATUS.md"))
+	staleStatusIdentity := regexp.MustCompile(`(?m)^# slk Implementation Status$|(?m)^slk/$|cmd/slk|\bslk uses\b`)
+	if stale := staleStatusIdentity.FindString(status); stale != "" {
+		t.Errorf("docs/STATUS.md contains stale project identity %q", stale)
+	}
+
 	wikiFiles, err := filepath.Glob(filepath.Join(root, "wiki", "*.md"))
 	if err != nil {
 		t.Fatalf("glob active wiki pages: %v", err)

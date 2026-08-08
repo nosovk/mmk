@@ -1,4 +1,4 @@
-# slk Implementation Status
+# mmk Implementation Status
 
 Last updated: 2026-05-03
 
@@ -123,8 +123,8 @@ Last updated: 2026-05-03
 ## Architecture Overview
 
 ```
-slk/
-├── cmd/slk/
+mmk/
+├── cmd/mmk/
 │   ├── main.go              # Entry point, dependency wiring
 │   └── onboarding.go        # --add-workspace interactive setup
 ├── internal/
@@ -170,7 +170,7 @@ slk/
 3. **Render caching** -- messages rendered once, cached until content changes
 4. **bubbles/viewport scrolling** -- all scrollable panels use bubbles/viewport with item-level selection
 5. **Direct WebSocket** -- connects to Slack's internal browser WebSocket protocol (not RTM or Socket Mode) for real-time events with xoxc tokens
-6. **Slack-native sidebar sections (default), with config-glob fallback** -- slk uses `users.channelSections.list` and four `channel_section*` WebSocket events (all undocumented but stable in the official client) to mirror the user's actual sidebar. Bootstrap on connect, live deltas thereafter, debounced re-bootstrap on reconnect. The legacy config-glob path is preserved verbatim and selected via `use_slack_sections = false` (globally or per-workspace), or activated automatically when the Slack endpoint fails. Read-only in v1; section editing still happens in the official client.
+6. **Slack-native sidebar sections (default), with config-glob fallback** -- mmk uses `users.channelSections.list` and four `channel_section*` WebSocket events (all undocumented but stable in the official client) to mirror the user's actual sidebar. Bootstrap on connect, live deltas thereafter, debounced re-bootstrap on reconnect. The legacy config-glob path is preserved verbatim and selected via `use_slack_sections = false` (globally or per-workspace), or activated automatically when the Slack endpoint fails. Read-only in v1; section editing still happens in the official client.
 7. **muesli/reflow** -- ANSI-aware text wrapping, padding, and truncation for correct rendering with styled text
 8. **Green left-border selection** -- consistent `▌` indicator across messages, threads, channels, and channel finder
 9. **Thick left-border compose** -- compose boxes use `▌` border with dark background, matching opencode's input style
