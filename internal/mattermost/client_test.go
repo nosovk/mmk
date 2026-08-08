@@ -3,6 +3,7 @@ package mattermost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -76,6 +77,18 @@ func TestClientRejectsURLWithoutHost(t *testing.T) {
 func TestClientRejectsCredentialsInURL(t *testing.T) {
 	if _, err := NewClient("https://user:password@chat.example.com", "token"); err == nil {
 		t.Fatal("NewClient accepted credentials in the URL")
+	}
+}
+
+func TestClientRejectsURLWithQuery(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com?redirect=elsewhere", "token"); err == nil {
+		t.Fatal("NewClient accepted a URL with a query")
+	}
+}
+
+func TestClientRejectsURLWithFragment(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com#section", "token"); err == nil {
+		t.Fatal("NewClient accepted a URL with a fragment")
 	}
 }
 
@@ -297,6 +310,31 @@ func TestAPIErrorUsesHTTPStatusForEmptyBody(t *testing.T) {
 	}
 }
 
+func TestAPIErrorSanitizesTokenFromExportedFields(t *testing.T) {
+	const token = "highly-secret-token"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{
+			"id":"id-highly-secret-token",
+			"message":"message highly-secret-token",
+			"request_id":"request-highly-secret-token",
+			"detailed_error":"detail highly-secret-token"
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, token, WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	_, err = client.CurrentUser(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %T %v, want *APIError", err, err)
+	}
+	assertStringsDoNotContain(t, token, apiErr.Error(), apiErr.ID, apiErr.Message, apiErr.RequestID, apiErr.DetailedError)
+}
+
 func TestClientPreservesContextCancellation(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return nil, req.Context().Err()
@@ -311,6 +349,21 @@ func TestClientPreservesContextCancellation(t *testing.T) {
 	_, err = client.CurrentUser(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestClientPreservesContextDeadlineExceeded(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+	client, err := NewClient("https://chat.example.com", "secret", WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	_, err = client.CurrentUser(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
 	}
 }
 
@@ -336,6 +389,50 @@ func TestClientClosesResponseBody(t *testing.T) {
 	}
 }
 
+func TestClientClosesResponseBodyForAPIError(t *testing.T) {
+	body := &trackingReadCloser{Reader: strings.NewReader(`{"message":"unauthorized"}`)}
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Header:     make(http.Header),
+			Body:       body,
+		}, nil
+	})}
+	client, err := NewClient("https://chat.example.com", "secret", WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	if _, err := client.CurrentUser(context.Background()); err == nil {
+		t.Fatal("CurrentUser returned nil error")
+	}
+	if !body.closed {
+		t.Fatal("API error response body was not closed")
+	}
+}
+
+func TestClientClosesResponseBodyForDecodeError(t *testing.T) {
+	body := &trackingReadCloser{Reader: strings.NewReader(`{"id":`)}
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       body,
+		}, nil
+	})}
+	client, err := NewClient("https://chat.example.com", "secret", WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	if _, err := client.CurrentUser(context.Background()); err == nil {
+		t.Fatal("CurrentUser returned nil error")
+	}
+	if !body.closed {
+		t.Fatal("malformed response body was not closed")
+	}
+}
+
 func TestClientReportsMalformedSuccessJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"id":`)
@@ -352,10 +449,28 @@ func TestClientReportsMalformedSuccessJSON(t *testing.T) {
 	}
 }
 
+func TestClientRejectsMultipleSuccessJSONValues(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id":"user-1"} {"id":"user-2"}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	_, err = client.CurrentUser(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "multiple JSON values") {
+		t.Fatalf("error = %v, want multiple JSON values error", err)
+	}
+}
+
 func TestClientDoesNotExposeTokenInErrors(t *testing.T) {
 	const token = "highly-secret-token"
+	sentinel := errors.New("transport sentinel")
+	transportErr := &secretTransportError{token: token, sentinel: sentinel}
 	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("transport accidentally included " + token)
+		return nil, transportErr
 	})}
 	client, err := NewClient("https://chat.example.com", token, WithHTTPClient(httpClient))
 	if err != nil {
@@ -366,9 +481,16 @@ func TestClientDoesNotExposeTokenInErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("CurrentUser returned nil error")
 	}
-	if strings.Contains(err.Error(), token) {
-		t.Fatalf("error exposed token: %v", err)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error = %v, want transport sentinel match", err)
 	}
+	assertErrorChainDoesNotContain(t, err, token)
+
+	var recovered *secretTransportError
+	if errors.As(err, &recovered) {
+		t.Fatalf("errors.As recovered unsanitized transport error: %v", recovered)
+	}
+	assertStringsDoNotContain(t, token, fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err))
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -385,4 +507,35 @@ type trackingReadCloser struct {
 func (r *trackingReadCloser) Close() error {
 	r.closed = true
 	return nil
+}
+
+type secretTransportError struct {
+	token    string
+	sentinel error
+}
+
+func (e *secretTransportError) Error() string {
+	return "transport accidentally included " + e.token
+}
+
+func (e *secretTransportError) Is(target error) bool {
+	return target == e.sentinel
+}
+
+func assertErrorChainDoesNotContain(t *testing.T, err error, secret string) {
+	t.Helper()
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if strings.Contains(current.Error(), secret) {
+			t.Fatalf("error chain exposed token through %T: %v", current, current)
+		}
+	}
+}
+
+func assertStringsDoNotContain(t *testing.T, secret string, values ...string) {
+	t.Helper()
+	for _, value := range values {
+		if strings.Contains(value, secret) {
+			t.Fatalf("value exposed token: %q", value)
+		}
+	}
 }

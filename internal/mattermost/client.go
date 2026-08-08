@@ -116,7 +116,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body io.Reader
 	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return decodeAPIError(response)
+		return decodeAPIError(response, c.token)
 	}
 	if output == nil {
 		return nil
@@ -136,8 +136,8 @@ func (e *redactedError) Error() string {
 	return e.message
 }
 
-func (e *redactedError) Unwrap() error {
-	return e.cause
+func (e *redactedError) Is(target error) bool {
+	return errors.Is(e.cause, target)
 }
 
 func redactError(operation string, err error, secret string) error {
@@ -151,7 +151,7 @@ func redactError(operation string, err error, secret string) error {
 	}
 }
 
-func decodeAPIError(response *http.Response) error {
+func decodeAPIError(response *http.Response, token string) error {
 	apiErr := &APIError{StatusCode: response.StatusCode}
 	if err := json.NewDecoder(response.Body).Decode(apiErr); err != nil {
 		apiErr.Message = http.StatusText(response.StatusCode)
@@ -159,7 +159,18 @@ func decodeAPIError(response *http.Response) error {
 	if apiErr.Message == "" {
 		apiErr.Message = http.StatusText(response.StatusCode)
 	}
+	apiErr.ID = redactSecret(apiErr.ID, token)
+	apiErr.Message = redactSecret(apiErr.Message, token)
+	apiErr.RequestID = redactSecret(apiErr.RequestID, token)
+	apiErr.DetailedError = redactSecret(apiErr.DetailedError, token)
 	return apiErr
+}
+
+func redactSecret(value, secret string) string {
+	if secret == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, secret, "[REDACTED]")
 }
 
 func decodeJSON(reader io.Reader, output any) error {
