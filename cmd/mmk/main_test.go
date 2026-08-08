@@ -68,19 +68,39 @@ func TestBuildAndReleaseIdentitySurfaces(t *testing.T) {
 
 func TestGoSourcesPreserveIdentityAndUpstreamReferences(t *testing.T) {
 	root := filepath.Join("..", "..")
-	forbidden := regexp.MustCompile(`gammons/mmk#5|\bmmk\s+"github\.com/nosovk/mmk/internal/slack"|github\.com/gammons/slk/internal|cmd/slk|SLK_|slk-debug\.log`)
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || filepath.Ext(path) != ".go" || path == filepath.Join(root, "cmd", "mmk", "main_test.go") {
+	forbidden := regexp.MustCompile(malformedUpstreamIssuePattern() + `|\bmmk\s+"github\.com/nosovk/mmk/internal/slack"|github\.com/gammons/slk/internal|cmd/slk|SLK_|slk-debug\.log`)
+	for _, sourceRoot := range []string{"cmd", "internal"} {
+		err := filepath.WalkDir(filepath.Join(root, sourceRoot), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() || filepath.Ext(path) != ".go" || path == filepath.Join(root, "cmd", "mmk", "main_test.go") {
+				return nil
+			}
+			assertForbidden(t, path, readIdentityFile(t, path), forbidden)
 			return nil
+		})
+		if err != nil {
+			t.Fatalf("scan %s Go sources: %v", sourceRoot, err)
 		}
-		assertForbidden(t, path, readIdentityFile(t, path), forbidden)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan Go sources: %v", err)
+	}
+}
+
+func malformedUpstreamIssuePattern() string {
+	return `gammons/mmk#[0-9]+`
+}
+
+func TestMalformedUpstreamIssuePattern(t *testing.T) {
+	pattern := regexp.MustCompile(malformedUpstreamIssuePattern())
+	for _, issue := range []string{"gammons/mmk#1", "gammons/mmk#42", "gammons/mmk#12345"} {
+		if !pattern.MatchString(issue) {
+			t.Errorf("pattern does not reject %q", issue)
+		}
+	}
+	for _, valid := range []string{"gammons/slk#5", "github.com/nosovk/mmk/issues/5", "gammons/mmk"} {
+		if pattern.MatchString(valid) {
+			t.Errorf("pattern incorrectly rejects %q", valid)
+		}
 	}
 }
 
@@ -102,7 +122,16 @@ func TestActiveDocumentationIdentity(t *testing.T) {
 
 func TestReleaseHostingAssumptionIsDocumented(t *testing.T) {
 	readme := readIdentityFile(t, filepath.Join("..", "..", "README.md"))
-	for _, want := range []string{"github.com/nosovk/mmk", "GITHUB_TOKEN", "gammons/slk", "cannot publish"} {
+	for _, want := range []string{
+		"github.com/nosovk/mmk",
+		"automatically generated",
+		"GITHUB_TOKEN",
+		"gammons/slk",
+		"cannot publish",
+		"PAT",
+		"GitHub App",
+		"workflow change",
+	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README release notes missing %q", want)
 		}

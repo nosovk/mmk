@@ -194,9 +194,12 @@ Contributions are welcome. A few ground rules:
 ### Release hosting
 
 The release configuration assumes this repository is hosted at
-`github.com/nosovk/mmk`. A `GITHUB_TOKEN` scoped only to the upstream
-`gammons/slk` repository cannot publish releases to `nosovk/mmk`; the token used
-by the release workflow must have permission to publish to this repository.
+`github.com/nosovk/mmk`. When the workflow runs in `nosovk/mmk`, GitHub's
+automatically generated repository-scoped `GITHUB_TOKEN` is suitable for
+publishing there. When the workflow runs from another repository, such as the
+upstream `gammons/slk`, that repository's `GITHUB_TOKEN` cannot publish across
+repositories to `nosovk/mmk`; doing so requires a separate PAT or GitHub App
+credential with access to `nosovk/mmk`, plus a workflow change to use it.
 
 ## Disclaimer
 
