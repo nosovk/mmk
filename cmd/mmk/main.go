@@ -700,6 +700,18 @@ func main() {
 	}
 	// Handle simple flags before anything else
 	if len(os.Args) > 1 {
+		command, err := parseTopLevelCommand(os.Args)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if command == commandAddServer {
+			if err := addServer(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		switch os.Args[1] {
 		case "--version", "-v", "version":
 			fmt.Printf("mmk %s (commit %s, built %s)\n", version, commit, date)
@@ -785,10 +797,15 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Printf(`mmk %s -- a blazingly fast Slack TUI
+	fmt.Print(helpText(version))
+}
+
+func helpText(version string) string {
+	return fmt.Sprintf(`mmk %s -- a blazingly fast chat TUI
 
 Usage:
   mmk                    Launch the TUI
+  mmk --add-server        Add or update a Mattermost server (interactive)
   mmk --add-workspace     Add a Slack workspace (interactive)
   mmk --remove-workspace  Remove a configured workspace (interactive)
   mmk --list-workspaces   List configured workspaces (TeamID, Slug, Name)

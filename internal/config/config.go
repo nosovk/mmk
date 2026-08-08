@@ -13,15 +13,26 @@ import (
 )
 
 type Config struct {
-	General       General                      `toml:"general"`
-	Appearance    Appearance                   `toml:"appearance"`
-	Animations    Animations                   `toml:"animations"`
-	Notifications Notifications                `toml:"notifications"`
-	Cache         CacheConfig                  `toml:"cache"`
-	Sidebar       Sidebar                      `toml:"sidebar"`
-	Sections      map[string]SectionDef        `toml:"sections"`
-	Theme         Theme                        `toml:"theme"`
-	Workspaces    map[string]Workspace         `toml:"workspaces"`
+	General       General               `toml:"general"`
+	Appearance    Appearance            `toml:"appearance"`
+	Animations    Animations            `toml:"animations"`
+	Notifications Notifications         `toml:"notifications"`
+	Cache         CacheConfig           `toml:"cache"`
+	Sidebar       Sidebar               `toml:"sidebar"`
+	Sections      map[string]SectionDef `toml:"sections"`
+	Theme         Theme                 `toml:"theme"`
+	Workspaces    map[string]Workspace  `toml:"workspaces"`
+	Servers       []MattermostServer    `toml:"mattermost_servers"`
+}
+
+// MattermostServer contains only non-secret server identity and user metadata.
+// Authentication tokens are stored exclusively through SecretStore.
+type MattermostServer struct {
+	ID          string `toml:"id"`
+	URL         string `toml:"url"`
+	DisplayName string `toml:"display_name"`
+	UserID      string `toml:"user_id"`
+	Username    string `toml:"username"`
 }
 
 // SectionDef defines a sidebar section with channel name patterns.

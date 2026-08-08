@@ -2,12 +2,14 @@ package mattermost
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 )
@@ -44,9 +46,13 @@ func NewClient(baseURL, token string, options ...ClientOption) (*Client, error) 
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("Mattermost token must not be empty")
 	}
-	normalizedURL, err := normalizeBaseURL(baseURL)
+	root, err := CanonicalServerRoot(baseURL)
 	if err != nil {
 		return nil, err
+	}
+	normalizedURL, err := url.Parse(root + "/api/v4")
+	if err != nil {
+		return nil, fmt.Errorf("parse canonical Mattermost URL: %w", err)
 	}
 
 	client := &Client{
@@ -75,36 +81,71 @@ func cloneHTTPClient(httpClient *http.Client) *http.Client {
 	return &clone
 }
 
-func normalizeBaseURL(rawURL string) (*url.URL, error) {
+// CanonicalServerRoot returns the stable deployment root used by both config
+// identity and the REST client. It never includes Mattermost's /api/v4 suffix.
+func CanonicalServerRoot(rawURL string) (string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse Mattermost base URL: %w", err)
+		return "", fmt.Errorf("parse Mattermost base URL: %w", err)
 	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, errors.New("Mattermost base URL must use http or https")
+		return "", errors.New("Mattermost base URL must use http or https")
 	}
 	if parsed.Host == "" {
-		return nil, errors.New("Mattermost base URL must include a host")
+		return "", errors.New("Mattermost base URL must include a host")
 	}
 	if parsed.User != nil {
-		return nil, errors.New("Mattermost base URL must not include credentials")
+		return "", errors.New("Mattermost base URL must not include credentials")
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, errors.New("Mattermost base URL must not include a query or fragment")
+		return "", errors.New("Mattermost base URL must not include a query or fragment")
 	}
 	escapedPath := strings.ToLower(parsed.EscapedPath())
 	if strings.Contains(escapedPath, "%2f") || strings.Contains(escapedPath, "%5c") {
-		return nil, errors.New("Mattermost base URL must not include encoded path separators")
+		return "", errors.New("Mattermost base URL must not include encoded path separators")
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+	if (parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	parsed.Host = hostname
+	if strings.Contains(hostname, ":") {
+		parsed.Host = "[" + hostname + "]"
+	}
+	if port != "" {
+		parsed.Host += ":" + port
 	}
 
-	path := strings.TrimRight(parsed.Path, "/")
-	for strings.HasSuffix(path, "/api/v4") {
-		path = strings.TrimSuffix(path, "/api/v4")
-		path = strings.TrimRight(path, "/")
+	cleanPath := path.Clean("/" + strings.TrimLeft(parsed.Path, "/"))
+	if cleanPath == "/" {
+		cleanPath = ""
 	}
-	parsed.Path = path + "/api/v4"
+	if strings.HasSuffix(strings.ToLower(cleanPath), "/api/v4") {
+		cleanPath = cleanPath[:len(cleanPath)-len("/api/v4")]
+		cleanPath = strings.TrimRight(cleanPath, "/")
+	}
+	parsed.Path = cleanPath
 	parsed.RawPath = ""
-	return parsed, nil
+	return parsed.String(), nil
+}
+
+// ServerID derives a filesystem- and keyring-safe stable ID from a canonical
+// deployment root. The full 128-bit hash suffix keeps host-slug collisions safe.
+func ServerID(canonicalRoot string) string {
+	parsed, _ := url.Parse(canonicalRoot)
+	slug := strings.Trim(strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(parsed.Hostname())), "-")
+	if slug == "" {
+		slug = "mattermost"
+	}
+	sum := sha256.Sum256([]byte(canonicalRoot))
+	return fmt.Sprintf("%s-%x", slug, sum[:16])
 }
 
 // CurrentUser returns the authenticated Mattermost user.
@@ -228,7 +269,7 @@ func (c *Client) request(ctx context.Context, method, endpoint string, body io.R
 
 type redactedError struct {
 	message string
-	cause   error
+	matches func(error) bool
 }
 
 func (e *redactedError) Error() string {
@@ -236,17 +277,19 @@ func (e *redactedError) Error() string {
 }
 
 func (e *redactedError) Is(target error) bool {
-	return errors.Is(e.cause, target)
+	return e.matches != nil && e.matches(target)
 }
 
-func redactError(operation string, err error, secret string) error {
+func redactError(operation string, err error, secrets ...string) error {
 	message := err.Error()
-	if secret != "" {
-		message = strings.ReplaceAll(message, secret, "[REDACTED]")
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
 	}
 	return &redactedError{
 		message: operation + ": " + message,
-		cause:   err,
+		matches: func(target error) bool { return errors.Is(err, target) },
 	}
 }
 
