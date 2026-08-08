@@ -70,6 +70,16 @@ type Channel struct {
 	LastViewedAt int64
 }
 
+// ChannelMembership contains the per-user read metadata returned separately
+// from Mattermost channel objects.
+type ChannelMembership struct {
+	ChannelID    string
+	UserID       string
+	MsgCount     int64
+	MentionCount int64
+	LastViewedAt int64
+}
+
 // ChannelKind classifies channels for application behavior and presentation.
 type ChannelKind uint8
 

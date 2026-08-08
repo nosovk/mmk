@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -325,6 +326,235 @@ func TestClientCurrentUserConvertsWireResponseToDomainUser(t *testing.T) {
 	want := User{ID: "user-1", Username: "mgarcia", Nickname: "Mags", FirstName: "Maria", LastName: "Garcia"}
 	if *user != want {
 		t.Fatalf("user = %#v, want %#v", *user, want)
+	}
+}
+
+func TestClient_TeamsForUserCallsDocumentedEndpointAndConvertsResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodGet; got != want {
+			t.Errorf("method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.EscapedPath(), "/api/v4/users/user%2Fwith%20space/teams"; got != want {
+			t.Errorf("escaped path = %q, want %q", got, want)
+		}
+		if got := r.URL.RawQuery; got != "" {
+			t.Errorf("query = %q, want empty query", got)
+		}
+		_, _ = io.WriteString(w, `[
+			{"id":"team-2","name":"engineering","display_name":"Engineering","description":"ignored"},
+			{"id":"team-1","name":"support","display_name":"Support"}
+		]`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	teams, err := client.TeamsForUser(context.Background(), "user/with space")
+	if err != nil {
+		t.Fatalf("TeamsForUser returned error: %v", err)
+	}
+	want := []Team{
+		{ID: "team-2", Name: "engineering", DisplayName: "Engineering"},
+		{ID: "team-1", Name: "support", DisplayName: "Support"},
+	}
+	if !reflect.DeepEqual(teams, want) {
+		t.Fatalf("teams = %#v, want %#v", teams, want)
+	}
+}
+
+func TestClient_TeamsForUserRejectsEmptyUserIDWithoutRequest(t *testing.T) {
+	requests := &atomic.Int32{}
+	client := newCountingMattermostClient(t, requests)
+
+	if _, err := client.TeamsForUser(context.Background(), " \t\n "); err == nil {
+		t.Fatal("TeamsForUser accepted an empty user ID")
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
+func TestClient_TeamsForUserReturnsEmptySlice(t *testing.T) {
+	client := newJSONMattermostClient(t, `[]`)
+
+	teams, err := client.TeamsForUser(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("TeamsForUser returned error: %v", err)
+	}
+	if teams == nil || len(teams) != 0 {
+		t.Fatalf("teams = %#v, want non-nil empty slice", teams)
+	}
+}
+
+func TestClient_ChannelsForUserCallsCrossTeamEndpointAndPaginatesLocally(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodGet; got != want {
+			t.Errorf("method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.EscapedPath(), "/api/v4/users/user%2Fwith%20space/channels"; got != want {
+			t.Errorf("escaped path = %q, want %q", got, want)
+		}
+		if got := r.URL.RawQuery; got != "" {
+			t.Errorf("query = %q, want empty query because the endpoint has no pagination parameters", got)
+		}
+		_, _ = io.WriteString(w, `[
+			{"id":"public","team_id":"team-1","name":"town-square","display_name":"Town Square","type":"O","total_msg_count":11},
+			{"id":"private","team_id":"team-1","name":"private","display_name":"Private","type":"P","total_msg_count":12},
+			{"id":"direct","team_id":"","name":"user-1__user-2","display_name":"","type":"D","total_msg_count":13},
+			{"id":"group","team_id":"","name":"group-hash","display_name":"Group","type":"G","total_msg_count":14}
+		]`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	channels, err := client.ChannelsForUser(context.Background(), "user/with space", 1, 2)
+	if err != nil {
+		t.Fatalf("ChannelsForUser returned error: %v", err)
+	}
+	want := []Channel{
+		{ID: "direct", Name: "user-1__user-2", Kind: ChannelKindDirect},
+		{ID: "group", Name: "group-hash", DisplayName: "Group", Kind: ChannelKindGroup},
+	}
+	if !reflect.DeepEqual(channels, want) {
+		t.Fatalf("channels = %#v, want %#v", channels, want)
+	}
+}
+
+func TestClient_ChannelsForUserConvertsAllChannelKindsInResponseOrder(t *testing.T) {
+	client := newJSONMattermostClient(t, `[
+		{"id":"private","team_id":"team-2","name":"private","display_name":"Private","type":"P","total_msg_count":2},
+		{"id":"public","team_id":"team-1","name":"public","display_name":"Public","type":"O","total_msg_count":1},
+		{"id":"group","name":"group","display_name":"Group","type":"G","total_msg_count":4},
+		{"id":"direct","name":"direct","type":"D","total_msg_count":3}
+	]`)
+
+	channels, err := client.ChannelsForUser(context.Background(), "user-1", 0, 10)
+	if err != nil {
+		t.Fatalf("ChannelsForUser returned error: %v", err)
+	}
+	wantKinds := []ChannelKind{ChannelKindPrivate, ChannelKindPublic, ChannelKindGroup, ChannelKindDirect}
+	for i, want := range wantKinds {
+		if got := channels[i].Kind; got != want {
+			t.Fatalf("channels[%d].Kind = %v, want %v", i, got, want)
+		}
+	}
+}
+
+func TestClient_ChannelsForUserRejectsUnknownChannelKindContextually(t *testing.T) {
+	client := newJSONMattermostClient(t, `[{"id":"channel-1","type":"S"}]`)
+
+	_, err := client.ChannelsForUser(context.Background(), "user-1", 0, 10)
+	if err == nil || !strings.Contains(err.Error(), `channel "channel-1"`) || !strings.Contains(err.Error(), `unknown Mattermost channel type "S"`) {
+		t.Fatalf("error = %v, want contextual unknown channel type error", err)
+	}
+}
+
+func TestClient_ChannelsForUserValidatesArgumentsWithoutRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		userID  string
+		page    int
+		perPage int
+	}{
+		{name: "empty user ID", userID: " ", page: 0, perPage: 1},
+		{name: "negative page", userID: "user-1", page: -1, perPage: 1},
+		{name: "zero per page", userID: "user-1", page: 0, perPage: 0},
+		{name: "negative per page", userID: "user-1", page: 0, perPage: -1},
+		{name: "per page above conservative limit", userID: "user-1", page: 0, perPage: 201},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := &atomic.Int32{}
+			client := newCountingMattermostClient(t, requests)
+
+			if _, err := client.ChannelsForUser(context.Background(), tt.userID, tt.page, tt.perPage); err == nil {
+				t.Fatal("ChannelsForUser accepted invalid arguments")
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestClient_ChannelsForUserReturnsEmptySliceForPagePastEnd(t *testing.T) {
+	client := newJSONMattermostClient(t, `[{"id":"channel-1","type":"O"}]`)
+
+	channels, err := client.ChannelsForUser(context.Background(), "user-1", 2, 1)
+	if err != nil {
+		t.Fatalf("ChannelsForUser returned error: %v", err)
+	}
+	if channels == nil || len(channels) != 0 {
+		t.Fatalf("channels = %#v, want non-nil empty slice", channels)
+	}
+}
+
+func TestClient_ChannelMembershipsForUserCallsDocumentedTeamEndpointAndConvertsMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodGet; got != want {
+			t.Errorf("method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.EscapedPath(), "/api/v4/users/user%2F1/teams/team%2F1/channels/members"; got != want {
+			t.Errorf("escaped path = %q, want %q", got, want)
+		}
+		_, _ = io.WriteString(w, `[
+			{"channel_id":"channel-2","user_id":"user/1","last_viewed_at":222,"msg_count":12,"mention_count":3,"roles":"channel_user"},
+			{"channel_id":"channel-1","user_id":"user/1","last_viewed_at":111,"msg_count":7,"mention_count":1}
+		]`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	memberships, err := client.ChannelMembershipsForUser(context.Background(), "user/1", "team/1")
+	if err != nil {
+		t.Fatalf("ChannelMembershipsForUser returned error: %v", err)
+	}
+	want := []ChannelMembership{
+		{ChannelID: "channel-2", UserID: "user/1", LastViewedAt: 222, MsgCount: 12, MentionCount: 3},
+		{ChannelID: "channel-1", UserID: "user/1", LastViewedAt: 111, MsgCount: 7, MentionCount: 1},
+	}
+	if !reflect.DeepEqual(memberships, want) {
+		t.Fatalf("memberships = %#v, want %#v", memberships, want)
+	}
+}
+
+func TestClient_ChannelMembershipsForUserValidatesIDsWithoutRequest(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		userID string
+		teamID string
+	}{
+		{name: "empty user ID", userID: " ", teamID: "team-1"},
+		{name: "empty team ID", userID: "user-1", teamID: " "},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := &atomic.Int32{}
+			client := newCountingMattermostClient(t, requests)
+
+			if _, err := client.ChannelMembershipsForUser(context.Background(), tt.userID, tt.teamID); err == nil {
+				t.Fatal("ChannelMembershipsForUser accepted invalid IDs")
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestClient_ChannelsForUserReportsMalformedJSON(t *testing.T) {
+	client := newJSONMattermostClient(t, `[{"id":`)
+
+	_, err := client.ChannelsForUser(context.Background(), "user-1", 0, 10)
+	if err == nil || !strings.Contains(err.Error(), "decode Mattermost response") {
+		t.Fatalf("error = %v, want contextual decode error", err)
 	}
 }
 
@@ -706,6 +936,36 @@ func assertStringsDoNotContain(t *testing.T, secret string, values ...string) {
 			t.Fatalf("value exposed token: %q", value)
 		}
 	}
+}
+
+func newJSONMattermostClient(t *testing.T, response string) *Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, response)
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	return client
+}
+
+func newCountingMattermostClient(t *testing.T, requests *atomic.Int32) *Client {
+	t.Helper()
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`[]`)),
+		}, nil
+	})}
+	client, err := NewClient("https://chat.example.com", "secret", WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	return client
 }
 
 type testCookieJar struct{}

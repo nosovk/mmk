@@ -16,6 +16,7 @@ const (
 	defaultHTTPTimeout  = 30 * time.Second
 	maxSuccessBodyBytes = 10 << 20
 	maxErrorBodyBytes   = 1 << 20
+	maxChannelsPerPage  = 200
 )
 
 type Client struct {
@@ -114,9 +115,93 @@ func (c *Client) CurrentUser(ctx context.Context) (*User, error) {
 	return wire.domain(), nil
 }
 
+// TeamsForUser returns the teams the user belongs to. ServerID is left empty
+// because the REST client has no configured application server identifier.
+func (c *Client) TeamsForUser(ctx context.Context, userID string) ([]Team, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, errors.New("Mattermost user ID must not be empty")
+	}
+
+	var wire []teamResponse
+	if err := c.do(ctx, http.MethodGet, "users/"+url.PathEscape(userID)+"/teams", nil, &wire); err != nil {
+		return nil, err
+	}
+	teams := make([]Team, len(wire))
+	for i := range wire {
+		teams[i] = wire[i].domain()
+	}
+	return teams, nil
+}
+
+// ChannelsForUser returns one locally paginated page from Mattermost's
+// cross-team channel list. The REST endpoint itself returns the complete list
+// and does not accept page or per_page query parameters. perPage must be 1..200.
+// ServerID and per-user read metadata are left empty; use
+// ChannelMembershipsForUser for the latter.
+func (c *Client) ChannelsForUser(ctx context.Context, userID string, page, perPage int) ([]Channel, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, errors.New("Mattermost user ID must not be empty")
+	}
+	if page < 0 {
+		return nil, errors.New("Mattermost channel page must not be negative")
+	}
+	if perPage < 1 || perPage > maxChannelsPerPage {
+		return nil, fmt.Errorf("Mattermost channels per page must be between 1 and %d", maxChannelsPerPage)
+	}
+
+	var wire []channelResponse
+	if err := c.do(ctx, http.MethodGet, "users/"+url.PathEscape(userID)+"/channels", nil, &wire); err != nil {
+		return nil, err
+	}
+	if page > len(wire)/perPage {
+		return []Channel{}, nil
+	}
+	start := page * perPage
+	if start >= len(wire) {
+		return []Channel{}, nil
+	}
+	end := min(start+perPage, len(wire))
+	channels := make([]Channel, end-start)
+	for i := start; i < end; i++ {
+		channel, err := wire[i].domain()
+		if err != nil {
+			return nil, fmt.Errorf("convert Mattermost channel %q: %w", wire[i].ID, err)
+		}
+		channels[i-start] = channel
+	}
+	return channels, nil
+}
+
+// ChannelMembershipsForUser returns per-user channel read metadata for one
+// team. Mattermost exposes this data separately from cross-team channels.
+func (c *Client) ChannelMembershipsForUser(ctx context.Context, userID, teamID string) ([]ChannelMembership, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, errors.New("Mattermost user ID must not be empty")
+	}
+	if strings.TrimSpace(teamID) == "" {
+		return nil, errors.New("Mattermost team ID must not be empty")
+	}
+
+	endpoint := "users/" + url.PathEscape(userID) + "/teams/" + url.PathEscape(teamID) + "/channels/members"
+	var wire []channelMembershipResponse
+	if err := c.do(ctx, http.MethodGet, endpoint, nil, &wire); err != nil {
+		return nil, err
+	}
+	memberships := make([]ChannelMembership, len(wire))
+	for i := range wire {
+		memberships[i] = wire[i].domain()
+	}
+	return memberships, nil
+}
+
 func (c *Client) do(ctx context.Context, method, endpoint string, body io.Reader, output any) error {
 	requestURL := *c.baseURL
-	requestURL.Path = strings.TrimRight(requestURL.Path, "/") + "/" + strings.TrimLeft(endpoint, "/")
+	requestURL.RawPath = strings.TrimRight(requestURL.EscapedPath(), "/") + "/" + strings.TrimLeft(endpoint, "/")
+	path, err := url.PathUnescape(requestURL.RawPath)
+	if err != nil {
+		return fmt.Errorf("build Mattermost request path: %w", err)
+	}
+	requestURL.Path = path
 
 	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), body)
 	if err != nil {
@@ -240,6 +325,60 @@ type userResponse struct {
 	Nickname  string `json:"nickname"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
+}
+
+type teamResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
+func (t teamResponse) domain() Team {
+	return Team{
+		ID:          t.ID,
+		Name:        t.Name,
+		DisplayName: t.DisplayName,
+	}
+}
+
+type channelResponse struct {
+	ID          string `json:"id"`
+	TeamID      string `json:"team_id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Type        string `json:"type"`
+}
+
+func (c channelResponse) domain() (Channel, error) {
+	kind, err := ParseChannelKind(c.Type)
+	if err != nil {
+		return Channel{}, err
+	}
+	return Channel{
+		ID:          c.ID,
+		TeamID:      c.TeamID,
+		Name:        c.Name,
+		DisplayName: c.DisplayName,
+		Kind:        kind,
+	}, nil
+}
+
+type channelMembershipResponse struct {
+	ChannelID    string `json:"channel_id"`
+	UserID       string `json:"user_id"`
+	MsgCount     int64  `json:"msg_count"`
+	MentionCount int64  `json:"mention_count"`
+	LastViewedAt int64  `json:"last_viewed_at"`
+}
+
+func (m channelMembershipResponse) domain() ChannelMembership {
+	return ChannelMembership{
+		ChannelID:    m.ChannelID,
+		UserID:       m.UserID,
+		MsgCount:     m.MsgCount,
+		MentionCount: m.MentionCount,
+		LastViewedAt: m.LastViewedAt,
+	}
 }
 
 func (u userResponse) domain() *User {
