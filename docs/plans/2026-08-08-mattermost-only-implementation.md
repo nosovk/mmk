@@ -134,7 +134,7 @@ git commit -m "feat: add authenticated Mattermost REST client"
 
 **Step 1: Write failing endpoint tests**
 
-Cover `TeamsForUser`, `ChannelsForUser`, and channel membership metadata including `last_viewed_at` and mention counts. Include pagination query assertions where supported.
+Cover `TeamsForUser`, truthful `ChannelsForUser(ctx, userID string)` loading the complete cross-team response without pagination query parameters, and channel membership metadata including `last_viewed_at` and mention counts.
 
 **Step 2: Verify RED**
 

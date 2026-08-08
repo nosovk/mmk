@@ -16,7 +16,6 @@ const (
 	defaultHTTPTimeout  = 30 * time.Second
 	maxSuccessBodyBytes = 10 << 20
 	maxErrorBodyBytes   = 1 << 20
-	maxChannelsPerPage  = 200
 )
 
 type Client struct {
@@ -133,41 +132,25 @@ func (c *Client) TeamsForUser(ctx context.Context, userID string) ([]Team, error
 	return teams, nil
 }
 
-// ChannelsForUser returns one locally paginated page from Mattermost's
-// cross-team channel list. The REST endpoint itself returns the complete list
-// and does not accept page or per_page query parameters. perPage must be 1..200.
-// ServerID and per-user read metadata are left empty; use
-// ChannelMembershipsForUser for the latter.
-func (c *Client) ChannelsForUser(ctx context.Context, userID string, page, perPage int) ([]Channel, error) {
+// ChannelsForUser returns Mattermost's complete cross-team channel list. The
+// endpoint does not accept pagination parameters. ServerID and per-user read
+// metadata are left empty; use ChannelMembershipsForUser for the latter.
+func (c *Client) ChannelsForUser(ctx context.Context, userID string) ([]Channel, error) {
 	if strings.TrimSpace(userID) == "" {
 		return nil, errors.New("Mattermost user ID must not be empty")
-	}
-	if page < 0 {
-		return nil, errors.New("Mattermost channel page must not be negative")
-	}
-	if perPage < 1 || perPage > maxChannelsPerPage {
-		return nil, fmt.Errorf("Mattermost channels per page must be between 1 and %d", maxChannelsPerPage)
 	}
 
 	var wire []channelResponse
 	if err := c.do(ctx, http.MethodGet, "users/"+url.PathEscape(userID)+"/channels", nil, &wire); err != nil {
 		return nil, err
 	}
-	if page > len(wire)/perPage {
-		return []Channel{}, nil
-	}
-	start := page * perPage
-	if start >= len(wire) {
-		return []Channel{}, nil
-	}
-	end := min(start+perPage, len(wire))
-	channels := make([]Channel, end-start)
-	for i := start; i < end; i++ {
+	channels := make([]Channel, len(wire))
+	for i := range wire {
 		channel, err := wire[i].domain()
 		if err != nil {
 			return nil, fmt.Errorf("convert Mattermost channel %q: %w", wire[i].ID, err)
 		}
-		channels[i-start] = channel
+		channels[i] = channel
 	}
 	return channels, nil
 }
