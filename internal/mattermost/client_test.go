@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -92,6 +95,48 @@ func TestClientRejectsURLWithFragment(t *testing.T) {
 	}
 }
 
+func TestClientRejectsEncodedForwardSlashInDeploymentPath(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com/mattermost%2fprivate", "token"); err == nil {
+		t.Fatal("NewClient accepted an encoded forward slash")
+	}
+}
+
+func TestClientRejectsUppercaseEncodedForwardSlashInDeploymentPath(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com/mattermost%2Fprivate", "token"); err == nil {
+		t.Fatal("NewClient accepted an uppercase encoded forward slash")
+	}
+}
+
+func TestClientRejectsEncodedBackslashInDeploymentPath(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com/mattermost%5Cprivate", "token"); err == nil {
+		t.Fatal("NewClient accepted an encoded backslash")
+	}
+}
+
+func TestClientRejectsEmptyToken(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com", ""); err == nil {
+		t.Fatal("NewClient accepted an empty token")
+	}
+}
+
+func TestClientRejectsWhitespaceToken(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com", " \t\n "); err == nil {
+		t.Fatal("NewClient accepted a whitespace-only token")
+	}
+}
+
+func TestClientRejectsNilOption(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com", "token", nil); err == nil {
+		t.Fatal("NewClient accepted a nil option")
+	}
+}
+
+func TestClientRejectsNilInjectedHTTPClient(t *testing.T) {
+	if _, err := NewClient("https://chat.example.com", "token", WithHTTPClient(nil)); err == nil {
+		t.Fatal("NewClient accepted a nil injected HTTP client")
+	}
+}
+
 func TestClientUsesSensibleDefaultTimeout(t *testing.T) {
 	client, err := NewClient("https://chat.example.com", "token")
 	if err != nil {
@@ -104,15 +149,77 @@ func TestClientUsesSensibleDefaultTimeout(t *testing.T) {
 }
 
 func TestClientUsesInjectedHTTPClient(t *testing.T) {
-	injected := &http.Client{Timeout: time.Second}
+	transport := &http.Transport{}
+	jar := &testCookieJar{}
+	callerRedirect := func(*http.Request, []*http.Request) error { return nil }
+	injected := &http.Client{
+		Transport:     transport,
+		CheckRedirect: callerRedirect,
+		Jar:           jar,
+		Timeout:       time.Second,
+	}
 	client, err := NewClient("https://chat.example.com", "token", WithHTTPClient(injected))
 	if err != nil {
 		t.Fatalf("NewClient returned error: %v", err)
 	}
 
-	if client.httpClient != injected {
-		t.Fatal("client did not retain the injected HTTP client")
+	if client.httpClient == injected {
+		t.Fatal("client retained the caller-owned HTTP client instead of cloning it")
 	}
+	if client.httpClient.Transport != transport || client.httpClient.Jar != jar || client.httpClient.Timeout != time.Second {
+		t.Fatal("cloned HTTP client did not preserve transport, jar, and timeout")
+	}
+	if fmt.Sprintf("%p", client.httpClient.CheckRedirect) == fmt.Sprintf("%p", callerRedirect) {
+		t.Fatal("client trusted the caller's redirect policy")
+	}
+	if injected.CheckRedirect == nil {
+		t.Fatal("NewClient mutated the caller-owned HTTP client")
+	}
+}
+
+func TestClientDoesNotFollowSameHostDifferentPortRedirect(t *testing.T) {
+	target, targetRequests := newRedirectTarget(t)
+	defer target.Close()
+
+	assertRedirectNotFollowed(t, target.URL, nil, targetRequests)
+}
+
+func TestClientDoesNotFollowCrossHostRedirect(t *testing.T) {
+	target, targetRequests := newRedirectTarget(t)
+	defer target.Close()
+
+	targetURL, err := url.Parse(target.URL)
+	if err != nil {
+		t.Fatalf("parse target URL: %v", err)
+	}
+	targetURL.Host = "localhost:" + targetURL.Port()
+	assertRedirectNotFollowed(t, targetURL.String(), nil, targetRequests)
+}
+
+func TestClientDoesNotFollowSubdomainRedirect(t *testing.T) {
+	target, targetRequests := newRedirectTarget(t)
+	defer target.Close()
+	targetURL, err := url.Parse(target.URL)
+	if err != nil {
+		t.Fatalf("parse target URL: %v", err)
+	}
+
+	dialer := &net.Dialer{}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if strings.HasPrefix(address, "subdomain.example:") {
+			address = targetURL.Host
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+	injected := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return nil
+		},
+	}
+	redirectURL := "http://subdomain.example:" + targetURL.Port() + "/redirect-target"
+	assertRedirectNotFollowed(t, redirectURL, injected, targetRequests)
 }
 
 func TestClientCurrentUserCallsUsersMe(t *testing.T) {
@@ -310,6 +417,51 @@ func TestAPIErrorUsesHTTPStatusForEmptyBody(t *testing.T) {
 	}
 }
 
+func TestAPIErrorDiscardsPartiallyDecodedMalformedPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"id":"partial-id","message":`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	_, err = client.CurrentUser(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %T %v, want *APIError", err, err)
+	}
+	if apiErr.ID != "" || apiErr.RequestID != "" || apiErr.DetailedError != "" {
+		t.Fatalf("malformed payload leaked partial fields: %#v", apiErr)
+	}
+	if got, want := apiErr.Message, http.StatusText(http.StatusBadRequest); got != want {
+		t.Fatalf("Message = %q, want %q", got, want)
+	}
+}
+
+func TestAPIErrorRejectsOversizedBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"message":"`+strings.Repeat("x", (1<<20)+1)+`"}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	_, err = client.CurrentUser(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %T %v, want *APIError", err, err)
+	}
+	if !strings.Contains(apiErr.Message, "exceeds") {
+		t.Fatalf("Message = %q, want response size fallback", apiErr.Message)
+	}
+}
+
 func TestAPIErrorSanitizesTokenFromExportedFields(t *testing.T) {
 	const token = "highly-secret-token"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -465,6 +617,22 @@ func TestClientRejectsMultipleSuccessJSONValues(t *testing.T) {
 	}
 }
 
+func TestClientRejectsOversizedSuccessBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id":"`+strings.Repeat("x", (10<<20)+1)+`"}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	_, err = client.CurrentUser(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("error = %v, want response size error", err)
+	}
+}
+
 func TestClientDoesNotExposeTokenInErrors(t *testing.T) {
 	const token = "highly-secret-token"
 	sentinel := errors.New("transport sentinel")
@@ -537,5 +705,52 @@ func assertStringsDoNotContain(t *testing.T, secret string, values ...string) {
 		if strings.Contains(value, secret) {
 			t.Fatalf("value exposed token: %q", value)
 		}
+	}
+}
+
+type testCookieJar struct{}
+
+func (*testCookieJar) SetCookies(*url.URL, []*http.Cookie) {}
+
+func (*testCookieJar) Cookies(*url.URL) []*http.Cookie { return nil }
+
+func newRedirectTarget(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	requests := &atomic.Int32{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if authorization := r.Header.Get("Authorization"); authorization != "" {
+			t.Errorf("redirect target received Authorization %q", authorization)
+		}
+		_, _ = io.WriteString(w, `{"id":"redirected-user"}`)
+	}))
+	return server, requests
+}
+
+func assertRedirectNotFollowed(t *testing.T, redirectURL string, injected *http.Client, targetRequests *atomic.Int32) {
+	t.Helper()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, redirectURL, http.StatusFound)
+	}))
+	defer origin.Close()
+
+	options := []ClientOption{}
+	if injected != nil {
+		options = append(options, WithHTTPClient(injected))
+	}
+	client, err := NewClient(origin.URL, "secret-token", options...)
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	_, err = client.CurrentUser(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %T %v, want *APIError for redirect", err, err)
+	}
+	if got, want := apiErr.StatusCode, http.StatusFound; got != want {
+		t.Fatalf("StatusCode = %d, want %d", got, want)
+	}
+	if got := targetRequests.Load(); got != 0 {
+		t.Fatalf("redirect target received %d requests, want 0", got)
 	}
 }

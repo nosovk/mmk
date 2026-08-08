@@ -12,7 +12,11 @@ import (
 	"time"
 )
 
-const defaultHTTPTimeout = 30 * time.Second
+const (
+	defaultHTTPTimeout  = 30 * time.Second
+	maxSuccessBodyBytes = 10 << 20
+	maxErrorBodyBytes   = 1 << 20
+)
 
 type Client struct {
 	baseURL    *url.URL
@@ -28,13 +32,16 @@ func WithHTTPClient(httpClient *http.Client) ClientOption {
 		if httpClient == nil {
 			return errors.New("Mattermost HTTP client must not be nil")
 		}
-		client.httpClient = httpClient
+		client.httpClient = cloneHTTPClient(httpClient)
 		return nil
 	}
 }
 
 // NewClient creates an authenticated Mattermost REST API client.
 func NewClient(baseURL, token string, options ...ClientOption) (*Client, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("Mattermost token must not be empty")
+	}
 	normalizedURL, err := normalizeBaseURL(baseURL)
 	if err != nil {
 		return nil, err
@@ -43,9 +50,9 @@ func NewClient(baseURL, token string, options ...ClientOption) (*Client, error) 
 	client := &Client{
 		baseURL: normalizedURL,
 		token:   token,
-		httpClient: &http.Client{
+		httpClient: cloneHTTPClient(&http.Client{
 			Timeout: defaultHTTPTimeout,
-		},
+		}),
 	}
 	for _, option := range options {
 		if option == nil {
@@ -56,6 +63,14 @@ func NewClient(baseURL, token string, options ...ClientOption) (*Client, error) 
 		}
 	}
 	return client, nil
+}
+
+func cloneHTTPClient(httpClient *http.Client) *http.Client {
+	clone := *httpClient
+	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &clone
 }
 
 func normalizeBaseURL(rawURL string) (*url.URL, error) {
@@ -74,6 +89,10 @@ func normalizeBaseURL(rawURL string) (*url.URL, error) {
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("Mattermost base URL must not include a query or fragment")
+	}
+	escapedPath := strings.ToLower(parsed.EscapedPath())
+	if strings.Contains(escapedPath, "%2f") || strings.Contains(escapedPath, "%5c") {
+		return nil, errors.New("Mattermost base URL must not include encoded path separators")
 	}
 
 	path := strings.TrimRight(parsed.Path, "/")
@@ -121,7 +140,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body io.Reader
 	if output == nil {
 		return nil
 	}
-	if err := decodeJSON(response.Body, output); err != nil {
+	if err := decodeJSON(response.Body, output, maxSuccessBodyBytes); err != nil {
 		return fmt.Errorf("decode Mattermost response: %w", err)
 	}
 	return nil
@@ -153,8 +172,18 @@ func redactError(operation string, err error, secret string) error {
 
 func decodeAPIError(response *http.Response, token string) error {
 	apiErr := &APIError{StatusCode: response.StatusCode}
-	if err := json.NewDecoder(response.Body).Decode(apiErr); err != nil {
-		apiErr.Message = http.StatusText(response.StatusCode)
+	var wire apiErrorResponse
+	if err := decodeJSON(response.Body, &wire, maxErrorBodyBytes); err != nil {
+		if errors.Is(err, errResponseTooLarge) {
+			apiErr.Message = fmt.Sprintf("Mattermost API error response exceeds %d bytes", maxErrorBodyBytes)
+		} else {
+			apiErr.Message = http.StatusText(response.StatusCode)
+		}
+	} else {
+		apiErr.ID = wire.ID
+		apiErr.Message = wire.Message
+		apiErr.RequestID = wire.RequestID
+		apiErr.DetailedError = wire.DetailedError
 	}
 	if apiErr.Message == "" {
 		apiErr.Message = http.StatusText(response.StatusCode)
@@ -173,12 +202,22 @@ func redactSecret(value, secret string) string {
 	return strings.ReplaceAll(value, secret, "[REDACTED]")
 }
 
-func decodeJSON(reader io.Reader, output any) error {
-	decoder := json.NewDecoder(reader)
+var errResponseTooLarge = errors.New("Mattermost response body exceeds limit")
+
+func decodeJSON(reader io.Reader, output any, limit int64) error {
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > limit {
+		return fmt.Errorf("%w of %d bytes", errResponseTooLarge, limit)
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	if err := decoder.Decode(output); err != nil {
 		return err
 	}
-	var extra any
+	var extra struct{}
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return errors.New("response contains multiple JSON values")
@@ -186,6 +225,13 @@ func decodeJSON(reader io.Reader, output any) error {
 		return err
 	}
 	return nil
+}
+
+type apiErrorResponse struct {
+	ID            string `json:"id"`
+	Message       string `json:"message"`
+	RequestID     string `json:"request_id"`
+	DetailedError string `json:"detailed_error"`
 }
 
 type userResponse struct {
