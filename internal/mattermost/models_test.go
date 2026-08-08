@@ -64,6 +64,42 @@ func TestChannelKindDoesNotIdentifyGroupChannelAsDirect(t *testing.T) {
 	}
 }
 
+func TestChannelKindStringReturnsPublicLabel(t *testing.T) {
+	if got, want := ChannelKindPublic.String(), "public"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestChannelKindStringReturnsPrivateLabel(t *testing.T) {
+	if got, want := ChannelKindPrivate.String(), "private"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestChannelKindStringReturnsDirectLabel(t *testing.T) {
+	if got, want := ChannelKindDirect.String(), "direct"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestChannelKindStringReturnsGroupLabel(t *testing.T) {
+	if got, want := ChannelKindGroup.String(), "group"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestChannelKindStringReturnsUnknownLabel(t *testing.T) {
+	if got, want := ChannelKindUnknown.String(), "unknown"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestChannelKindStringIncludesInvalidValue(t *testing.T) {
+	if got, want := ChannelKind(99).String(), "ChannelKind(99)"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
 func TestUserDisplayNamePrefersNickname(t *testing.T) {
 	user := User{
 		ID:        "user-id",
@@ -139,18 +175,32 @@ func TestMessageThreadRootReturnsRootIDForReply(t *testing.T) {
 	}
 }
 
-func TestConnectionStatesAreDistinct(t *testing.T) {
-	states := []ConnectionState{
-		ConnectionStateConnecting,
-		ConnectionStateConnected,
-		ConnectionStateOffline,
-		ConnectionStateReconnecting,
+func TestConnectionStateStringReturnsConnectingLabel(t *testing.T) {
+	if got, want := ConnectionStateConnecting.String(), "connecting"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
 	}
-	seen := make(map[ConnectionState]bool, len(states))
-	for _, state := range states {
-		if seen[state] {
-			t.Fatalf("connection state %v is duplicated", state)
-		}
-		seen[state] = true
+}
+
+func TestConnectionStateStringReturnsConnectedLabel(t *testing.T) {
+	if got, want := ConnectionStateConnected.String(), "connected"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestConnectionStateStringReturnsOfflineLabel(t *testing.T) {
+	if got, want := ConnectionStateOffline.String(), "offline"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestConnectionStateStringReturnsReconnectingLabel(t *testing.T) {
+	if got, want := ConnectionStateReconnecting.String(), "reconnecting"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestConnectionStateStringIncludesInvalidValue(t *testing.T) {
+	if got, want := ConnectionState(99).String(), "ConnectionState(99)"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
 	}
 }

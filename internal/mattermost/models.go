@@ -1,3 +1,9 @@
+// Package mattermost defines mmk's compact Mattermost application domain.
+//
+// The exported models in this package are not Mattermost API wire JSON DTOs.
+// Transport code must decode responses into private wire types and convert
+// them at the client boundary. This keeps API-specific field names and shapes,
+// such as a channel's "type" code, out of the application model.
 package mattermost
 
 import (
@@ -5,6 +11,8 @@ import (
 	"strings"
 )
 
+// Server identifies one configured Mattermost server and its current user.
+// It is an application-domain model, not a Mattermost API wire DTO.
 type Server struct {
 	ID     string
 	Name   string
@@ -12,6 +20,8 @@ type Server struct {
 	UserID string
 }
 
+// Team is a Mattermost team scoped to a configured Server.
+// It is an application-domain model, not a Mattermost API wire DTO.
 type Team struct {
 	ID          string
 	ServerID    string
@@ -19,6 +29,8 @@ type Team struct {
 	DisplayName string
 }
 
+// User contains the identity fields needed by mmk's display-name policy.
+// It is an application-domain model, not a Mattermost API wire DTO.
 type User struct {
 	ID        string
 	ServerID  string
@@ -43,6 +55,11 @@ func (u User) DisplayName() string {
 	return u.ID
 }
 
+// Channel is mmk's compact representation of a Mattermost channel.
+//
+// Kind is a domain classification, not the API's JSON "type" field. Client
+// code must decode the wire type separately and convert it with
+// ParseChannelKind.
 type Channel struct {
 	ID           string
 	ServerID     string
@@ -53,6 +70,7 @@ type Channel struct {
 	LastViewedAt int64
 }
 
+// ChannelKind classifies channels for application behavior and presentation.
 type ChannelKind uint8
 
 const (
@@ -78,10 +96,30 @@ func ParseChannelKind(code string) (ChannelKind, error) {
 	}
 }
 
+// String returns a stable, human-readable channel classification.
+func (k ChannelKind) String() string {
+	switch k {
+	case ChannelKindUnknown:
+		return "unknown"
+	case ChannelKindPublic:
+		return "public"
+	case ChannelKindPrivate:
+		return "private"
+	case ChannelKindDirect:
+		return "direct"
+	case ChannelKindGroup:
+		return "group"
+	default:
+		return fmt.Sprintf("ChannelKind(%d)", k)
+	}
+}
+
 func (k ChannelKind) IsDirect() bool {
 	return k == ChannelKindDirect
 }
 
+// Message is mmk's compact representation of a Mattermost post.
+// It is an application-domain model, not a Mattermost API wire DTO.
 type Message struct {
 	ID        string
 	ChannelID string
@@ -100,6 +138,7 @@ func (m Message) ThreadRootID() string {
 	return m.ID
 }
 
+// ConnectionState describes a server's realtime connection lifecycle.
 type ConnectionState uint8
 
 const (
@@ -108,3 +147,19 @@ const (
 	ConnectionStateOffline
 	ConnectionStateReconnecting
 )
+
+// String returns a stable, human-readable connection state.
+func (s ConnectionState) String() string {
+	switch s {
+	case ConnectionStateConnecting:
+		return "connecting"
+	case ConnectionStateConnected:
+		return "connected"
+	case ConnectionStateOffline:
+		return "offline"
+	case ConnectionStateReconnecting:
+		return "reconnecting"
+	default:
+		return fmt.Sprintf("ConnectionState(%d)", s)
+	}
+}
