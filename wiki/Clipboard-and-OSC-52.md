@@ -1,6 +1,6 @@
 # Clipboard and OSC 52
 
-slk writes the system clipboard via the OSC 52 escape. Most modern terminal
+mmk writes the system clipboard via the OSC 52 escape. Most modern terminal
 emulators (alacritty, kitty, wezterm, foot, iterm2, recent gnome-terminal)
 accept these writes by default. A few need explicit opt-in.
 
@@ -15,7 +15,7 @@ accept these writes by default. A few need explicit opt-in.
 
 If `Copied N chars` shows in the status bar but nothing lands in your
 clipboard, your terminal is silently dropping the OSC 52 write. There is no
-reliable round-trip to detect this from inside slk — the protocol doesn't
+reliable round-trip to detect this from inside mmk — the protocol doesn't
 acknowledge writes. Check your terminal's clipboard documentation for an
 opt-in setting.
 

@@ -1,9 +1,12 @@
-# slk Wiki
+# mmk Wiki
+
+`mmk` is derived from [gammons/slk](https://github.com/gammons/slk) and is
+maintained as an independent project.
 
 A blazingly fast Slack TUI. Keyboard-driven, beautifully themed, under 20MB,
 one static binary, no Electron required.
 
-Marketing site: [getslk.sh](https://getslk.sh) · Source: [github.com/gammons/slk](https://github.com/gammons/slk)
+Source: [github.com/nosovk/mmk](https://github.com/nosovk/mmk)
 
 ## Getting started
 
@@ -11,7 +14,7 @@ Marketing site: [getslk.sh](https://getslk.sh) · Source: [github.com/gammons/sl
 2. **[[Setup]]** — extracting your `xoxc` token and `d` cookie, adding a workspace.
 3. **[[Configuration]]** — `config.toml`, custom themes, XDG paths, per-workspace settings.
 
-## Using slk
+## Using mmk
 
 - **[[Features]]** — full feature breakdown (messaging, compose, images, threads, reactions, channels, notifications, status, connectivity, customization).
 - **[[Keybindings]]** — every key, every mode.
@@ -25,5 +28,5 @@ Marketing site: [getslk.sh](https://getslk.sh) · Source: [github.com/gammons/sl
 
 ## Project
 
-- License: [MIT](https://github.com/gammons/slk/blob/main/LICENSE)
-- `slk` is an independent, unofficial project. Not affiliated with Slack Technologies, LLC. See the [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]] page for the TOS caveat.
+- License: [MIT](https://github.com/nosovk/mmk/blob/main/LICENSE)
+- `mmk` is an independent, unofficial project. Not affiliated with Slack Technologies, LLC. See the [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]] page for the TOS caveat.

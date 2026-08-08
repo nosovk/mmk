@@ -1,6 +1,6 @@
 # Terminal Compatibility
 
-slk works in any modern terminal, but the experience scales with what your
+mmk works in any modern terminal, but the experience scales with what your
 terminal supports. This table summarizes the important capabilities; pick
 something from the top of the list for the richest experience.
 
@@ -10,7 +10,7 @@ something from the top of the list for the richest experience.
 | **ghostty**           | kitty graphics       | yes                | yes         | yes              | Recommended.                                                |
 | **WezTerm** (recent)  | kitty graphics       | yes                | yes         | yes              |                                                             |
 | **foot** (Wayland)    | sixel                | half-block         | yes         | yes              | Best Wayland-native option.                                 |
-| **iTerm2 ≥ 3.5**      | half-block           | half-block         | yes         | yes              | Implements kitty graphics but not unicode placeholders, so slk falls back to half-block. |
+| **iTerm2 ≥ 3.5**      | half-block           | half-block         | yes         | yes              | Implements kitty graphics but not unicode placeholders, so mmk falls back to half-block. |
 | **Alacritty**         | half-block           | half-block         | yes (≥0.11) | yes              | Fast and reliable, but no inline images.                    |
 | **gnome-terminal** (recent) | half-block     | half-block         | yes         | yes              |                                                             |
 | **mlterm**            | sixel                | half-block         | partial     | partial          |                                                             |
@@ -18,13 +18,13 @@ something from the top of the list for the richest experience.
 
 ## Inside tmux
 
-slk forces half-block for inline images regardless of the
+mmk forces half-block for inline images regardless of the
 outer terminal — pixel-protocol pass-through inside tmux is unreliable. OSC 52
 clipboard requires `set -g set-clipboard on` in your tmux config.
 
 ## Overriding the image protocol
 
-You can override slk's image-protocol pick via the `[appearance] image_protocol`
+You can override mmk's image-protocol pick via the `[appearance] image_protocol`
 config key (`auto` / `kitty` / `sixel` / `halfblock` / `off`). See
 [[Configuration]] for details.
 

@@ -24,7 +24,7 @@
 - Special mentions: `@here`, `@channel`, `@everyone`
 - Bracketed paste — paste multi-line text from the system clipboard without it being interpreted as keystrokes
 - Smart paste (`Ctrl+V`) — pastes a clipboard image as an attachment, or a copied file path as an attached file, or falls through to text. Multiple attachments + caption send together via Slack's V2 file-upload API. Note: use `Ctrl+V` (not your terminal's `Ctrl+Shift+V` paste shortcut) — terminal-initiated paste only delivers text, never image bytes.
-- CommonMark in compose: type `**bold**`, `~~strike~~`, `[label](url)`, `- list items`, `1. numbered`, or fenced ```code blocks``` and slk converts them on send to Slack's mrkdwn + rich_text format. Already-mrkdwn syntax (`*bold*`, `_italic_`, `~strike~`) passes through unchanged. Single-asterisk emphasis (`*x*`) is preserved as literal text since it conflicts with Slack mrkdwn bold.
+- CommonMark in compose: type `**bold**`, `~~strike~~`, `[label](url)`, `- list items`, `1. numbered`, or fenced ```code blocks``` and mmk converts them on send to Slack's mrkdwn + rich_text format. Already-mrkdwn syntax (`*bold*`, `_italic_`, `~strike~`) passes through unchanged. Single-asterisk emphasis (`*x*`) is preserved as literal text since it conflicts with Slack mrkdwn bold.
 
 ## Images
 
@@ -33,8 +33,8 @@
 - Click any inline image (or press `O` on the selected message) for a full-screen in-app preview
 - `Enter` from the preview launches the OS image viewer
 - Lazy-loaded: images download only as they scroll into view
-- LRU cache at `~/.cache/slk/images/` (default 200 MB cap)
-- Inside tmux, slk falls back to half-block to avoid pixel-protocol pass-through pitfalls
+- LRU cache at `~/.cache/mmk/images/` (default 200 MB cap)
+- Inside tmux, mmk falls back to half-block to avoid pixel-protocol pass-through pitfalls
 - Configurable via `[appearance] image_protocol` (`auto` / `kitty` / `sixel` / `halfblock` / `off`) and `max_image_rows`
 
 See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your terminal supports.
@@ -49,7 +49,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
   workspace. Unread first, then newest activity. Selecting a thread opens
   it in the side panel; the list re-ranks live as new replies arrive.
   v1 is computed from the local SQLite cache, so threads from channels
-  you have not yet opened in slk will not appear until they are seen.
+  you have not yet opened in mmk will not appear until they are seen.
 
 ## Reactions
 
@@ -62,7 +62,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 
 - Three-panel layout: workspace rail, channel sidebar, message pane
 - Public (`#`), private (`◆`), DM (`●`/`○` for presence), and group DM channels
-- **Slack-native sidebar sections** — slk reads your sections directly from Slack and reflects them live: section names, emoji, linked-list order, and channel/DM membership are kept in sync via the same WebSocket events the official client uses. Reorder, rename, create, or delete sections in any other Slack client; slk catches up within a couple seconds. Read-only: section editing still happens in the official client. Falls back to glob-based config sections when disabled or if the API is unavailable.
+- **Slack-native sidebar sections** — mmk reads your sections directly from Slack and reflects them live: section names, emoji, linked-list order, and channel/DM membership are kept in sync via the same WebSocket events the official client uses. Reorder, rename, create, or delete sections in any other Slack client; mmk catches up within a couple seconds. Read-only: section editing still happens in the official client. Falls back to glob-based config sections when disabled or if the API is unavailable.
 - Collapsible sections — `Enter`/`Space` on a section header toggles it. The default Channels section starts collapsed (`▸ Channels •3` shows aggregate unreads); pinned sections and DMs start expanded
 - Live unread indicators: bold + blue dot for unread channels, muted text for read ones, aggregate dot+count on collapsed section headers
 - Glob-based config sections (`[sections.*]` in `config.toml`) — used when `use_slack_sections = false` or as a fallback when Slack's API is unreachable. Channel patterns can carry an optional `":<N>"` suffix (e.g. `"eng-general:1"`) to pin order within a section; see [Configuration › Ordering channels within a section](Configuration.md#ordering-channels-within-a-section).
@@ -94,7 +94,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 ## Customization
 
 - 59 built-in themes (including `ANSI Dark` / `ANSI Light` that inherit your terminal palette)
-- Drop-in custom themes (`~/.config/slk/themes/*.toml`)
+- Drop-in custom themes (`~/.config/mmk/themes/*.toml`)
 - Live theme switcher (`Ctrl+y`)
 - TOML config for appearance, animations, notifications, and channel sections
 

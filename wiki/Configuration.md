@@ -1,6 +1,6 @@
 # Configuration
 
-Config lives at `~/.config/slk/config.toml`.
+Config lives at `~/.config/mmk/config.toml`.
 
 ## Full example
 
@@ -30,27 +30,27 @@ quiet_hours = "22:00-08:00"   # planned
 
 # notify_command (optional): run INSTEAD of the built-in OS notification for any
 # message that would notify (DM / mention / keyword). Executed via `sh -c` with
-# $SLK_TITLE and $SLK_BODY set, so you can route notifications through your own
+# $MMK_TITLE and $MMK_BODY set, so you can route notifications through your own
 # tooling (terminal-notifier, a multiplexer's notifier, mako, ...). Values are
 # passed via the environment, so message text can't inject shell syntax.
-# notify_command = 'terminal-notifier -title "$SLK_TITLE" -message "$SLK_BODY"'
+# notify_command = 'terminal-notifier -title "$MMK_TITLE" -message "$MMK_BODY"'
 
 # status_command (optional): run on every unread-state change (a message arrives
-# or a channel is read) so an external surface can mirror slk's unread state.
+# or a channel is read) so an external surface can mirror mmk's unread state.
 # Because it fires on reads too, it can clear a status as well as set one.
 # Runs are serialized and coalesced: states never run concurrently or out of
 # order, and under a burst intermediate states may be skipped — the newest
 # state always runs last, so the surface converges on the current state.
 # Executed via `sh -c` with:
-#   $SLK_UNREAD        unread channels in the active workspace (mute-filtered)
-#   $SLK_OTHER_UNREAD  unread count across other workspaces
-#   $SLK_WORKSPACE     active workspace name
-#   $SLK_TITLE         the window-title string, e.g. "slk SW (3) +1"
-# status_command = 'my-statusbar --slack-unread "$SLK_UNREAD"'
+#   $MMK_UNREAD        unread channels in the active workspace (mute-filtered)
+#   $MMK_OTHER_UNREAD  unread count across other workspaces
+#   $MMK_WORKSPACE     active workspace name
+#   $MMK_TITLE         the window-title string, e.g. "mmk SW (3) +1"
+# status_command = 'my-statusbar --slack-unread "$MMK_UNREAD"'
 
 # Both hooks require a POSIX `sh` on $PATH and are unavailable on Windows
 # (the built-in OS notification still works there). Hook failures are silent
-# in the UI; run slk with SLK_DEBUG=1 and check slk-debug.log ([notify] lines)
+# in the UI; run mmk with MMK_DEBUG=1 and check mmk-debug.log ([notify] lines)
 # to diagnose a misbehaving command.
 
 # Muted channels and DMs never notify — including on mentions and keywords —
@@ -64,7 +64,7 @@ max_image_cache_mb = 200
 
 # Glob-based channel sections — only consulted when use_slack_sections
 # is false (globally or per-workspace), or when Slack's section API is
-# unreachable. Otherwise slk reads the user's actual Slack sections.
+# unreachable. Otherwise mmk reads the user's actual Slack sections.
 [sections.Alerts]
 channels = ["alerts", "ops", "*-alerts"]
 order = 1
@@ -112,7 +112,7 @@ text = "#E0E0E0"
 ## Section resolution
 
 When `use_slack_sections = true` (the default) and Slack's section endpoint
-is reachable, slk reads the user's actual sidebar sections — names, emoji,
+is reachable, mmk reads the user's actual sidebar sections — names, emoji,
 linked-list order, and channel membership — directly from Slack and keeps
 them live via WebSocket events. Any `[sections.*]` or
 `[workspaces.<slug>.sections.*]` blocks in `config.toml` are ignored in this
@@ -143,14 +143,14 @@ Engineering section, followed by `#eng-alerts`, followed by every
 other `eng-*` channel in Slack-API order.
 
 This syntax is only honored when `use_slack_sections = false` (or
-when Slack's section endpoint is unreachable and slk falls back to
+when Slack's section endpoint is unreachable and mmk falls back to
 glob mode). In Slack-native mode, channel order within a section
 comes from Slack and the `:<N>` suffix is ignored along with the
 rest of the `[sections.*]` block.
 
 ### Limitations of Slack-native sections
 
-Slack-native sections are read-only — section editing still happens in the official client; slk
+Slack-native sections are read-only — section editing still happens in the official client; mmk
 reflects the results. The `stars` section type (Slack's "Starred" feature) is rendered
 when non-empty, with the header `Starred`. Sections of type `slack_connect`,
 `salesforce_records`, and `agents` are hidden. Sections with more than 10 channels may be returned
@@ -178,7 +178,7 @@ Legacy configs that key the block by raw team ID
 Two built-in themes use ANSI 16 color codes exclusively rather than
 fixed RGB values. They inherit the user's terminal color palette, so
 changing your terminal colorscheme (light/dark, solarized,
-accessibility palettes, etc.) immediately changes slk's UI colors to
+accessibility palettes, etc.) immediately changes mmk's UI colors to
 match.
 
 ```toml
@@ -195,7 +195,7 @@ honors the palette.
 
 ## Custom themes
 
-Drop `.toml` files into `~/.config/slk/themes/`:
+Drop `.toml` files into `~/.config/mmk/themes/`:
 
 ```toml
 name = "My Theme"
@@ -232,6 +232,6 @@ Switch themes live with `Ctrl+y`.
 
 | Path | Contents |
 |---|---|
-| `~/.config/slk/` | Configuration, custom themes |
-| `~/.local/share/slk/` | SQLite cache, tokens |
-| `~/.cache/slk/` | Avatars, image cache |
+| `~/.config/mmk/` | Configuration, custom themes |
+| `~/.local/share/mmk/` | SQLite cache, tokens |
+| `~/.cache/mmk/` | Avatars, image cache |

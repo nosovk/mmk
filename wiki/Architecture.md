@@ -16,5 +16,5 @@ Data Layer             SQLite cache · TOML config · token storage
 
 ## Further reading
 
-- Design specs: [`docs/superpowers/specs/`](https://github.com/gammons/slk/tree/main/docs/superpowers/specs/)
-- Live implementation status: [`docs/STATUS.md`](https://github.com/gammons/slk/blob/main/docs/STATUS.md)
+- Design specs: [`docs/superpowers/specs/`](https://github.com/nosovk/mmk/tree/main/docs/superpowers/specs/)
+- Live implementation status: [`docs/STATUS.md`](https://github.com/nosovk/mmk/blob/main/docs/STATUS.md)

@@ -13,15 +13,15 @@
           inherit system;
         };
         lib = pkgs.lib;
-        slk = pkgs.buildGo126Module {
-          pname = "slk";
+        mmk = pkgs.buildGo126Module {
+          pname = "mmk";
           version = "0.0.0";
           src = ./.;
           vendorHash = "sha256-deqCUDgRvhe/Bpmy+9bIHjSBo+KTCtAN2XcGMhAj/G0=";
           buildInputs = [pkgs.libX11];
         };
       in {
-        packages.default = slk;
-        packages.slk = slk;
+        packages.default = mmk;
+        packages.mmk = mmk;
       });
 }

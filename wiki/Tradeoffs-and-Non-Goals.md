@@ -1,6 +1,6 @@
 # Tradeoffs and Non-Goals
 
-slk is intentionally not a 1:1 port of the desktop client. Some Slack features are deferred or out of scope.
+mmk is intentionally not a 1:1 port of the desktop client. Some Slack features are deferred or out of scope.
 
 ## On the roadmap
 
@@ -37,7 +37,7 @@ Slack rotates them. Re-run `--add-workspace` and you're back in business. See
 
 ## Unofficial / TOS caveat
 
-slk talks to Slack via the same internal browser protocol the official web
+mmk talks to Slack via the same internal browser protocol the official web
 client uses. This is unofficial and not sanctioned by Slack — using it may
 violate Slack's [API](https://slack.com/terms-of-service/api) and
 [user](https://slack.com/terms-of-service/user) Terms of Service, and Slack

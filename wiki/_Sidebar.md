@@ -1,4 +1,4 @@
-### slk
+### mmk
 
 - [Home](Home)
 
@@ -7,7 +7,7 @@
 - [[Setup]]
 - [[Configuration]]
 
-**Using slk**
+**Using mmk**
 - [[Features]]
 - [[Keybindings]]
 - [[Terminal Compatibility|Terminal-Compatibility]]
@@ -19,4 +19,4 @@
 
 ---
 
-[Marketing site](https://getslk.sh) · [Source](https://github.com/gammons/slk)
+[Source](https://github.com/nosovk/mmk)
