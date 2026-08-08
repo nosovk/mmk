@@ -142,7 +142,7 @@ func (s *serializedWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
-// SixelSentinel is a private-use codepoint reserved for slk to mark a row
+// SixelSentinel is a private-use codepoint reserved for mmk to mark a row
 // in viewEntry.Lines that should trigger a sixel byte stream emission
 // during messages-pane rendering. The character is U+E0001 (LANGUAGE TAG),
 // chosen because no terminal renders it with a glyph; it is effectively

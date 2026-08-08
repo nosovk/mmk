@@ -9,7 +9,7 @@ func TestModalFooter(t *testing.T) {
 	got := ModalFooter("v1.2.3")
 
 	// Version is interpolated.
-	if !strings.Contains(got, "slk v1.2.3") {
+	if !strings.Contains(got, "mmk v1.2.3") {
 		t.Errorf("footer missing version: %q", got)
 	}
 	// Attribution wording.
@@ -37,7 +37,7 @@ func TestModalFooter(t *testing.T) {
 
 func TestModalFooterUsesGivenVersion(t *testing.T) {
 	got := ModalFooter("dev")
-	if !strings.Contains(got, "slk dev") {
-		t.Errorf("expected 'slk dev' in %q", got)
+	if !strings.Contains(got, "mmk dev") {
+		t.Errorf("expected 'mmk dev' in %q", got)
 	}
 }

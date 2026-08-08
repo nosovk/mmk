@@ -390,7 +390,7 @@ func TestSetMessageVersion_ScopedToChannel(t *testing.T) {
 // `version`, so a routine re-upsert (any ordinary cache write) must
 // leave a stamped version alone.
 //
-// If this test ever fails, slk will report version 0 for every channel
+// If this test ever fails, mmk will report version 0 for every channel
 // forever, Slack will return every record in full on every boot, and we
 // will have silently reintroduced the enumeration behaviour that gets
 // Grid users signed out. It is not a style test.

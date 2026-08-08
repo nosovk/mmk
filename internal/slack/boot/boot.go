@@ -5,10 +5,10 @@
 // client.userBoot is the reason this package exists. One request
 // returns the channel list, the DM list, the open/starred/read-only
 // sidebar state, every user pref, the subteam membership, the DND
-// window and the self/team records — replacing five separate calls slk
+// window and the self/team records — replacing five separate calls mmk
 // used to make (users.conversations, users.prefs.get, stars.list,
 // usergroups.list, dnd.info). On a Grid workspace that is the single
-// biggest reduction available in slk's ~400-call boot, and call volume
+// biggest reduction available in mmk's ~400-call boot, and call volume
 // is precisely what Grid's anomaly detection scores.
 //
 // Request decoration is NOT this package's job. The _x_ envelope
@@ -101,7 +101,7 @@ type Channel struct {
 	// the separate `ims` array, so a channels[] entry with is_im=true
 	// was never observed — a field for it would decode false forever
 	// and read as meaningful, which is exactly the mistake
-	// edge.Channel's missing IsMember documents. Nothing in slk wants
+	// edge.Channel's missing IsMember documents. Nothing in mmk wants
 	// it either. Add it if a capture ever shows a true one.
 	IsChannel  bool `json:"is_channel"`
 	IsGroup    bool `json:"is_group"`
@@ -152,7 +152,7 @@ type DND struct {
 	SnoozeEnabled bool  `json:"snooze_enabled"`
 }
 
-// SelfProfile is the subset of self.profile slk renders.
+// SelfProfile is the subset of self.profile mmk renders.
 type SelfProfile struct {
 	RealName    string `json:"real_name"`
 	DisplayName string `json:"display_name"`
@@ -180,7 +180,7 @@ type Self struct {
 
 	// The captured self object also carries is_bot, deleted, is_admin,
 	// is_owner, is_primary_owner, is_restricted, is_ultra_restricted
-	// and has_2fa. None is modelled: none has a consumer in slk, and —
+	// and has_2fa. None is modelled: none has a consumer in mmk, and —
 	// more to the point — this object occurs exactly once in a
 	// response, so two boolean fields that happen to share a value are
 	// freely swappable and no test can tell them apart. Fields that
@@ -191,7 +191,7 @@ type Self struct {
 
 // Team is the workspace record. The captured object also carries a
 // large `prefs` sub-object, an `icon` set and counters; none of it has
-// a consumer in slk, so none of it is modelled.
+// a consumer in mmk, so none of it is modelled.
 type Team struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
@@ -227,7 +227,7 @@ type Prefs struct {
 	//
 	// It was NOT present in the captured response — all 702 keys were
 	// checked — and the plan's spec is wrong to say it was. It is
-	// surfaced anyway because slk's existing GetMutedChannels still
+	// surfaced anyway because mmk's existing GetMutedChannels still
 	// merges it for workspaces that do ship it (see
 	// internal/slack/client.go).
 	MutedChannels string
@@ -275,14 +275,14 @@ func (p *Prefs) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Result is everything one client.userBoot call learned that slk
+// Result is everything one client.userBoot call learned that mmk
 // consumes.
 //
 // The captured response has 33 top-level keys. The ones absent here
 // (app_commands_cache_ts, cache_version, translations_cache_ts,
 // is_europe, account_types, can_access_client_v2, slack_route,
 // workspaces, prefs_version, links, accept_tos_url, the various
-// feature flags…) have no consumer in slk. Adding one is a two-line
+// feature flags…) have no consumer in mmk. Adding one is a two-line
 // change; inventing a consumer for it is not.
 type Result struct {
 	// Channels are the conversations the user belongs to, DMs

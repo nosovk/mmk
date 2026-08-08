@@ -48,11 +48,11 @@ package ui
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/debuglog"
-	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/slack/mrkdwn"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/statusbar"
+	"github.com/nosovk/mmk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/slack/mrkdwn"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/statusbar"
 )
 
 var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -240,7 +240,7 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		return nil
 	}
 	// Early-arrival suppression: if the WS echo for an
-	// slk-originated send arrives BEFORE the chat.postMessage HTTP
+	// mmk-originated send arrives BEFORE the chat.postMessage HTTP
 	// response (and therefore before recordSelfSent could fire),
 	// drop it for self-user messages. Otherwise the WS-echo
 	// version -- which carries Slack's normalised text (paragraph
@@ -249,7 +249,7 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	// See markSelfSendInFlight / selfSendInFlight comments.
 	//
 	// Cross-session messages from this user (sent via the official
-	// Slack client while slk is open) do NOT update
+	// Slack client while mmk is open) do NOT update
 	// lastSelfSendByChannel, so they pass through this guard.
 	if m.Message.UserID != "" && m.Message.UserID == a.currentUserID && a.selfSend.InFlight(m.ChannelID) {
 		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_self_send_in_flight",

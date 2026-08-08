@@ -5,7 +5,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/ids"
+	"github.com/nosovk/mmk/internal/ids"
 )
 
 // TestApp_OnlyThreadsViewActivationEnsuresSubscriptions pins where the

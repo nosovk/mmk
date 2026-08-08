@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/nosovk/mmk/internal/slackhttp"
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 )
@@ -1118,7 +1118,7 @@ func TestGetStarredChannels_APIError(t *testing.T) {
 }
 
 // TestHandRolledEndpoints_FormBodyTokenNoBearer verifies that every
-// undocumented endpoint slk calls directly sends the xoxc token in the
+// undocumented endpoint mmk calls directly sends the xoxc token in the
 // form body (the browser-client convention) rather than as Authorization:
 // Bearer (an OAuth pattern). Mixing Bearer with the browser-like headers
 // BrowserTransport injects is a contradictory request signature that
@@ -1312,7 +1312,7 @@ func TestNewClient_HasDefaultAPIBaseURL(t *testing.T) {
 // NewClient must likewise give the Client a wsBaseURL, since StartWebSocket
 // builds its URL from that field alone. The value is pinned literally rather
 // than compared against defaultWSBaseURL: the host is the one the official
-// web client dials, and changing it silently would move slk's event socket
+// web client dials, and changing it silently would move mmk's event socket
 // off the browser's path.
 func TestNewClient_HasDefaultWSBaseURL(t *testing.T) {
 	c := NewClient("xoxc-test", "d-cookie")
@@ -2132,8 +2132,8 @@ func TestStartWebSocket_SendsChromeUpgradeHeaders(t *testing.T) {
 
 	// Real Chrome sends none of these on a WS upgrade — verified against
 	// the status-101 upgrades in the 2026-07-30 captures. An earlier
-	// version of slk sent Sec-Fetch-Dest: websocket on the mistaken
-	// belief that browsers do; that made slk separable.
+	// version of mmk sent Sec-Fetch-Dest: websocket on the mistaken
+	// belief that browsers do; that made mmk separable.
 	for _, k := range []string{
 		"Accept", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest",
 		"Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform", "Priority", "Referer",
@@ -2152,7 +2152,7 @@ func TestStartWebSocket_SendsChromeUpgradeHeaders(t *testing.T) {
 //	             &eac_cache_ts=true&cache_ts=0&name_tagging=true
 //	             &only_self_subteams=true&connect_only=true&ms_latest=true
 //
-// slk sent only agent/connect_only/ms_latest, and at some point
+// mmk sent only agent/connect_only/ms_latest, and at some point
 // user_typing frames stopped arriving — the visible symptom was typing
 // indicators silently disappearing while everything else on the socket
 // kept working. Which of the missing keys gates typing delivery is not
@@ -2681,7 +2681,7 @@ func TestGetHistoryAround_HonorsCancelledContext(t *testing.T) {
 
 func TestWSUpgradeHeaders_OmitsXHROnlyHeaders(t *testing.T) {
 	h := wsUpgradeHeaders()
-	// Real Chrome omits all of these on a WebSocket upgrade. slk
+	// Real Chrome omits all of these on a WebSocket upgrade. mmk
 	// previously sent Sec-Fetch-Dest: websocket on the mistaken belief
 	// that browsers do; the 2026-07-30 captures show they send no
 	// Sec-Fetch-* header at all.
@@ -2927,7 +2927,7 @@ func TestPostForm_NonOKStatusIsAnError(t *testing.T) {
 // Two things were wrong with that, and this test fails on both:
 //
 //   - Envelope loss was undetectable. Passing nil where c.envelope
-//     belongs stripped every _x_* param from three of slk's
+//     belongs stripped every _x_* param from three of mmk's
 //     highest-traffic calls (client.counts runs on every boot and every
 //     reconnect) and no test in the suite noticed.
 //   - They were unreachable from the harness. pointClientAtTestServer
@@ -3057,7 +3057,7 @@ func TestAPIHTTPClient_FallbackCarriesEnvelope(t *testing.T) {
 // divergence, not the shape the official client emits.
 //
 // postForm builds its body with url.Values.Encode(), which SORTS keys.
-// So slk emits `channel=…&include_all_metadata=0&inclusive=0&limit=50&
+// So mmk emits `channel=…&include_all_metadata=0&inclusive=0&limit=50&
 // token=…` — perfectly alphabetized — and only the four-field _x_*
 // envelope the transport appends is in the client's captured order.
 //
@@ -3065,7 +3065,7 @@ func TestAPIHTTPClient_FallbackCarriesEnvelope(t *testing.T) {
 // things worse rather than better. slack-go builds its own bodies with
 // the same url.Values.Encode() (misc.go postForm) and is out of reach
 // from this package, so ordering postForm's handful of hand-rolled
-// endpoints would give slk TWO distinguishable body shapes — hand-
+// endpoints would give mmk TWO distinguishable body shapes — hand-
 // ordered on ~6 endpoints, sorted on ~50 — where the official client
 // has one. The real fix is the deferred multipart conversion, which
 // rebuilds every body at the transport chokepoint and can impose one
@@ -3109,7 +3109,7 @@ func TestPostForm_BodyFieldOrderIsAlphabeticalThenEnvelope(t *testing.T) {
 	if raw != want {
 		t.Errorf("postForm body =\n  %s\nwant\n  %s\n\n"+
 			"If the lead is no longer alphabetical, postForm stopped using url.Values.Encode(): "+
-			"that is an improvement only if slack-go's bodies were fixed too, otherwise slk now "+
+			"that is an improvement only if slack-go's bodies were fixed too, otherwise mmk now "+
 			"emits two different body shapes. Update the residual-divergence table either way.", raw, want)
 	}
 }

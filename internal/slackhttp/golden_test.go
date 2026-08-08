@@ -177,7 +177,7 @@ func TestGolden_WorkspaceAPIPostBootShape(t *testing.T) {
 
 	// The order must not merely differ from alphabetical by accident:
 	// url.Values.Encode() sorts, and a refactor back to it would give
-	// every slk request a perfectly alphabetized query string.
+	// every mmk request a perfectly alphabetized query string.
 	sorted := append([]string(nil), shape.WorkspaceAPI.QueryParamOrder...)
 	sort.Strings(sorted)
 	alphabetical := true
@@ -310,7 +310,7 @@ func TestGolden_WebSocketUpgradeHeaders(t *testing.T) {
 	for _, k := range shape.WebSocketUpgradeHeaders.Absent {
 		if v := h.Get(k); v != "" {
 			t.Errorf("WebSocketHeaders()[%s] = %q; fixture requires it absent "+
-				"(real Chrome omits it on a WS upgrade, so sending it is an slk signature)", k, v)
+				"(real Chrome omits it on a WS upgrade, so sending it is an mmk signature)", k, v)
 		}
 	}
 	// Exact count: an EXTRA header not named in either fixture list is
@@ -347,7 +347,7 @@ func TestGolden_ImageHeaders(t *testing.T) {
 	for _, k := range shape.ImageHeaders.Absent {
 		if v, ok := got[k]; ok {
 			t.Errorf("imageHeaderPairs()[%s] = %q; fixture requires it absent "+
-				"(real Chrome omits it on a no-cors image load, so sending it is an slk signature)", k, v)
+				"(real Chrome omits it on a no-cors image load, so sending it is an mmk signature)", k, v)
 		}
 	}
 	// Exact count: an EXTRA header named in neither list is still a
@@ -418,7 +418,7 @@ func TestGolden_XReasonIsBodyOnly(t *testing.T) {
 func TestGolden_XReasonPresentOnNonExcludedWorkspaceBodies(t *testing.T) {
 	shape := loadRequestShape(t)
 	if !shape.WorkspaceAPI.XReasonPresentOutside {
-		t.Fatal("fixture x_reason_present_outside_absent_methods is false; slk must never " +
+		t.Fatal("fixture x_reason_present_outside_absent_methods is false; mmk must never " +
 			"emit a workspace-API body with _x_mode and no _x_reason")
 	}
 	// conversations.history is deliberately not in
@@ -433,7 +433,7 @@ func TestGolden_XReasonPresentOnNonExcludedWorkspaceBodies(t *testing.T) {
 
 	env := NewEnvelope()
 	env.SetTeamID("T04T4TH8W")
-	// No WithReason on the context — the state nearly every slk call
+	// No WithReason on the context — the state nearly every mmk call
 	// site is in.
 	req := goldenReq(t, env, "rands-leadership.slack.com", "/api/conversations.history",
 		"application/x-www-form-urlencoded", "token=xoxc-redacted", "")

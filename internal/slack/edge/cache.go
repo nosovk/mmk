@@ -241,7 +241,7 @@ type channelsInfoResponse struct {
 // user's conversations are owned by different teams within the org,
 // and the edge cache keys records under the owning team; a request
 // scoped to the auth.test team resolves only the conversations that
-// team owns and fails the rest (gammons/slk#5: 217 of 217 failed).
+// team owns and fails the rest (gammons/mmk#5: 217 of 217 failed).
 // The caller partitions by userBoot's context_team_id; non-Grid
 // callers pass the workspace's own team id, which is every
 // conversation's context team there.

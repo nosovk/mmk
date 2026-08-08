@@ -1,7 +1,7 @@
 // internal/ui/callbacks.go
 //
 // Callback function types used to inject collaborators into App from
-// cmd/slk/main.go. Each Set* method on App takes one of these types
+// cmd/mmk/main.go. Each Set* method on App takes one of these types
 // and stores it; the App invokes them in response to user actions.
 //
 // Phase 1 of the SOLID refactor of internal/ui/app.go: this file
@@ -19,10 +19,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.design/x/clipboard"
 
-	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/compose"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/reactionpicker"
+	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/ui/compose"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/reactionpicker"
 )
 
 // SwitchWorkspaceFunc is called to switch the active workspace.
@@ -132,7 +132,7 @@ type clipboardWriter func(format clipboard.Format, data []byte) <-chan struct{}
 // overridable per-App via SetClipboardWriter for tests.
 var defaultClipboardWriter clipboardWriter = clipboard.Write
 
-// StatusReportFunc mirrors slk's unread state onto an external surface. It is
+// StatusReportFunc mirrors mmk's unread state onto an external surface. It is
 // called by notifyReadStateChanged on every read-state change with the
 // active-workspace unread count, the other-workspace unread count, the active
 // workspace name, and the window-title string. See notifications.status_command.

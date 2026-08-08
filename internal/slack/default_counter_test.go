@@ -5,10 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/nosovk/mmk/internal/slackhttp"
 )
 
-// The workspace API client carries most of slk's traffic. If it does
+// The workspace API client carries most of mmk's traffic. If it does
 // not tally, the per-boot number Phase 2b's criteria are stated in is
 // measuring almost nothing.
 func TestNewCookieHTTPClient_TalliesToDefaultCounter(t *testing.T) {

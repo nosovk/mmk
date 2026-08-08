@@ -13,7 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/wintree"
+	"github.com/nosovk/mmk/internal/ui/wintree"
 )
 
 // handleWindowChord consumes the key following ctrl+w (vim window

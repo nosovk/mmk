@@ -57,7 +57,7 @@ func copyToTemp(src string) (string, error) {
 	}
 	defer in.Close()
 
-	f, err := os.CreateTemp("", "slk-cookies-*.db")
+	f, err := os.CreateTemp("", "mmk-cookies-*.db")
 	if err != nil {
 		return "", err
 	}

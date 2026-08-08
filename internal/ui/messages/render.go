@@ -10,8 +10,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	emojiutil "github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/styles"
+	emojiutil "github.com/nosovk/mmk/internal/emoji"
+	"github.com/nosovk/mmk/internal/ui/styles"
 	"github.com/rivo/uniseg"
 )
 
@@ -716,7 +716,7 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 
 	// Links with labels: <url|label> -> just the label, wrapped in an OSC 8
 	// hyperlink escape so it's clickable in modern terminals. We don't
-	// append the raw URL: every terminal slk targets supports OSC 8 (or its
+	// append the raw URL: every terminal mmk targets supports OSC 8 (or its
 	// own URL auto-detection / shift-click), and the trailing "(url)"
 	// duplicated noise on every labeled link.
 	text = linkWithLabelRe.ReplaceAllStringFunc(text, func(match string) string {

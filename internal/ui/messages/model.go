@@ -11,15 +11,15 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gammons/slk/internal/debuglog"
-	emojiutil "github.com/gammons/slk/internal/emoji"
-	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/ui/imgrender"
-	"github.com/gammons/slk/internal/ui/messages/blockkit"
-	"github.com/gammons/slk/internal/ui/scrollbar"
-	"github.com/gammons/slk/internal/ui/selection"
-	"github.com/gammons/slk/internal/ui/styles"
-	"github.com/gammons/slk/internal/usergroups"
+	"github.com/nosovk/mmk/internal/debuglog"
+	emojiutil "github.com/nosovk/mmk/internal/emoji"
+	imgpkg "github.com/nosovk/mmk/internal/image"
+	"github.com/nosovk/mmk/internal/ui/imgrender"
+	"github.com/nosovk/mmk/internal/ui/messages/blockkit"
+	"github.com/nosovk/mmk/internal/ui/scrollbar"
+	"github.com/nosovk/mmk/internal/ui/selection"
+	"github.com/nosovk/mmk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/usergroups"
 )
 
 type MessageItem struct {
@@ -322,7 +322,7 @@ type Model struct {
 	// emojiCtx bundles the emoji-image rendering dependencies
 	// (PlaceContext, configured cell footprint, workspace customs).
 	// Configured at startup via Model.SetEmojiContext from
-	// cmd/slk/main.go. A zero value disables the image path; the
+	// cmd/mmk/main.go. A zero value disables the image path; the
 	// legacy glyph/shortcode-text branch runs instead.
 	emojiCtx EmojiContext
 
@@ -477,7 +477,7 @@ func (m *Model) HandleImageReady(channel, ts, key string) {
 	m.dirty()
 }
 
-// AvatarReadyMsg is dispatched by the host (cmd/slk wires it from
+// AvatarReadyMsg is dispatched by the host (cmd/mmk wires it from
 // avatar.Cache.SetOnReady) when a lazy avatar fetch completes. The
 // messages pane is the consumer: receiving the message means the user
 // at UserID now has a non-empty render in the avatar.Cache, so a
@@ -761,7 +761,7 @@ func (m *Model) RemoveLocalSent(localTS string) bool {
 // REPLACES that entry's contents with msg. Otherwise it appends.
 //
 // The replace-on-duplicate behaviour ensures the optimistic-display
-// text — which carries the locally-converted mrkdwn from the slk
+// text — which carries the locally-converted mrkdwn from the mmk
 // compose box — always wins over Slack's WS-echo text. Slack may
 // normalise the wire-form text (e.g. flatten paragraph breaks for
 // rich_text_block messages), and our renderer only consults the
@@ -1394,7 +1394,7 @@ type EmojiContext struct {
 }
 
 // SetEmojiContext configures the emoji-image rendering path. Should
-// be called once at startup (from cmd/slk/main.go) after the
+// be called once at startup (from cmd/mmk/main.go) after the
 // PlaceContext, Customs map, and EmojiCells are known. Subsequent
 // calls invalidate the render cache so the new context takes effect
 // on the next View().
@@ -1716,7 +1716,7 @@ func (m *Model) buildCache(width int) {
 	cs := m.buildCacheStyles(width)
 
 	// Perf instrumentation: allocate the per-sub-step stats sink when
-	// SLK_DEBUG is on so we can attribute buildCache's wall-clock across
+	// MMK_DEBUG is on so we can attribute buildCache's wall-clock across
 	// body / reactions / blockKit / legacy / attachments / borderWrap /
 	// plainLines. Aggregated into a single [perf] line after the loop
 	// to keep log volume O(1) per buildCache rather than O(N) per
@@ -2873,7 +2873,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 	case m.cache == nil || m.cacheWidth != width || m.cacheMsgLen != len(m.messages):
 		// Perf instrumentation: classify which predicate fired so we
 		// can attribute focus-flip churn vs width-resize vs new-message
-		// rebuilds in slk-debug.log. SLK_DEBUG=1 only; zero cost
+		// rebuilds in mmk-debug.log. MMK_DEBUG=1 only; zero cost
 		// otherwise (debuglog.Enabled() is an atomic.Bool load).
 		var reason string
 		if debuglog.Enabled() {
@@ -3441,7 +3441,7 @@ func FormatDateSeparator(dateStr string) string {
 // summarizeMessageItems collapses a slice into a compact
 // "count=N oldest=<ts> newest=<ts>" string for [cache] log lines.
 // Empty/nil slices return "count=0". Mirrors summarizeMessages in
-// cmd/slk/main.go but lives here to avoid a circular import.
+// cmd/mmk/main.go but lives here to avoid a circular import.
 func summarizeMessageItems(items []MessageItem) string {
 	if len(items) == 0 {
 		return "count=0"

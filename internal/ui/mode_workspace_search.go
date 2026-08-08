@@ -13,8 +13,8 @@ package ui
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/searchresults"
+	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/ui/searchresults"
 )
 
 func handleWorkspaceSearchMode(a *App, msg tea.KeyMsg) tea.Cmd {

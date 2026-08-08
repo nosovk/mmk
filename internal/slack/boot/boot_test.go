@@ -18,8 +18,8 @@ import (
 	// import must move to an external boot_test package or the two-line
 	// parse must be inlined. boot.go itself deliberately imports
 	// nothing from this repo.
-	slackclient "github.com/gammons/slk/internal/slack"
-	"github.com/gammons/slk/internal/slackhttp"
+	slackclient "github.com/nosovk/mmk/internal/slack"
+	"github.com/nosovk/mmk/internal/slackhttp"
 )
 
 // recordedCall is the one call UserBoot is expected to make.
@@ -818,7 +818,7 @@ func TestUserBoot_DecodesTeam(t *testing.T) {
 // there is no such key. Mute state lives inside all_notifications_prefs,
 // whose value is a JSON-encoded *string* (a Slack quirk), and
 // slackclient.ParseMutedFromAllNotificationsPrefs already decodes it. The
-// legacy field is still surfaced because slk's existing code merges it
+// legacy field is still surfaced because mmk's existing code merges it
 // for older workspaces.
 //
 // The two fixture values name disjoint sets on purpose, so swapping the
@@ -914,7 +914,7 @@ func TestPrefsUnmarshalJSONCopiesItsInput(t *testing.T) {
 // TestUserBoot_OKFalseIsAnError pins Slack's application-level failure
 // mode. The Web API answers HTTP 200 for these, so `ok` is the only
 // signal; without the check a token-revoked response would sail through
-// as a workspace with zero channels and zero DMs, and slk would render
+// as a workspace with zero channels and zero DMs, and mmk would render
 // an empty client rather than say anything.
 func TestUserBoot_OKFalseIsAnError(t *testing.T) {
 	var rec recordedCall
@@ -1026,7 +1026,7 @@ func TestUserBoot_PropagatesPostError(t *testing.T) {
 
 // TestUserBoot_IgnoresUnknownFields pins forward compatibility. Slack
 // adds top-level and nested keys to this response without notice; a
-// decoder that rejected them would break slk on Slack's schedule.
+// decoder that rejected them would break mmk on Slack's schedule.
 func TestUserBoot_IgnoresUnknownFields(t *testing.T) {
 	const body = `{
 	  "ok": true,

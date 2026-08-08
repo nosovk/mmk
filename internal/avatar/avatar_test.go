@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	imgpkg "github.com/gammons/slk/internal/image"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 // testCache builds a Cache wired to a local HTTP server serving a tiny

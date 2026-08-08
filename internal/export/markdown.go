@@ -1,4 +1,4 @@
-// Package export converts slk message data into portable file formats.
+// Package export converts mmk message data into portable file formats.
 // It has no UI dependencies (no lipgloss, no bubbletea) and operates
 // entirely on the messages.MessageItem data model.
 package export
@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	emojiutil "github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/messages"
+	emojiutil "github.com/nosovk/mmk/internal/emoji"
+	"github.com/nosovk/mmk/internal/ui/messages"
 )
 
 // ThreadToMarkdown converts a parent message and its replies into a
@@ -69,11 +69,11 @@ func formatMessage(msg messages.MessageItem, userNames, channelNames map[string]
 // honoring XDG_DATA_HOME. Creates nothing — callers must MkdirAll.
 func ExportDir() (string, error) {
 	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "slk", "exports"), nil
+		return filepath.Join(dir, "mmk", "exports"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "slk", "exports"), nil
+	return filepath.Join(home, ".local", "share", "mmk", "exports"), nil
 }

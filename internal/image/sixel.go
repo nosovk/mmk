@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gammons/slk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/debuglog"
 	gosixel "github.com/mattn/go-sixel"
 	"golang.org/x/image/draw"
 )

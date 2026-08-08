@@ -1,4 +1,4 @@
-// Package version provides formatting helpers for slk's build-time
+// Package version provides formatting helpers for mmk's build-time
 // version metadata. The build vars themselves live in package main
 // (injected via -ldflags by GoReleaser); callers pass the version
 // string in so this package stays free of build-time coupling.
@@ -14,9 +14,9 @@ func osc8(url string) string {
 // ModalFooter returns the single attribution line shown at the bottom
 // of the TUI help modal, e.g.:
 //
-//	slk dev - Made with ❤️ by Grant Ammons (https://grant.dev)
+//	mmk dev - Made with ❤️ by Grant Ammons (https://grant.dev)
 //
 // The URL is OSC-8 wrapped so supporting terminals make it clickable.
 func ModalFooter(version string) string {
-	return "slk " + version + " - Made with \u2764\ufe0f by Grant Ammons (" + osc8("https://grant.dev") + ")"
+	return "mmk " + version + " - Made with \u2764\ufe0f by Grant Ammons (" + osc8("https://grant.dev") + ")"
 }

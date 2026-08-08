@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gammons/slk/internal/cache"
+	"github.com/nosovk/mmk/internal/cache"
 )
 
 // TTL bounds how stale cached membership can be before EnsureFresh
@@ -205,7 +205,7 @@ func (m *Manager) backgroundFetch(ctx context.Context, channelID string) {
 	//
 	// The ids themselves are still fetched and cached below: that is
 	// one bounded call per channel, and it is what the mention
-	// picker's in-channel ordering reads. Names for members slk has
+	// picker's in-channel ordering reads. Names for members mmk has
 	// not met come from the cache, the boot response, and on-demand
 	// resolution when a row is actually rendered.
 	now := time.Now().Unix()

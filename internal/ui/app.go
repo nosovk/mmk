@@ -18,39 +18,39 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/config"
-	"github.com/gammons/slk/internal/debuglog"
-	"github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/export"
-	"github.com/gammons/slk/internal/ids"
-	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/slackurl"
-	"github.com/gammons/slk/internal/ui/channelfinder"
-	"github.com/gammons/slk/internal/ui/channelpicker"
-	"github.com/gammons/slk/internal/ui/compose"
-	"github.com/gammons/slk/internal/ui/confirmprompt"
-	"github.com/gammons/slk/internal/ui/emojipicker"
-	"github.com/gammons/slk/internal/ui/help"
-	"github.com/gammons/slk/internal/ui/imgrender"
-	"github.com/gammons/slk/internal/ui/linkpicker"
-	"github.com/gammons/slk/internal/ui/mentionpicker"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/newmessagepicker"
-	"github.com/gammons/slk/internal/ui/presencemenu"
-	"github.com/gammons/slk/internal/ui/reactionpicker"
-	"github.com/gammons/slk/internal/ui/reactionsview"
-	"github.com/gammons/slk/internal/ui/searchresults"
-	"github.com/gammons/slk/internal/ui/sidebar"
-	"github.com/gammons/slk/internal/ui/statusbar"
-	"github.com/gammons/slk/internal/ui/styles"
-	"github.com/gammons/slk/internal/ui/themeswitcher"
-	"github.com/gammons/slk/internal/ui/thread"
-	"github.com/gammons/slk/internal/ui/threadsview"
-	"github.com/gammons/slk/internal/ui/wintree"
-	"github.com/gammons/slk/internal/ui/workspace"
-	"github.com/gammons/slk/internal/ui/workspacefinder"
-	"github.com/gammons/slk/internal/usergroups"
+	"github.com/nosovk/mmk/internal/cache"
+	"github.com/nosovk/mmk/internal/config"
+	"github.com/nosovk/mmk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/emoji"
+	"github.com/nosovk/mmk/internal/export"
+	"github.com/nosovk/mmk/internal/ids"
+	imgpkg "github.com/nosovk/mmk/internal/image"
+	"github.com/nosovk/mmk/internal/slackurl"
+	"github.com/nosovk/mmk/internal/ui/channelfinder"
+	"github.com/nosovk/mmk/internal/ui/channelpicker"
+	"github.com/nosovk/mmk/internal/ui/compose"
+	"github.com/nosovk/mmk/internal/ui/confirmprompt"
+	"github.com/nosovk/mmk/internal/ui/emojipicker"
+	"github.com/nosovk/mmk/internal/ui/help"
+	"github.com/nosovk/mmk/internal/ui/imgrender"
+	"github.com/nosovk/mmk/internal/ui/linkpicker"
+	"github.com/nosovk/mmk/internal/ui/mentionpicker"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/newmessagepicker"
+	"github.com/nosovk/mmk/internal/ui/presencemenu"
+	"github.com/nosovk/mmk/internal/ui/reactionpicker"
+	"github.com/nosovk/mmk/internal/ui/reactionsview"
+	"github.com/nosovk/mmk/internal/ui/searchresults"
+	"github.com/nosovk/mmk/internal/ui/sidebar"
+	"github.com/nosovk/mmk/internal/ui/statusbar"
+	"github.com/nosovk/mmk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/themeswitcher"
+	"github.com/nosovk/mmk/internal/ui/thread"
+	"github.com/nosovk/mmk/internal/ui/threadsview"
+	"github.com/nosovk/mmk/internal/ui/wintree"
+	"github.com/nosovk/mmk/internal/ui/workspace"
+	"github.com/nosovk/mmk/internal/ui/workspacefinder"
+	"github.com/nosovk/mmk/internal/usergroups"
 	"golang.design/x/clipboard"
 )
 
@@ -177,7 +177,7 @@ type App struct {
 
 	uploader UploadFunc
 
-	// statusReport mirrors slk's unread state onto an external surface,
+	// statusReport mirrors mmk's unread state onto an external surface,
 	// invoked by notifyReadStateChanged on every read-state change. Nil unless
 	// a status_command is configured (config: notifications.status_command).
 	statusReport StatusReportFunc
@@ -337,7 +337,7 @@ type App struct {
 
 	// navHistory owns the per-workspace ctrl+h / ctrl+k browser-style
 	// jump list. See internal/ui/navhistory.go. Lazy-initialized on
-	// first push for each team. Cleared only when slk exits — the
+	// first push for each team. Cleared only when mmk exits — the
 	// stacks are session-only by design.
 	navHistory *navHistoryStore
 
@@ -354,7 +354,7 @@ type App struct {
 	presence *presenceController
 	// setStatusFn is the callback invoked when the user picks a presence-
 	// menu action; it runs the Slack API call for the active workspace.
-	// Wired by cmd/slk/main.go via SetStatusSetter.
+	// Wired by cmd/mmk/main.go via SetStatusSetter.
 	setStatusFn func(action presencemenu.Action, snoozeMinutes int)
 
 	// typing owns both inbound typing-indicator state (other users
@@ -368,7 +368,7 @@ type App struct {
 	// Falls back to 3 when unset (matches the pre-config behavior).
 	mouseWheelLines int
 
-	// selfSend tracks slk-originated message sends so WS echoes can
+	// selfSend tracks mmk-originated message sends so WS echoes can
 	// be suppressed (preventing the visible flicker between Slack's
 	// normalised echo text and the optimistic instant-display text).
 	// See internal/ui/selfsend.go. Used for both channel-level
@@ -489,7 +489,7 @@ func NewApp() *App {
 		keys:                  DefaultKeyMap(),
 		selfSend:              newSelfSendDedup(),
 		bootstrap:             newWorkspaceBootstrap(),
-		windowTitle:           "slk",
+		windowTitle:           "mmk",
 		threadsDirtyDebounce:  150 * time.Millisecond,
 		channelSearchDebounce: channelSearchDebounceDelay,
 		fetchingOlder:         map[string]bool{},
@@ -1073,7 +1073,7 @@ func (a *App) openLinksOfSelected() tea.Cmd {
 }
 
 // linkOpensInApp reports whether routeLink would navigate this URL
-// inside slk (used for the picker's "[slk]" badge). Mirrors the
+// inside mmk (used for the picker's "[mmk]" badge). Mirrors the
 // guards at the top of routeLink.
 func (a *App) linkOpensInApp(rawURL string) bool {
 	pl, ok := slackurl.Parse(rawURL)
@@ -1117,7 +1117,7 @@ func (a *App) saveThreadToFile() tea.Cmd {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return statusbar.ThreadSaveFailedMsg{Reason: err.Error()}
 		}
-		filename := fmt.Sprintf("slk-thread-%s-%s.md", sanitizeForFilename(channelName), time.Now().Format("2006-01-02-150405"))
+		filename := fmt.Sprintf("mmk-thread-%s-%s.md", sanitizeForFilename(channelName), time.Now().Format("2006-01-02-150405"))
 		path := filepath.Join(dir, filename)
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return statusbar.ThreadSaveFailedMsg{Reason: err.Error()}
@@ -1410,12 +1410,12 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 	)
 }
 
-// openQuitConfirm raises the centered "Quit slk?" overlay. Called from
+// openQuitConfirm raises the centered "Quit mmk?" overlay. Called from
 // both lowercase `q` and Ctrl+C (the latter intercepted globally so an
 // accidental Ctrl+C in any mode never silently kills the app).
 func (a *App) openQuitConfirm() {
 	a.confirmPrompt.Open(
-		"Quit slk?",
+		"Quit mmk?",
 		"All workspace connections will close.",
 		func() tea.Msg { return tea.Quit() },
 	)
@@ -1773,7 +1773,7 @@ func (a *App) userNameFor(userID string) string {
 }
 
 // SetLoadingWorkspaces seeds the startup overlay. Called from
-// cmd/slk/main.go at program start. Delegates to workspaceBootstrap;
+// cmd/mmk/main.go at program start. Delegates to workspaceBootstrap;
 // kept as an App method for backwards-compatible wiring.
 func (a *App) SetLoadingWorkspaces(names []string) {
 	a.bootstrap.SetWorkspaces(names)
@@ -1852,7 +1852,7 @@ func (a *App) SetChannelService(s ChannelService) {
 	a.channels = s
 }
 
-// SetSearchService injects the search backend (wired by cmd/slk).
+// SetSearchService injects the search backend (wired by cmd/mmk).
 // Build one via NewSearchService from a SearchServiceFuncs bundle.
 func (a *App) SetSearchService(s SearchService) {
 	if s == nil {
@@ -1945,7 +1945,7 @@ func (a *App) SetWorkspaceUnreadReader(f func() []string) {
 }
 
 // SetStatusReporter installs the StatusReportFunc invoked on every unread-state
-// change to mirror slk's unread state onto an external surface (config:
+// change to mirror mmk's unread state onto an external surface (config:
 // notifications.status_command).
 func (a *App) SetStatusReporter(fn StatusReportFunc) {
 	a.statusReport = fn
@@ -2556,7 +2556,7 @@ func (a *App) View() tea.View {
 	// Perf instrumentation: wall-clock the main View() path so we can
 	// correlate user-visible latency (i / arrow keys / thread open-close)
 	// with the cache rebuilds logged from messages.Model.View and
-	// thread.Model.View. SLK_DEBUG=1 only; zero cost otherwise.
+	// thread.Model.View. MMK_DEBUG=1 only; zero cost otherwise.
 	var viewPerfStart time.Time
 	if debuglog.Enabled() {
 		viewPerfStart = time.Now()
@@ -2831,7 +2831,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 				3*time.Second,
 			)
 		}
-		filename := "slk-paste-" + time.Now().Format("2006-01-02-15-04-05") + ".png"
+		filename := "mmk-paste-" + time.Now().Format("2006-01-02-15-04-05") + ".png"
 		target.AddAttachment(compose.PendingAttachment{
 			Filename: filename,
 			Bytes:    imgBytes,

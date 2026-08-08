@@ -17,13 +17,13 @@ const ViewMethod = "conversations.view"
 // client sends in both captures.
 //
 // It is a string because this is a form body, and it is 28 because
-// that is what was measured — not a round number someone liked. slk's
+// that is what was measured — not a round number someone liked. mmk's
 // own history fetches use different limits; matching the real client
 // here is the entire point, so this constant must not be "tuned".
 const viewCount = "28"
 
 // UserProfile is the subset of a conversations.view users[] entry's
-// `profile` that slk renders.
+// `profile` that mmk renders.
 //
 // Deliberately NOT boot.SelfProfile, even though the two overlap
 // heavily. SelfProfile carries Email, and the 21 profile keys observed
@@ -47,7 +47,7 @@ type UserProfile struct {
 // authors the returned history references, already resolved.
 //
 // This array is why the endpoint is worth having: it replaces the
-// per-author users.info fan-out slk fires after every history fetch,
+// per-author users.info fan-out mmk fires after every history fetch,
 // which on a busy channel is up to `count` extra requests for one
 // channel open.
 //
@@ -55,13 +55,13 @@ type UserProfile struct {
 // exactly edge.User's (id, name, team_id, updated, deleted, is_bot,
 // profile.{display_name,real_name}) plus is_app_user, real_name and
 // the avatar/status profile fields — edge.User is the existing shape
-// slk's user cache is fed from, and cache.User.IsBot is documented as
+// mmk's user cache is fed from, and cache.User.IsBot is documented as
 // the union of is_bot and is_app_user, so both are needed to fill it.
 //
 // The six remaining booleans (is_admin, is_owner, is_primary_owner,
 // is_restricted, is_ultra_restricted, is_email_confirmed) and the
 // three remaining scalars (color, tz, tz_label, tz_offset,
-// who_can_share_contact_card) have no consumer in slk. Adding one is a
+// who_can_share_contact_card) have no consumer in mmk. Adding one is a
 // two-line change; inventing a consumer for it is not.
 type User struct {
 	ID     string `json:"id"`
@@ -117,7 +117,7 @@ type History struct {
 	//
 	//  1. Nothing consumes them yet. This package is parser-only and
 	//     unwired; Phase 2b is what feeds them to the renderer.
-	//  2. slk models messages as slack-go's slack.Message
+	//  2. mmk models messages as slack-go's slack.Message
 	//     (internal/slack/client.go). json.Unmarshal from a
 	//     RawMessage into a slack.Message is lossless and one line, so
 	//     deferring costs the wiring phase nothing — whereas defining
@@ -141,7 +141,7 @@ type History struct {
 	//     per-field claim about an array element needs a denominator.
 	//
 	// Honest cost, stated so it is a choice and not an accident:
-	// raw bytes mean a message whose shape slk cannot handle fails
+	// raw bytes mean a message whose shape mmk cannot handle fails
 	// later, at render, instead of here at decode. That is a
 	// deliberate trade — it also means one unexpected message cannot
 	// fail the entire channel open, which for a 28-message batch is
@@ -293,7 +293,7 @@ type ViewResponseMetadata struct {
 // ViewResult is everything one conversations.view call learned.
 //
 // The point of the endpoint is that these sections arrive together:
-// slk's current channel open is one conversations.history, then a
+// mmk's current channel open is one conversations.history, then a
 // users.info per distinct author, then emoji.list. That is a burst of
 // up to ~30 requests per channel opened, and burst request volume is
 // exactly what Grid's anomaly detection scores.
@@ -363,7 +363,7 @@ type viewResponse struct {
 //
 // This is the official client's channel-open call. One request returns
 // the history, the users and bots that authored it, the channels it
-// mentions and the custom emoji it uses — replacing slk's
+// mentions and the custom emoji it uses — replacing mmk's
 // conversations.history plus a users.info per distinct author plus
 // emoji.list.
 //
@@ -373,7 +373,7 @@ type viewResponse struct {
 //
 // Both HAR captures of this endpoint carried NO `channel` param at
 // all, and the response was the conversation the user had last
-// viewed. slk needs a specific conversation, so this function sends
+// viewed. mmk needs a specific conversation, so this function sends
 // `channel` when channelID is non-empty and omits it entirely when
 // channelID is empty, reproducing the captured request byte for byte
 // in the latter case.

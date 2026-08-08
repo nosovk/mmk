@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gammons/slk/internal/usergroups"
+	"github.com/nosovk/mmk/internal/usergroups"
 )
 
 // Regexes for the entity forms FlattenMrkdwn handles beyond the shared

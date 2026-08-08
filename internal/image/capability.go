@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gammons/slk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/debuglog"
 )
 
 // Env is a snapshot of terminal-related environment variables.
@@ -62,7 +62,7 @@ var tmuxClientTerm = func() string {
 // the outer terminal's identity, we ask tmux via display-message
 // #{client_termname}. Kitty graphics escapes are wrapped in the tmux
 // DCS passthrough envelope at emit time (see writeKittySequence) and
-// the startup probe in cmd/slk confirms the terminal actually
+// the startup probe in cmd/mmk confirms the terminal actually
 // acknowledges the upload — if allow-passthrough is off, the probe
 // times out and the caller downgrades to halfblock.
 //

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	imgpkg "github.com/gammons/slk/internal/image"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 // PlaceFetcher is the subset of *image.Fetcher's API that Place uses.
@@ -67,7 +67,7 @@ var (
 // produces a syntactically-valid URL that 404s on Slack's CDN. Without
 // negative caching, these rows would show blank cells indefinitely.
 //
-// Lifetime: process-scoped. No TTL, no disk persistence. A slk restart
+// Lifetime: process-scoped. No TTL, no disk persistence. A mmk restart
 // picks up emoji that Slack may have added since.
 var (
 	negativeEmojiCache   = map[string]struct{}{}

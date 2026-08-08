@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/slack-go/slack"
 
-	"github.com/gammons/slk/internal/ui/messages/blockkit"
+	"github.com/nosovk/mmk/internal/ui/messages/blockkit"
 )
 
 // renderedFor builds a model with a single message, runs buildCache

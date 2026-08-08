@@ -20,7 +20,7 @@ import (
 
 	"github.com/slack-go/slack"
 
-	imgpkg "github.com/gammons/slk/internal/image"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 // Block is a Slack Block Kit layout block. The unexported blockType()
@@ -261,7 +261,7 @@ type Context struct {
 
 	// Perf, when non-nil, accumulates per-sub-lane timing inside
 	// RenderLegacy (and only there for now). Allocated by the host
-	// under SLK_DEBUG and read back after the call so the parent
+	// under MMK_DEBUG and read back after the call so the parent
 	// buildCache breakdown can attribute the legacy lane's cost
 	// across text rendering, image fetch/render, and the rest
 	// (stripe prefix, width measurement, truncation). Nil disables

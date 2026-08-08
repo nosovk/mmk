@@ -7,8 +7,8 @@
 package ui
 
 import (
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/wintree"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/wintree"
 )
 
 // newWindowModel constructs a messages model for a new window and

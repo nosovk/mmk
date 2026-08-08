@@ -44,10 +44,10 @@ package ui
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/slack/mrkdwn"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/statusbar"
+	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/slack/mrkdwn"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/statusbar"
 )
 
 var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {

@@ -5,8 +5,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/gammons/slk/internal/text"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/text"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // SearchHighlightSGR derives the raw open/close SGR sequences for

@@ -15,7 +15,7 @@ package ui
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ids"
+	"github.com/nosovk/mmk/internal/ids"
 )
 
 func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {

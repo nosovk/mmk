@@ -22,11 +22,11 @@ func footerLine(rendered, needle string) string {
 func TestFooterRendersWhenSet(t *testing.T) {
 	m := New()
 	m.SetEntries(sampleEntries())
-	m.SetFooter("slk dev - footer line")
+	m.SetFooter("mmk dev - footer line")
 	m.Open()
 
 	out := m.ViewOverlay(100, 40, "")
-	if !strings.Contains(out, "slk dev - footer line") {
+	if !strings.Contains(out, "mmk dev - footer line") {
 		t.Errorf("expected footer text in rendered modal, got:\n%s", out)
 	}
 }
@@ -45,7 +45,7 @@ func TestFooterAbsentWhenEmpty(t *testing.T) {
 func TestFooterRendersAtBottom(t *testing.T) {
 	m := New()
 	m.SetEntries(sampleEntries())
-	m.SetFooter("slk dev - attribution")
+	m.SetFooter("mmk dev - attribution")
 	m.Open()
 
 	out := ansi.Strip(m.ViewOverlay(100, 40, ""))
@@ -62,7 +62,7 @@ func TestFooterRendersAtBottom(t *testing.T) {
 func TestFooterIsCentered(t *testing.T) {
 	m := New()
 	m.SetEntries(sampleEntries())
-	m.SetFooter("slk dev - centered")
+	m.SetFooter("mmk dev - centered")
 	m.Open()
 
 	out := m.ViewOverlay(100, 40, "")
@@ -75,7 +75,7 @@ func TestFooterIsCentered(t *testing.T) {
 		t.Fatalf("missing controls or footer line in:\n%s", ansi.Strip(out))
 	}
 	ctrlCol := strings.Index(ctrl, "/ search")
-	attrCol := strings.Index(attr, "slk dev")
+	attrCol := strings.Index(attr, "mmk dev")
 	if attrCol <= ctrlCol {
 		t.Errorf("expected centered footer indented more than left-aligned controls; attr@%d ctrl@%d", attrCol, ctrlCol)
 	}

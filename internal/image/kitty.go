@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/gammons/slk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/debuglog"
 	"golang.org/x/image/draw"
 )
 
@@ -115,7 +115,7 @@ type KittyRenderer struct {
 	// PNG-encode + base64 on EVERY buildCache because their
 	// MarkUploaded was never called. That cost (~22 ms/image at
 	// typical Slack thumbnail sizes) is the dominant remaining channel-
-	// switch latency observed in slk-debug.log perf traces.
+	// switch latency observed in mmk-debug.log perf traces.
 	//
 	// The cache is keyed by (id, target). The source image bound to
 	// `key` via SetSource is content-addressable upstream (BK-<sha1>

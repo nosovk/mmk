@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	slkemoji "github.com/gammons/slk/internal/emoji"
-	imgpkg "github.com/gammons/slk/internal/image"
+	slkemoji "github.com/nosovk/mmk/internal/emoji"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 func TestNewModel(t *testing.T) {

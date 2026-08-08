@@ -1,8 +1,8 @@
-// Package bootstrap owns the sequence of API calls slk makes when it
+// Package bootstrap owns the sequence of API calls mmk makes when it
 // connects to a workspace.
 //
-// It exists as a package, rather than as more of cmd/slk/main.go's
-// connectWorkspace, for one reason: this sequence is what gets slk's
+// It exists as a package, rather than as more of cmd/mmk/main.go's
+// connectWorkspace, for one reason: this sequence is what gets mmk's
 // Enterprise Grid users signed out for "data scraping", and inside
 // connectWorkspace no test could reach it. connectWorkspace builds a
 // live *slack.Client and calls Connect, so there is no seam without a
@@ -11,13 +11,13 @@
 // The call budget is the point. Across 8 captures of the official web
 // client, a boot issues ~70 API requests and NEVER enumerates: zero
 // users.list, zero conversations.list, zero per-channel
-// conversations.history. slk previously issued roughly 400 and did all
+// conversations.history. mmk previously issued roughly 400 and did all
 // three. TestRun_NeverEnumerates is the regression guard.
 //
 // # Import direction
 //
 // This package must NOT import internal/slack. Phase 2b makes
-// internal/slack import internal/slack/boot, and cmd/slk wires slack
+// internal/slack import internal/slack/boot, and cmd/mmk wires slack
 // and bootstrap together; keeping the dependency pointing one way is
 // what lets boot and edge stay stdlib-only parsers. The visible cost is
 // that Result carries the RAW all_notifications_prefs string rather
@@ -38,9 +38,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/slack/boot"
-	"github.com/gammons/slk/internal/slack/edge"
+	"github.com/nosovk/mmk/internal/cache"
+	"github.com/nosovk/mmk/internal/slack/boot"
+	"github.com/nosovk/mmk/internal/slack/edge"
 )
 
 // UserBooter fetches and parses client.userBoot.
@@ -48,12 +48,12 @@ type UserBooter interface {
 	UserBoot(ctx context.Context) (*boot.Result, error)
 }
 
-// CountsFetcher fetches client.counts, slk's unread source of truth.
+// CountsFetcher fetches client.counts, mmk's unread source of truth.
 //
 // Named CountsFetcher and not Counter, which is what the plan called
 // it. slackhttp.Counter is an unrelated concrete type in this same
 // phase — it tallies outbound requests by endpoint — and the two would
-// sit side by side in cmd/slk's wiring, where "Counter" would name a
+// sit side by side in cmd/mmk's wiring, where "Counter" would name a
 // request tally in one line and an unread-state fetcher in the next.
 // The agent-noun form also matches UserBooter, Viewer, Historian and
 // Revalidator below, none of which is named for the noun it returns.
@@ -122,7 +122,7 @@ type Store interface {
 	UpdateChannelFromEdge(u cache.EdgeChannelUpdate) error
 	UpdateUserFromEdge(u cache.EdgeUserUpdate) error
 
-	// MessageVersions returns {ts: version} for the messages slk
+	// MessageVersions returns {ts: version} for the messages mmk
 	// already holds in one channel — the cached_latest_updates the
 	// conversations.history fallback sends so the server can return
 	// only what changed.
@@ -154,7 +154,7 @@ type Unread struct {
 // restatement of slack.ThreadsAggregate.
 //
 // HasUnreads is the authoritative answer to "does the user have unread
-// thread activity", and slk needs it because the local cache holds no
+// thread activity", and mmk needs it because the local cache holds no
 // per-thread read state and its heuristic produces false positives.
 type Threads struct {
 	HasUnreads   bool
@@ -232,7 +232,7 @@ type Result struct {
 
 	// LegacyMutedRaw is the legacy flat comma-separated muted_channels
 	// list. It was absent from the captured response — all 702 prefs
-	// keys were checked — but slk's existing GetMutedChannels still
+	// keys were checked — but mmk's existing GetMutedChannels still
 	// merges it for workspaces that do ship it, so it is carried
 	// through rather than dropped.
 	LegacyMutedRaw string
@@ -245,7 +245,7 @@ type Result struct {
 	// CountsOK reports whether the client.counts call succeeded.
 	//
 	// The distinction is not cosmetic for anyone applying Counts as a
-	// full snapshot. slk resets every channel in the workspace to read
+	// full snapshot. mmk resets every channel in the workspace to read
 	// and then marks the ones counts reported unread, so an empty
 	// Unreads slice is either "everything is read", which must be
 	// applied, or "we never found out", which must not be — the second
@@ -275,7 +275,7 @@ type Result struct {
 	//
 	// Empty alongside a non-empty OpenedChannelID means the load
 	// failed on both paths: the channel exists and was asked for, and
-	// slk has no scrollback for it. That is logged, not returned as an
+	// mmk has no scrollback for it. That is logged, not returned as an
 	// error — see Run's "What is fatal".
 	Messages []json.RawMessage
 
@@ -370,7 +370,7 @@ type Deps struct {
 // Grid, where conversations.view has never been captured at all, so an
 // unknown_method there is a plausible steady state rather than an
 // outage — and "this channel looks empty" is recoverable in a way
-// "slk will not connect" is not.
+// "mmk will not connect" is not.
 func Run(ctx context.Context, deps Deps) (*Result, error) {
 	logf := deps.Log
 	if logf == nil {
@@ -378,7 +378,7 @@ func Run(ctx context.Context, deps Deps) (*Result, error) {
 	}
 
 	// Deps is assembled field by field at a call site in
-	// cmd/slk/main.go, so a forgotten dependency arrives as a nil
+	// cmd/mmk/main.go, so a forgotten dependency arrives as a nil
 	// interface. Calling through it panics, which in a Bubble Tea
 	// program means a stack trace over a torn-down terminal instead of
 	// a message. Boot and Counts are checked because Boot and Counts
@@ -478,7 +478,7 @@ func checkOpenChannelDeps(deps Deps) error {
 // fatal". It means the opened channel has no scrollback, not that the
 // workspace is unusable. When it returns an error, out is left
 // untouched: no half-populated Messages, no LatestUpdates vouching for
-// versions slk does not hold.
+// versions mmk does not hold.
 //
 // # The `channel` param on conversations.view
 //
@@ -502,7 +502,7 @@ func checkOpenChannelDeps(deps Deps) error {
 //
 // The fallback is conversations.history with cached_latest_updates,
 // which IS fully verified (14 of 14 captured requests) — not a plain
-// history fetch, which would re-download scrollback slk already holds.
+// history fetch, which would re-download scrollback mmk already holds.
 // On Enterprise Grid the fallback may well be the ordinary path.
 func openChannel(ctx context.Context, deps Deps, out *Result, logf func(string, ...any)) error {
 	want := deps.OpenChannelID
@@ -534,8 +534,8 @@ func openChannel(ctx context.Context, deps Deps, out *Result, logf func(string, 
 		// Not fatal: an empty map means "we vouch for nothing", which
 		// is the shape the client sends when it holds nothing. The
 		// value returned next to the error is discarded — vouching for
-		// versions slk does not hold makes the server withhold
-		// messages slk never received.
+		// versions mmk does not hold makes the server withhold
+		// messages mmk never received.
 		logf("bootstrap: reading cached message versions for %s: %v", want, err)
 		cached = nil
 	}

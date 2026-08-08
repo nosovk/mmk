@@ -112,7 +112,7 @@ func main() {
 	writeMap(&buf, "slackNameToCanonical", nameToCanonical)
 	fmt.Fprintf(&buf, "\n// slackCodeMap maps every Slack emoji shortcode (\":name:\", all aliases)\n")
 	fmt.Fprintf(&buf, "// to its rendered Unicode glyph, derived from iamcal codepoints. This is\n")
-	fmt.Fprintf(&buf, "// slk's standard-emoji source, replacing kyokomi/emoji's CodeMap.\n")
+	fmt.Fprintf(&buf, "// mmk's standard-emoji source, replacing kyokomi/emoji's CodeMap.\n")
 	writeMap(&buf, "slackCodeMap", codeMap)
 
 	src, err := format.Source(buf.Bytes())

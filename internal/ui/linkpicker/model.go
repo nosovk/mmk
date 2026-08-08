@@ -8,7 +8,7 @@ package linkpicker
 type Item struct {
 	URL   string
 	Label string // empty for bare links
-	// InApp marks links that the router will navigate inside slk
+	// InApp marks links that the router will navigate inside mmk
 	// (active-workspace archive permalinks); rendered with a badge.
 	InApp bool
 }

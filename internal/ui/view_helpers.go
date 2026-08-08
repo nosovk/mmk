@@ -25,7 +25,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // joinPanelsHorizontal is a zero-measurement replacement for

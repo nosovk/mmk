@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/slack/boot"
-	"github.com/gammons/slk/internal/slack/edge"
+	"github.com/nosovk/mmk/internal/cache"
+	"github.com/nosovk/mmk/internal/slack/boot"
+	"github.com/nosovk/mmk/internal/slack/edge"
 )
 
 // --- fixtures ---------------------------------------------------------
@@ -264,8 +264,8 @@ type revalidateFake struct {
 }
 
 // poisonedVersionMap is returned beside a version-lookup error. Using
-// it would send the server versions slk cannot vouch for, and the
-// server would then withhold records slk does not have.
+// it would send the server versions mmk cannot vouch for, and the
+// server would then withhold records mmk does not have.
 func poisonedVersionMap() map[string]int64 {
 	return map[string]int64{"C_GENERAL": 9999999999999, "U_ALICE": 9999999999999}
 }
@@ -430,7 +430,7 @@ func sortedKeys(m map[string]int64) []string {
 // --- scope ------------------------------------------------------------
 
 func TestRevalidate_SendsOnlySidebarChannelsNotTheWholeCache(t *testing.T) {
-	// The regression this task exists for, on the channel side. slk
+	// The regression this task exists for, on the channel side. mmk
 	// used to walk conversations.list; the official client sends
 	// {id: version} for what the sidebar renders and nothing else.
 	// Sweeping the cache instead would restore the enumeration in a
@@ -481,7 +481,7 @@ func TestRevalidate_DoesNotSendEveryCachedUser(t *testing.T) {
 	// The users.list replacement, and the whole point of the phase.
 	// 500 cached users stand in for the ~10k a Grid workspace has: at
 	// a fixed batch of 80 that is 125 consecutive exactly-80-id
-	// requests, which is precisely the shape that gets slk's users
+	// requests, which is precisely the shape that gets mmk's users
 	// signed out. Scoping the id set is the fix.
 	f := openedFake()
 	for i := 0; i < 500; i++ {
@@ -596,7 +596,7 @@ func TestRevalidate_MakesNoRequestWithNothingInScope(t *testing.T) {
 }
 
 func TestRevalidate_UsesTheWorkspaceIDForEveryCacheCall(t *testing.T) {
-	// Every one of these is scoped to a workspace, and slk runs
+	// Every one of these is scoped to a workspace, and mmk runs
 	// several at once. A blank or wrong id reads another workspace's
 	// versions, which makes every channel here look unchanged.
 	f := openedFake()
@@ -624,8 +624,8 @@ func TestRevalidate_DoesNotCrossTheVersionMaps(t *testing.T) {
 	// Both maps deliberately contain one id belonging to the other
 	// (see cannedChannelVersions). Looking channels up in the user map
 	// still compiles, still sends a plausible request, and quietly
-	// tells the server slk holds a version it does not — so the server
-	// withholds a record slk never received, forever.
+	// tells the server mmk holds a version it does not — so the server
+	// withholds a record mmk never received, forever.
 	f := openedFake()
 
 	if _, err := Run(context.Background(), f.Deps()); err != nil {
@@ -1007,7 +1007,7 @@ func TestRevalidate_UsersInfoErrorDiscardsTheBody(t *testing.T) {
 
 func TestRevalidate_ChannelsInfoFailureDoesNotSkipUsersInfo(t *testing.T) {
 	// The two passes are independent, and losing the user pass to a
-	// channel failure sends slk back to resolving every author one
+	// channel failure sends mmk back to resolving every author one
 	// users.info call at a time — the fan-out this phase deletes.
 	f := openedFake()
 	f.channelsInfoErr = errors.New("ratelimited")
@@ -1025,7 +1025,7 @@ func TestRevalidate_ChannelsInfoFailureDoesNotSkipUsersInfo(t *testing.T) {
 
 func TestRevalidate_VersionLookupFailureDiscardsTheReturnedMap(t *testing.T) {
 	// The map beside the error must not reach the wire. Vouching for a
-	// version slk does not hold makes the server withhold a record slk
+	// version mmk does not hold makes the server withhold a record mmk
 	// never received — the failure is then permanent and invisible,
 	// since the version stays put and the record never arrives.
 	// Sending 0 for everything costs bytes and is correct.

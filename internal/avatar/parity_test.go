@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	imgpkg "github.com/gammons/slk/internal/image"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 // TestRender_ParityGolden asserts that the refactored avatar package

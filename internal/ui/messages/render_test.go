@@ -11,11 +11,11 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	emojiutil "github.com/gammons/slk/internal/emoji"
-	imgpkg "github.com/gammons/slk/internal/image"
+	emojiutil "github.com/nosovk/mmk/internal/emoji"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 
-	"github.com/gammons/slk/internal/config"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/config"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // TestLabeledLinkShowsLabelAndOSC8 asserts that a Slack-style labeled link

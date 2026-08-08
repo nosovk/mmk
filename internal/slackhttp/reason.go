@@ -14,7 +14,7 @@ type reasonKey struct{}
 // request(s) made with it. Slack's web client tags every API call with
 // the UI action that triggered it, e.g. "message-pane/requestHistory",
 // "unread-counts/onLastReadUpdated", "initial-data", "boot". Requests
-// with no reason at all are one more way slk's traffic differs from
+// with no reason at all are one more way mmk's traffic differs from
 // the official client's.
 //
 // _x_reason rides the context rather than a transport field because it
@@ -47,7 +47,7 @@ func ReasonFrom(ctx context.Context) string {
 }
 
 // defaultReasons maps an API method name to the _x_reason the official
-// web client sends for it, for the endpoints slk actually calls. Each
+// web client sends for it, for the endpoints mmk actually calls. Each
 // value was read off the 2026-07-30 captures — these are observed, not
 // invented.
 //
@@ -57,8 +57,8 @@ func ReasonFrom(ctx context.Context) string {
 // _x_mode/_x_sonic/_x_app_name with no _x_reason at all. The real
 // client sends _x_reason on 153 of 163 requests, so "body has _x_mode
 // and lacks _x_reason" was a single predicate matching ~6% of official
-// traffic and ~100% of slk's — a sharper separator than sending no
-// _x_* fields at all, which is what slk did before this package
+// traffic and ~100% of mmk's — a sharper separator than sending no
+// _x_* fields at all, which is what mmk did before this package
 // existed.
 //
 // conversations.history also appears in the captures as
@@ -84,13 +84,13 @@ var defaultReasons = map[string]string{
 // HONEST CAVEAT: this pairing is a GUESS. The string itself is real —
 // the captures show the official client sending
 // "conditional-fetch-manager" on users.channelSections.list, so it is
-// not an slk-invented value that would stand out on its own — but
+// not an mmk-invented value that would stand out on its own — but
 // there is no capture evidence that the real client ever sends it on,
 // say, chat.postMessage. Treat it as unverified.
 //
 // It is still the right call, because the alternative is emitting
 // nothing, and nothing is the separator this whole table exists to
-// remove. A wrong-but-attested reason puts slk inside the 94% of
+// remove. A wrong-but-attested reason puts mmk inside the 94% of
 // requests that carry the field; an absent one puts it in a 6% bucket
 // on every single request. If a future capture covers more endpoints,
 // move them into defaultReasons and shrink this fallback's reach.
@@ -100,10 +100,10 @@ var defaultReasons = map[string]string{
 // this string to be one of the 48 _x_reason values recorded in
 // testdata/official-request-shape.json. It has to be, because this
 // constant covers every endpoint missing from the table above and so
-// rides more of slk's traffic than any single entry in it. Before that
+// rides more of mmk's traffic than any single entry in it. Before that
 // test only its PRESENCE was pinned: setting it to "" failed, and
-// setting it to "slk-tui-fetch" — a string in zero captures, on nearly
-// every request slk makes — passed the whole suite.
+// setting it to "mmk-tui-fetch" — a string in zero captures, on nearly
+// every request mmk makes — passed the whole suite.
 const genericReason = "conditional-fetch-manager"
 
 // defaultReason returns the _x_reason to send for an API method when

@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/config"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/cache"
+	"github.com/nosovk/mmk/internal/config"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 func sampleSummaries() []cache.ThreadSummary {

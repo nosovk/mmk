@@ -1981,7 +1981,7 @@ var slackNameToCanonical = map[string]string{
 
 // slackCodeMap maps every Slack emoji shortcode (":name:", all aliases)
 // to its rendered Unicode glyph, derived from iamcal codepoints. This is
-// slk's standard-emoji source, replacing kyokomi/emoji's CodeMap.
+// mmk's standard-emoji source, replacing kyokomi/emoji's CodeMap.
 var slackCodeMap = map[string]string{
 	":+1:":                                "👍",
 	":-1:":                                "👎",

@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gammons/slk/internal/usergroups"
+	"github.com/nosovk/mmk/internal/usergroups"
 	"github.com/gen2brain/beeep"
 )
 
@@ -39,14 +39,14 @@ func (n *Notifier) Notify(title, body string) error {
 }
 
 // runCommand runs the configured notify_command via `sh -c`, exposing the
-// notification's title and body as $SLK_TITLE and $SLK_BODY. They are passed
+// notification's title and body as $MMK_TITLE and $MMK_BODY. They are passed
 // through the environment rather than interpolated into the command string, so
 // arbitrary message text (e.g. a body containing "; rm -rf ~") cannot inject
 // shell syntax. Notify is already called from its own goroutine, so a
 // synchronous Run — which also reaps the child — is fine.
 func (n *Notifier) runCommand(title, body string) error {
 	cmd := exec.Command("sh", "-c", n.command)
-	cmd.Env = append(os.Environ(), "SLK_TITLE="+title, "SLK_BODY="+body)
+	cmd.Env = append(os.Environ(), "MMK_TITLE="+title, "MMK_BODY="+body)
 	return cmd.Run()
 }
 

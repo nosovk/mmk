@@ -8,8 +8,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/ui/styles"
+	imgpkg "github.com/nosovk/mmk/internal/image"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // narrowBreakpoint is the width below which renderers collapse

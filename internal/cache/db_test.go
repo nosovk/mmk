@@ -195,7 +195,7 @@ func TestMigrateAddsChannelsSyncedAtColumn(t *testing.T) {
 // for issue #9. Without a busy_timeout pragma on every connection in
 // the pool, two goroutines in WAL mode that try to write at the same
 // time will fail the second writer with SQLITE_BUSY immediately
-// instead of waiting. The reconnect backfill (cmd/slk/reconnect_backfill.go)
+// instead of waiting. The reconnect backfill (cmd/mmk/reconnect_backfill.go)
 // fans out N goroutines across the shared *sql.DB and silently
 // dropped messages on systems where the lock window was long enough
 // to collide.

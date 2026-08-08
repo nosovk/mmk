@@ -17,9 +17,9 @@ package ui
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/slackurl"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/slackurl"
+	"github.com/nosovk/mmk/internal/ui/messages"
 )
 
 // pendingLinkNav is the not-yet-completed tail of an in-app permalink

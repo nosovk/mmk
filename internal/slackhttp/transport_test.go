@@ -345,7 +345,7 @@ func TestBrowserHeaderPairsMatchesCapture(t *testing.T) {
 	// This test is deliberately exact rather than a presence check: a
 	// wrong value (Sec-Fetch-Mode: navigate on an XHR, say) is just as
 	// identifying as a missing header, and an EXTRA header no real
-	// Chrome sends is a stable slk-specific signature.
+	// Chrome sends is a stable mmk-specific signature.
 	want := map[string]string{
 		"User-Agent":         UserAgent(),
 		"Accept":             "*/*",
@@ -371,7 +371,7 @@ func TestBrowserHeaderPairsMatchesCapture(t *testing.T) {
 	for k := range got {
 		if _, ok := want[k]; !ok {
 			t.Errorf("browserHeaderPairs() has unexpected header %q = %q; "+
-				"real Chrome does not send it, so it is an slk-specific signature",
+				"real Chrome does not send it, so it is an mmk-specific signature",
 				k, got[k])
 		}
 	}
@@ -401,7 +401,7 @@ func TestWebSocketHeadersMatchesCapture(t *testing.T) {
 	}
 
 	// Headers real Chrome does NOT send on a WS upgrade. Sending any of
-	// them is a slk-specific signature.
+	// them is a mmk-specific signature.
 	mustBeAbsent := []string{
 		"Accept",
 		"Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest",
@@ -436,7 +436,7 @@ func TestImageHeaderPairsMatchesCapture(t *testing.T) {
 	// PRESENT Referer (XHR sends none) and an ABSENT Origin (XHR sends
 	// one). Exact, like TestBrowserHeaderPairsMatchesCapture: a wrong
 	// value is as identifying as a missing header, and an extra header
-	// is a stable slk signature.
+	// is a stable mmk signature.
 	want := map[string]string{
 		"User-Agent":         UserAgent(),
 		"Accept":             "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
@@ -462,7 +462,7 @@ func TestImageHeaderPairsMatchesCapture(t *testing.T) {
 	for k := range got {
 		if _, ok := want[k]; !ok {
 			t.Errorf("imageHeaderPairs() has unexpected header %q = %q; "+
-				"real Chrome does not send it on an image load, so it is an slk-specific signature",
+				"real Chrome does not send it on an image load, so it is an mmk-specific signature",
 				k, got[k])
 		}
 	}
@@ -1023,7 +1023,7 @@ func TestEnvelopeBody_DefaultsReasonPerEndpoint(t *testing.T) {
 	// WithReason has one production call site, so nearly every request
 	// arrives with no reason on its context. Without a default those
 	// requests emit _x_mode/_x_sonic/_x_app_name and no _x_reason — a
-	// shape the real client produces on 10 of 163 requests and slk
+	// shape the real client produces on 10 of 163 requests and mmk
 	// would produce on all of them. Each value below is the one the
 	// official client tags that endpoint with.
 	cases := map[string]string{
@@ -1103,7 +1103,7 @@ func TestEnvelopeBody_NeverSendsXModeWithoutXReason(t *testing.T) {
 	// swept over every endpoint tier rather than four always-both ones.
 	// Of the 163 captured form bodies the joint distribution is
 	// (_x_reason, _x_mode) = (t,t) 149, (t,f) 4, (f,f) 10, (f,t) ZERO.
-	// So on ANY workspace-API body slk builds: _x_mode present implies
+	// So on ANY workspace-API body mmk builds: _x_mode present implies
 	// _x_reason present. Whether the caller supplied a reason must not
 	// change that.
 	methods := []string{
@@ -1175,7 +1175,7 @@ func TestEnvelopeBody_LeavesJSONAlone(t *testing.T) {
 
 	// edgeapi posts JSON with content-type text/plain. This one is
 	// doubly protected — the edgeapi host is excluded before
-	// content-type is even read — but it is the shape slk actually
+	// content-type is even read — but it is the shape mmk actually
 	// sends, so pin it.
 	got := doBodyReq(t, NewEnvelope(), "edgeapi.slack.com",
 		"/cache/T04/users/info", "text/plain;charset=UTF-8", raw, "boot")
@@ -1271,7 +1271,7 @@ var xModeAbsentEndpoints = []string{
 func TestEnvelopeBody_OmitsXModeOnBootPhaseEndpoints(t *testing.T) {
 	// _x_mode is not universal. Of the 163 captured form bodies, 14
 	// carry none, split cleanly across these seven boot-phase
-	// endpoints — zero endpoints are mixed. slk shipped the
+	// endpoints — zero endpoints are mixed. mmk shipped the
 	// unconditional form, so it sent _x_mode on client.shouldReload,
 	// which Phase 1 calls on every startup, and would have done the
 	// same for client.userBoot and conversations.view.
@@ -1409,7 +1409,7 @@ var xReasonAbsentEndpoints = []string{
 }
 
 func TestEnvelopeBody_OmitsXReasonOnNeitherFlagEndpoints(t *testing.T) {
-	// slk shipped _x_reason unconditionally, falling back to
+	// mmk shipped _x_reason unconditionally, falling back to
 	// defaultReason and ultimately to genericReason. On these five
 	// that emits a field the real client never sends on them — and
 	// none of the five has a defaultReasons entry, so all five would

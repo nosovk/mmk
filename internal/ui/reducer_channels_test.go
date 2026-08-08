@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/messages"
 )
 
 // Anchor validation: an in-flight FetchOlder keyed to the OLD buffer's

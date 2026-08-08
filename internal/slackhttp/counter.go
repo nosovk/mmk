@@ -13,7 +13,7 @@ import (
 // boot issues <= 10 API calls, with zero users.list and zero
 // per-channel conversations.history fan-out" — and until this, the
 // only way to check them was scrolling debug logs. Nobody is testing
-// slk against a real Enterprise Grid account until all three grid-parity
+// mmk against a real Enterprise Grid account until all three grid-parity
 // phases land, so a local count is the only feedback loop there is.
 //
 // The zero value is ready to use. Safe for concurrent use: RoundTrip
@@ -25,7 +25,7 @@ type Counter struct {
 
 // DefaultCounter is the process-wide tally. NewBrowserHTTPClient and
 // NewImageHTTPClient attach it to the transports they build, and it is
-// the handle cmd/slk reads at shutdown to print the count.
+// the handle cmd/mmk reads at shutdown to print the count.
 //
 // A package-level counter rather than a per-client one because the
 // number the success criteria are stated in is per-BOOT, not

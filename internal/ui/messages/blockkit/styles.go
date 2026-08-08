@@ -3,7 +3,7 @@ package blockkit
 import (
 	"charm.land/lipgloss/v2"
 
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // Style accessors. Defined as functions (not vars) so they pick up

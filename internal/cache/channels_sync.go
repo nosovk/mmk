@@ -22,12 +22,12 @@ type ChannelSyncRow struct {
 // ChannelsWithMessages returns one ChannelSyncRow per distinct
 // channel_id in the messages table for the given workspace. Channels
 // without any cached messages are excluded — they were either never
-// visited in slk or never received a WS message event, so there is
+// visited in mmk or never received a WS message event, so there is
 // nothing to "catch up on" via reconnect backfill.
 //
 // The LEFT JOIN against channels means messages whose channel row
 // was never UpsertChannel'd still appear (with SyncedAt=0). This
-// happens when WS pushes a message for a channel slk hadn't
+// happens when WS pushes a message for a channel mmk hadn't
 // discovered via conversations.list yet.
 func (db *DB) ChannelsWithMessages(workspaceID string) ([]ChannelSyncRow, error) {
 	const q = `

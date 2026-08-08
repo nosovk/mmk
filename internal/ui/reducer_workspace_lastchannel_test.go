@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/nosovk/mmk/internal/ui/sidebar"
 )
 
 // TestWorkspaceReadyRestoresLastChannel is the headline of the

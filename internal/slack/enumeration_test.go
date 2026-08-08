@@ -6,9 +6,9 @@ import (
 )
 
 // TestSlackAPI_DeclaresNoWorkspaceEnumeration pins the deletions that
-// stop slk's call pattern looking like a scraper.
+// stop mmk's call pattern looking like a scraper.
 //
-// SlackAPI is the only route from slk into slack-go — Client.api is
+// SlackAPI is the only route from mmk into slack-go — Client.api is
 // that interface and nothing else constructs a slack.Client outside
 // this package — so a method absent from it cannot be called at all.
 // That makes this a stronger guard than counting calls in a fake: it

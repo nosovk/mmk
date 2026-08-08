@@ -3,7 +3,7 @@ package compose
 import (
 	"testing"
 
-	"github.com/gammons/slk/internal/ui/mentionpicker"
+	"github.com/nosovk/mmk/internal/ui/mentionpicker"
 )
 
 // Usergroup mentions: the per-workspace usergroup map feeds both the

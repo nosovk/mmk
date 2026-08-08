@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 type WorkspaceItem struct {

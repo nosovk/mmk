@@ -7,7 +7,7 @@ import "sync"
 // When active, the width math, render, and shouldn't-probe decisions
 // all branch off this single value.
 //
-// Set once at startup (cmd/slk/main.go) after the user's config has
+// Set once at startup (cmd/mmk/main.go) after the user's config has
 // been loaded and the terminal's image protocol has been detected.
 // Not safe to toggle dynamically — UI surfaces snapshot the value
 // at View() time but the kitty image upload pipeline holds session

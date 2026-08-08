@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/ui/channelfinder"
+	"github.com/nosovk/mmk/internal/ui/channelfinder"
 )
 
 // newFinderApp opens the channel finder over a local cache of joined

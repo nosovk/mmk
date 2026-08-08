@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/help"
+	"github.com/nosovk/mmk/internal/ui/help"
 )
 
 func TestNormalMode_ColonEntersCommandMode(t *testing.T) {

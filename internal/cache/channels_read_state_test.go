@@ -223,7 +223,7 @@ func TestReplaceWorkspaceReadState_ClearsChannelsAbsentFromSnapshot(t *testing.T
 	_ = db.UpdateChannelReadState("D1", "1.0003", true)
 
 	// Fresh authoritative snapshot for T1: only C3 is unread now.
-	// C1 was read in the official client while slk was closed and is
+	// C1 was read in the official client while mmk was closed and is
 	// therefore ABSENT from the snapshot; it must be cleared. C2 is
 	// explicitly reported read. C3 becomes unread.
 	updates := []ChannelReadStateUpdate{

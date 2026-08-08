@@ -11,7 +11,7 @@
 // Sec-Fetch-*, sec-ch-ua*, and Priority on a WS handshake — so they must not
 // be merged. The goal is to make xoxc-token traffic indistinguishable from
 // official browser-client traffic at the header level, so Enterprise Grid
-// anomaly detectors don't flag slk as a non-browser client and sign the user
+// anomaly detectors don't flag mmk as a non-browser client and sign the user
 // out.
 //
 // See: docs/superpowers/plans/2026-05-20-browser-like-headers.md and GitHub
@@ -213,7 +213,7 @@ func WebSocketHeaders() http.Header {
 // make the socket separable rather than consistent.
 //
 // Deliberately contains NO Referer: the official web client sends none
-// on /api/ calls, and slk sending one made it separable. Verified
+// on /api/ calls, and mmk sending one made it separable. Verified
 // across all 8 of the 2026-07-30 HAR captures: 279 requests to
 // *.slack.com/api/* and edgeapi.slack.com, zero with a Referer.
 //
@@ -268,7 +268,7 @@ func browserHeaderPairs() map[string]string {
 // Chrome also sends `dnt: 1` on these requests in the captures. It is
 // deliberately not reproduced: DNT reflects a user's browser
 // preference, not the client's identity, and most Chrome installs
-// leave it off. Sending it would narrow slk to the subset of users who
+// leave it off. Sending it would narrow mmk to the subset of users who
 // enabled it, which is a signature rather than camouflage.
 //
 // Accept-Encoding is likewise absent, matching browserHeaderPairs:
@@ -293,7 +293,7 @@ func imageHeaderPairs() map[string]string {
 	}
 }
 
-// chromeMajor is the Chrome major version slk impersonates. Both the
+// chromeMajor is the Chrome major version mmk impersonates. Both the
 // User-Agent string and the sec-ch-ua client hints interpolate it, so
 // their *version numbers* cannot drift apart — a Chrome UA paired with
 // absent or mismatched client hints is a combination real Chrome never
@@ -309,7 +309,7 @@ func imageHeaderPairs() map[string]string {
 //
 // So do NOT bump this constant on its own. Doing so yields a correct
 // UA paired with a sec-ch-ua no real Chrome emits, which is a stable,
-// slk-specific fingerprint: worse than sending nothing. A bump
+// mmk-specific fingerprint: worse than sending nothing. A bump
 // requires a fresh capture of the real client, with ClientHintUA
 // updated to match. See the "Verified impersonation values" section of
 // docs/superpowers/specs/2026-07-30-enterprise-grid-bootstrap-design.md.
@@ -425,7 +425,7 @@ type envelopeParam struct{ key, value string }
 // Scope: this orders the params it APPENDS, and nothing else. Params
 // the caller already put on the URL keep the caller's order, and on
 // slack-go's GET path (misc.go getResource) that order is
-// url.Values.Encode()'s — i.e. sorted. In practice almost every slk
+// url.Values.Encode()'s — i.e. sorted. In practice almost every mmk
 // API call is a POST whose business params ride in the body, so the
 // query string is envelope-only; chat.getPermalink is the exception.
 //
@@ -444,7 +444,7 @@ type envelopeParam struct{ key, value string }
 //	  never: _x_id, _x_version_ts, slack_route, _x_csid, or any
 //	         _x_frontend_build_type/_x_desktop_ia/_x_gantry
 //
-// Sending the workspace set to edgeapi would be an slk-specific
+// Sending the workspace set to edgeapi would be an mmk-specific
 // signature, as would sending it to a non-API path.
 func applyEnvelopeQuery(req *http.Request, env *Envelope) {
 	existing := req.URL.Query()
@@ -524,16 +524,16 @@ func applyEnvelopeQuery(req *http.Request, env *Envelope) {
 // residual-divergence table in
 // docs/superpowers/plans/2026-07-30-grid-parity-phase1-outcomes.md:
 //
-//   - All 163 captured bodies are multipart/form-data while slk sends
+//   - All 163 captured bodies are multipart/form-data while mmk sends
 //     urlencoded.
 //   - Only this four-field tail is ordered. The business params AHEAD
-//     of it are alphabetical, because every body slk sends is built
+//     of it are alphabetical, because every body mmk sends is built
 //     with url.Values.Encode(): slack.Client.postForm for the
 //     hand-rolled endpoints, slack-go's own misc.go postForm for the
-//     rest. So slk emits e.g.
+//     rest. So mmk emits e.g.
 //     `channel=…&include_all_metadata=0&inclusive=0&limit=50&token=…`
 //     followed by this tail. Reordering only the bodies this repo
-//     builds would leave slack-go's sorted and give slk two
+//     builds would leave slack-go's sorted and give mmk two
 //     distinguishable body shapes rather than one; the multipart
 //     conversion rebuilds every body here, at the chokepoint, and is
 //     where that gets fixed for all of them at once. Pinned by
@@ -574,7 +574,7 @@ func applyEnvelopeBody(req *http.Request) error {
 	// _x_reason is caller intent, but almost no caller supplies it, and
 	// a body carrying _x_mode with no _x_reason is a shape the real
 	// client produces on 0 of 163 requests. Falling back to the
-	// endpoint's observed reason keeps slk inside the 153/163 majority
+	// endpoint's observed reason keeps mmk inside the 153/163 majority
 	// instead of pinning it to a shape the client never emits. An
 	// explicit WithReason beats the fallback.
 	//

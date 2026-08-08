@@ -5,8 +5,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/imgrender"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/imgrender"
+	"github.com/nosovk/mmk/internal/ui/messages"
 )
 
 // TestImageReadyMsg_RoutesToThread asserts that an ImageReadyMsg

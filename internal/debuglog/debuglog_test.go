@@ -22,10 +22,10 @@ func TestEnabled_DefaultFalse(t *testing.T) {
 func TestInit_TruncatesExisting(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	t.Setenv("SLK_DEBUG", "1")
+	t.Setenv("MMK_DEBUG", "1")
 
-	// Pre-populate slk-debug.log with content.
-	preexisting := filepath.Join(dir, "slk-debug.log")
+	// Pre-populate mmk-debug.log with content.
+	preexisting := filepath.Join(dir, "mmk-debug.log")
 	if err := os.WriteFile(preexisting, []byte("old content from a previous session"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestInit_TruncatesExisting(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 	if f == nil {
-		t.Fatalf("Init returned nil file when SLK_DEBUG was set")
+		t.Fatalf("Init returned nil file when MMK_DEBUG was set")
 	}
 	defer f.Close()
 
@@ -47,18 +47,18 @@ func TestInit_TruncatesExisting(t *testing.T) {
 		t.Fatalf("Stat: %v", err)
 	}
 	if info.Size() != 0 {
-		t.Fatalf("slk-debug.log should be truncated, got size %d", info.Size())
+		t.Fatalf("mmk-debug.log should be truncated, got size %d", info.Size())
 	}
 	if !Enabled() {
-		t.Fatalf("Enabled() should be true after Init with SLK_DEBUG set")
+		t.Fatalf("Enabled() should be true after Init with MMK_DEBUG set")
 	}
 }
 
 func TestInit_NoFileWhenDisabled(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	// Explicitly unset SLK_DEBUG (defensive — env may bleed in from CI).
-	t.Setenv("SLK_DEBUG", "")
+	// Explicitly unset MMK_DEBUG (defensive — env may bleed in from CI).
+	t.Setenv("MMK_DEBUG", "")
 	enabled.Store(false)
 
 	f, err := Init()
@@ -67,21 +67,21 @@ func TestInit_NoFileWhenDisabled(t *testing.T) {
 	}
 	if f != nil {
 		defer f.Close()
-		t.Fatalf("Init should return nil file when SLK_DEBUG is unset, got %v", f.Name())
+		t.Fatalf("Init should return nil file when MMK_DEBUG is unset, got %v", f.Name())
 	}
 	if Enabled() {
-		t.Fatalf("Enabled() should be false after Init with SLK_DEBUG unset")
+		t.Fatalf("Enabled() should be false after Init with MMK_DEBUG unset")
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, "slk-debug.log")); !os.IsNotExist(err) {
-		t.Fatalf("slk-debug.log should not exist when disabled, got err=%v", err)
+	if _, err := os.Stat(filepath.Join(dir, "mmk-debug.log")); !os.IsNotExist(err) {
+		t.Fatalf("mmk-debug.log should not exist when disabled, got err=%v", err)
 	}
 }
 
 func TestCategoryPrefixes(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	t.Setenv("SLK_DEBUG", "1")
+	t.Setenv("MMK_DEBUG", "1")
 	enabled.Store(false)
 
 	f, err := Init()
@@ -98,7 +98,7 @@ func TestCategoryPrefixes(t *testing.T) {
 	Backfill("backfill-line %d", 6)
 	Notify("notify-line %d", 7)
 
-	body, err := os.ReadFile(filepath.Join(dir, "slk-debug.log"))
+	body, err := os.ReadFile(filepath.Join(dir, "mmk-debug.log"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestCategoryPrefixes(t *testing.T) {
 func TestEnabled_FastPathNoOp(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	t.Setenv("SLK_DEBUG", "")
+	t.Setenv("MMK_DEBUG", "")
 	enabled.Store(false)
 
 	if _, err := Init(); err != nil {
@@ -135,8 +135,8 @@ func TestEnabled_FastPathNoOp(t *testing.T) {
 	WS("nope %d", 4)
 	General("nope %d", 5)
 
-	if _, err := os.Stat(filepath.Join(dir, "slk-debug.log")); !os.IsNotExist(err) {
-		t.Fatalf("slk-debug.log should not exist; err=%v", err)
+	if _, err := os.Stat(filepath.Join(dir, "mmk-debug.log")); !os.IsNotExist(err) {
+		t.Fatalf("mmk-debug.log should not exist; err=%v", err)
 	}
 }
 
@@ -176,7 +176,7 @@ func TestNextReqID_MonotonicUnique(t *testing.T) {
 func TestConcurrentWrites_NoTornLines(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	t.Setenv("SLK_DEBUG", "1")
+	t.Setenv("MMK_DEBUG", "1")
 	enabled.Store(false)
 
 	f, err := Init()
@@ -200,7 +200,7 @@ func TestConcurrentWrites_NoTornLines(t *testing.T) {
 	}
 	wg.Wait()
 
-	body, err := os.ReadFile(filepath.Join(dir, "slk-debug.log"))
+	body, err := os.ReadFile(filepath.Join(dir, "mmk-debug.log"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}

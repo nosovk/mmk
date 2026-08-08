@@ -749,7 +749,7 @@ func TestSearch_DiscardsPartialResultsOnADecodeError(t *testing.T) {
 // none of them sends a longer list. This one sends more than both.
 //
 // Be honest about what this does and does not establish. It pins that
-// slk does not truncate; it does *not* establish that sending more
+// mmk does not truncate; it does *not* establish that sending more
 // than 22/50 is a shape the server has been seen accepting, because
 // no capture shows one. The lengths are the official client's own
 // frecency-list sizes rather than a limit it was observed negotiating,

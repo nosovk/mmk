@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slk/internal/ui/selection"
+	"github.com/nosovk/mmk/internal/ui/selection"
 )
 
 // newTestModel returns a Model with two simple messages, with the cache

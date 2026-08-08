@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammons/slk/internal/cache"
+	"github.com/nosovk/mmk/internal/cache"
 )
 
 // fakeMemberAPI implements ConversationMemberAPI for tests.
@@ -294,7 +294,7 @@ func (r *fakeResolver) snapshot() []string {
 // edge:users/list for one channel with count:30 and present_first:true
 // and gets full user records inline, with no resolution step at all.
 //
-// Names for members slk has not met now come from the cache, from the
+// Names for members mmk has not met now come from the cache, from the
 // boot response, and from on-demand resolution when a row is actually
 // rendered. The member ID list itself is still fetched: it is one
 // bounded call per channel and it is what the mention picker's

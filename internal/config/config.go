@@ -114,17 +114,17 @@ type Notifications struct {
 	QuietHours string   `toml:"quiet_hours"`
 	// NotifyCommand, when set, runs instead of the built-in OS notification.
 	// It is executed via `sh -c` with the notification's title and body exposed
-	// as $SLK_TITLE and $SLK_BODY. Example:
-	//   notify_command = 'terminal-notifier -title "$SLK_TITLE" -message "$SLK_BODY"'
+	// as $MMK_TITLE and $MMK_BODY. Example:
+	//   notify_command = 'terminal-notifier -title "$MMK_TITLE" -message "$MMK_BODY"'
 	NotifyCommand string `toml:"notify_command"`
 	// StatusCommand, when set, runs on every unread-state change (a message
 	// arrives, a channel is read) so an external surface (a status bar, tmux, a
-	// multiplexer sidebar) can mirror slk's unread state. Executed via `sh -c`
+	// multiplexer sidebar) can mirror mmk's unread state. Executed via `sh -c`
 	// with these variables set:
-	//   $SLK_UNREAD        unread channels in the active workspace (mute-filtered)
-	//   $SLK_OTHER_UNREAD  unread count across other workspaces
-	//   $SLK_WORKSPACE     active workspace name
-	//   $SLK_TITLE         the window-title string, e.g. "slk SW (3) +1"
+	//   $MMK_UNREAD        unread channels in the active workspace (mute-filtered)
+	//   $MMK_OTHER_UNREAD  unread count across other workspaces
+	//   $MMK_WORKSPACE     active workspace name
+	//   $MMK_TITLE         the window-title string, e.g. "mmk SW (3) +1"
 	StatusCommand string `toml:"status_command"`
 }
 

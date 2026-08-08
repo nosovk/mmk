@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slk/internal/config"
-	emojiutil "github.com/gammons/slk/internal/emoji"
-	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/ui/imgrender"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/config"
+	emojiutil "github.com/nosovk/mmk/internal/emoji"
+	imgpkg "github.com/nosovk/mmk/internal/image"
+	"github.com/nosovk/mmk/internal/ui/imgrender"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 func TestMessagePaneView(t *testing.T) {

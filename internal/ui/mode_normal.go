@@ -2,7 +2,7 @@
 //
 // Normal-mode key handler (Phase 5k).
 //
-// The bulk of slk's keybinding surface lives here:
+// The bulk of mmk's keybinding surface lives here:
 //   - mode entry: i (insert), Ctrl-T (channel finder), : (command
 //     prompt), Ctrl-Y (theme switcher), ? (help),
 //     S (presence menu), R (reaction picker)
@@ -30,8 +30,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/help"
-	"github.com/gammons/slk/internal/ui/themeswitcher"
+	"github.com/nosovk/mmk/internal/ui/help"
+	"github.com/nosovk/mmk/internal/ui/themeswitcher"
 )
 
 func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {

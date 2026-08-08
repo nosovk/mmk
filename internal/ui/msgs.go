@@ -17,12 +17,12 @@ import (
 	"image"
 	"time"
 
-	"github.com/gammons/slk/internal/cache"
-	emojiutil "github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/channelfinder"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/searchresults"
-	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/nosovk/mmk/internal/cache"
+	emojiutil "github.com/nosovk/mmk/internal/emoji"
+	"github.com/nosovk/mmk/internal/ui/channelfinder"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/searchresults"
+	"github.com/nosovk/mmk/internal/ui/sidebar"
 )
 
 // EmojiImageReadyMsg re-exports emoji.EmojiImageReadyMsg so reducers

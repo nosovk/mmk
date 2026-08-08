@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gammons/slk/internal/debuglog"
-	"github.com/gammons/slk/internal/slack/mrkdwn"
-	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/nosovk/mmk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/slack/mrkdwn"
+	"github.com/nosovk/mmk/internal/slackhttp"
 	"github.com/gorilla/websocket"
 	"github.com/slack-go/slack"
 )
@@ -61,7 +61,7 @@ type SlackAPI interface {
 // internal default (slack.APIURL).
 const defaultAPIBaseURL = "https://slack.com/api/"
 
-// defaultWSBaseURL is the scheme+host slk opens its event WebSocket
+// defaultWSBaseURL is the scheme+host mmk opens its event WebSocket
 // against, matching the official web client. Only the scheme and host
 // live here; StartWebSocket owns the query string, which is part of the
 // protocol fingerprint being impersonated.
@@ -165,7 +165,7 @@ func newCookieJar(dCookie string) http.CookieJar {
 // newCookieHTTPClient creates an http.Client with the Slack 'd' cookie set
 // and a BrowserTransport that injects Chrome-like headers on every request
 // to *.slack.com hosts. This keeps Enterprise Grid anomaly detectors from
-// flagging slk's traffic as non-browser. See internal/slackhttp.
+// flagging mmk's traffic as non-browser. See internal/slackhttp.
 //
 // env supplies the telemetry envelope (_x_id, _x_csid, slack_route, ...)
 // added to workspace API calls. Pass nil for clients that fetch pages or
@@ -180,7 +180,7 @@ func newCookieHTTPClient(dCookie string, env *slackhttp.Envelope) *http.Client {
 		Transport: &slackhttp.BrowserTransport{
 			Inner: http.DefaultTransport,
 			Env:   env,
-			// This client carries the bulk of slk's API traffic, so
+			// This client carries the bulk of mmk's API traffic, so
 			// without this the per-boot tally Phase 2b's success
 			// criteria are stated in would miss almost everything.
 			// NewBrowserHTTPClient attaches the same counter to the
@@ -222,7 +222,7 @@ func (c *Client) apiHTTPClient() *http.Client {
 // Handing it a plain &http.Client{} instead compiles, runs, and sends
 // every edgeapi request with Go's default User-Agent, none of Chrome's
 // header set and no _x_app_name/fp envelope — the exact divergence this
-// phase exists to remove, visible nowhere in slk's own output. Routing
+// phase exists to remove, visible nowhere in mmk's own output. Routing
 // through apiHTTPClient rather than returning c.httpClient directly
 // also means a Client built as a literal in a test still gets an
 // envelope-carrying client rather than nil.
@@ -240,7 +240,7 @@ func (c *Client) HTTPClient() *http.Client {
 // signature is exactly postForm's. internal/slack/boot is a
 // stdlib-only parser that cannot import this package, and
 // internal/bootstrap must not either (see that package's comment on
-// import direction), so the wiring in cmd/slk needs a method value it
+// import direction), so the wiring in cmd/mmk needs a method value it
 // can pass. This is that method value and nothing else: no defaulting,
 // no reshaping, no second token injection. Anything added here would be
 // a request-shape change invisible at the call sites that already use
@@ -317,7 +317,7 @@ func (c *Client) Connect(ctx context.Context) error {
 }
 
 // deriveAPIBaseURL turns the team URL returned by auth.test (e.g.
-// "https://hackclub.enterprise.slack.com/") into the API base URL slk
+// "https://hackclub.enterprise.slack.com/") into the API base URL mmk
 // should use for subsequent requests ("https://hackclub.enterprise.slack.com/api/").
 //
 // We only trust hosts under .slack.com — anything else (empty input, garbage,
@@ -362,7 +362,7 @@ func subdomainFromTeamURL(teamURL string) string {
 	return strings.TrimSuffix(u.Host, ".slack.com")
 }
 
-// wsUpgradeHeaders returns the HTTP headers slk attaches to the WebSocket
+// wsUpgradeHeaders returns the HTTP headers mmk attaches to the WebSocket
 // upgrade request.
 //
 // This is NOT the same set BrowserTransport adds to ordinary HTTP
@@ -386,7 +386,7 @@ func wsUpgradeHeaders() http.Header {
 // Call this after Connect.
 func (c *Client) StartWebSocket(handler EventHandler) error {
 	// start_args matches the official client's, key for key, from the
-	// 2026-08-02 coldboot capture. slk used to send only
+	// 2026-08-02 coldboot capture. mmk used to send only
 	// agent/connect_only/ms_latest, and at some point user_typing
 	// frames stopped arriving — typing indicators silently disappeared
 	// while everything else on the socket kept working. Which key
@@ -1397,7 +1397,7 @@ func (c *Client) GetMutedChannelsRaw(ctx context.Context) ([]byte, error) {
 }
 
 // shouldReloadResponse is the subset of client.shouldReload's response
-// slk reads. The full response also carries should_reload,
+// mmk reads. The full response also carries should_reload,
 // build_version_enabled, client_min_version,
 // build_manifest_last_modified and should_fetch_new_service_worker —
 // all about whether a browser tab needs to refresh its JS bundle, which
@@ -1415,14 +1415,14 @@ type shouldReloadResponse struct {
 // _x_version_ts is Slack's build timestamp, and it moves: two captures
 // taken hours apart on 2026-07-30 carried 1785403052 and 1785403654.
 // A client that sends one hardcoded value forever is itself a signal —
-// it stays pinned to a build the fleet has moved off of — so slk learns
+// it stays pinned to a build the fleet has moved off of — so mmk learns
 // the current value the way the official client does.
 //
-// Why this endpoint rather than scraping the workspace page: slk used
+// Why this endpoint rather than scraping the workspace page: mmk used
 // to fetch that page, and commit da6a7e1 deliberately removed the
 // fetch. Issue #111 showed corporate proxies reject that navigation
 // with 403, breaking startup outright. client.shouldReload is a plain
-// form POST under /api/ — the same shape as every other call slk
+// form POST under /api/ — the same shape as every other call mmk
 // already makes, through the same proxy-tolerant path — and it appears
 // in both official boot captures, so it is both safer and a closer
 // match to real client traffic.
@@ -1440,7 +1440,7 @@ func (c *Client) ShouldReload(ctx context.Context) (string, error) {
 		form.Set("team_ids", c.teamID)
 	}
 	if c.envelope != nil {
-		// The build slk currently believes is current. The official
+		// The build mmk currently believes is current. The official
 		// client sends the same, so the server can tell it whether to
 		// reload.
 		form.Set("build_version_ts", c.envelope.VersionTS())
@@ -1659,10 +1659,10 @@ func (c *Client) GetChannelSections(ctx context.Context) ([]SidebarSection, erro
 	return all, nil
 }
 
-// ThreadSubscription is the slk-side projection of one subscribed
+// ThreadSubscription is the mmk-side projection of one subscribed
 // thread returned by subscriptions.thread.getView. The five fields
 // here map cleanly onto cache.ThreadSubscription. The caller in
-// cmd/slk/reconnect_backfill.go does the adapter cast.
+// cmd/mmk/reconnect_backfill.go does the adapter cast.
 type ThreadSubscription struct {
 	ChannelID string
 	ThreadTS  string
@@ -1818,7 +1818,7 @@ const historyReason = "message-pane/requestHistory"
 
 // defaultHistoryLimit is the page size the official web client asks
 // for: 28, on 14 of 14 captured conversations.history requests. Not 50,
-// not 200, not 500 — the three sizes slk's existing history paths use.
+// not 200, not 500 — the three sizes mmk's existing history paths use.
 //
 // It is 28 because that is what was measured, not because 28 is a good
 // number, and it must not be "tuned".
@@ -1911,7 +1911,7 @@ type HistoryOpts struct {
 	// either way — the key is present on 14 of 14, carrying the
 	// literal string "false" when off, never omitted. The response's
 	// `date_joined` object appears on exactly the 8 requests that set
-	// it, and is not modelled here because nothing in slk consumes it.
+	// it, and is not modelled here because nothing in mmk consumes it.
 	IncludeDateJoined bool
 }
 
@@ -1920,7 +1920,7 @@ type HistoryOpts struct {
 //
 // Four of the eight keys present on 14 of 14 responses. pin_count,
 // channel_actions_ts and channel_actions_count are unmodelled because
-// nothing in slk consumes them; response_metadata is unmodelled because
+// nothing in mmk consumes them; response_metadata is unmodelled because
 // following its next_cursor in a loop is the enumeration this phase
 // exists to stop, and a cursor sitting in the return values is an
 // invitation to write that loop. Adding any of them later is a two-line
@@ -1967,8 +1967,8 @@ type historyWithVersionsResponse struct {
 // subset it confirms are still current — plus only the bodies that
 // actually changed.
 //
-// This is the fix for one of the three enumerations that get slk's
-// Enterprise Grid accounts signed out for "data scraping". slk re-downloads
+// This is the fix for one of the three enumerations that get mmk's
+// Enterprise Grid accounts signed out for "data scraping". mmk re-downloads
 // conversations.history for every channel ever visited on every boot AND
 // every reconnect, at page sizes of 50/200/500. With cached_latest_updates
 // the same scrollback is VALIDATED rather than refetched, and at the page

@@ -122,7 +122,7 @@ func decodeUTF16LE(b []byte) string {
 // files), so a non-recursive-into-subdirs copy of regular files suffices; the
 // caller removes the temp dir.
 func copyDirToTemp(src string) (string, error) {
-	dst, err := os.MkdirTemp("", "slk-ls-*")
+	dst, err := os.MkdirTemp("", "mmk-ls-*")
 	if err != nil {
 		return "", err
 	}

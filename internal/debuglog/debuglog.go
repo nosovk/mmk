@@ -1,6 +1,6 @@
-// Package debuglog provides categorized debug logging for slk.
+// Package debuglog provides categorized debug logging for mmk.
 //
-// When SLK_DEBUG is set in the environment, Init opens slk-debug.log
+// When MMK_DEBUG is set in the environment, Init opens mmk-debug.log
 // in the current working directory (truncating any existing file) and
 // configures a package-internal logger. When unset, every category
 // function is a fast no-op via an atomic.Bool flag — Sprintf-style
@@ -35,9 +35,9 @@ var (
 	reqID   atomic.Uint64
 )
 
-// Init opens slk-debug.log in cwd (truncating) when SLK_DEBUG is set,
+// Init opens mmk-debug.log in cwd (truncating) when MMK_DEBUG is set,
 // configures the package-internal logger, and routes the global stdlib
-// log package to the same file. When SLK_DEBUG is unset, Init sets the
+// log package to the same file. When MMK_DEBUG is unset, Init sets the
 // global stdlib log to io.Discard (so spurious log.Printf calls don't
 // bleed into the user's altscreen TUI) and returns nil, nil.
 //
@@ -50,17 +50,17 @@ var (
 // would be a data race.
 //
 // Returns the *os.File so the caller can close it on exit. Idempotent
-// modulo the underlying file handle: calling Init twice with SLK_DEBUG
+// modulo the underlying file handle: calling Init twice with MMK_DEBUG
 // set will truncate the file twice and return the second handle (the
 // first handle is leaked — the caller is expected to call Init exactly
 // once at startup).
 func Init() (*os.File, error) {
-	if os.Getenv("SLK_DEBUG") == "" {
+	if os.Getenv("MMK_DEBUG") == "" {
 		log.SetOutput(io.Discard)
 		enabled.Store(false)
 		return nil, nil
 	}
-	f, err := os.OpenFile("slk-debug.log",
+	f, err := os.OpenFile("mmk-debug.log",
 		os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		// Failed to open — keep enabled=false so calls remain no-op.
@@ -133,7 +133,7 @@ func WS(format string, args ...any) {
 // emitted from the UI hot path (View, buildCache, SetFocused). No-op
 // when !Enabled(). Intended for ad-hoc perf investigation: keep call
 // sites cheap (atomic load + early return) so leaving them in place
-// in production builds has no measurable cost when SLK_DEBUG is unset.
+// in production builds has no measurable cost when MMK_DEBUG is unset.
 func Perf(format string, args ...any) {
 	if !enabled.Load() {
 		return

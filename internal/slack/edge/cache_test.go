@@ -54,7 +54,7 @@ func (r capturedRequest) keys(t *testing.T) []string {
 // assertExactKeys pins the top-level key set of every captured
 // request, not just the first.
 //
-// The package's whole claim is that slk puts exactly the keys on the
+// The package's whole claim is that mmk puts exactly the keys on the
 // wire that the official client puts there, and an extra key is as
 // much a fingerprint as a missing one. Checking only reqs[0] verifies
 // that for the first request of a call and nothing else, which leaves
@@ -274,7 +274,7 @@ func TestChannelsInfo_ScopesThePathToTheGivenTeam(t *testing.T) {
 	// owning team. The team in the request path is therefore a
 	// per-call decision, not a client property: scoping every request
 	// to the auth.test team is what resolved zero of raff's 217
-	// conversations (gammons/slk#5).
+	// conversations (gammons/mmk#5).
 	rec := newRecorder(t, alwaysEmpty)
 	c := rec.client() // constructed with team T04T4TH8W
 

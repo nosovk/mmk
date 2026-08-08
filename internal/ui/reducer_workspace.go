@@ -59,8 +59,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -76,7 +76,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			a.sidebar.UpsertItem(m.Item)
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
-		// from the rtmEventHandler in cmd/slk/main.go (Task 6);
+		// from the rtmEventHandler in cmd/mmk/main.go (Task 6);
 		// App.Update only mutates the active sidebar.
 		return nil, true
 
@@ -85,7 +85,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			a.SetChannels(m.Channels)
 		}
 		// Inactive-workspace events have already updated the
-		// WorkspaceContext.Channels in cmd/slk; App.Update only
+		// WorkspaceContext.Channels in cmd/mmk; App.Update only
 		// mutates the active sidebar.
 		return nil, true
 

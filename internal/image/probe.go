@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gammons/slk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/debuglog"
 )
 
 // ProbeKittyGraphics sends a tiny image upload with response requested
@@ -31,7 +31,7 @@ import (
 // a goroutine that kept reading from r forever after the select-on-
 // timeout returned. That leaked goroutine then raced bubbletea's input
 // loop for every byte the user typed, discarding ~95% of keystrokes
-// (most aren't 0x1b) and making slk unresponsive whenever the probe
+// (most aren't 0x1b) and making mmk unresponsive whenever the probe
 // timed out -- which is exactly when the user is in zellij or in tmux
 // with allow-passthrough=off, because the multiplexer swallows the
 // probe escape and no reply ever arrives.

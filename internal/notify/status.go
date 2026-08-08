@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/gammons/slk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/debuglog"
 )
 
 // statusState is one snapshot of the unread state exposed to status_command.
@@ -16,7 +16,7 @@ type statusState struct {
 	title       string
 }
 
-// StatusReporter runs a user-configured status_command whenever slk's unread
+// StatusReporter runs a user-configured status_command whenever mmk's unread
 // state changes, exposing that state through environment variables so an
 // external surface (a status bar, tmux, a terminal multiplexer's sidebar) can
 // reflect it.
@@ -38,7 +38,7 @@ type StatusReporter struct {
 // NewStatusReporter returns a StatusReporter with its worker started, or nil
 // when command is empty so callers can skip wiring it. Enqueue and Report are
 // nil-safe, so a nil result is usable. The worker lives for the life of the
-// process, matching slk's other per-config background goroutines.
+// process, matching mmk's other per-config background goroutines.
 func NewStatusReporter(command string) *StatusReporter {
 	if command == "" {
 		return nil
@@ -86,7 +86,7 @@ func (r *StatusReporter) run() {
 }
 
 // Report runs the status_command synchronously with the current unread state
-// exposed as $SLK_UNREAD, $SLK_OTHER_UNREAD, $SLK_WORKSPACE and $SLK_TITLE.
+// exposed as $MMK_UNREAD, $MMK_OTHER_UNREAD, $MMK_WORKSPACE and $MMK_TITLE.
 // Values are passed through the environment rather than interpolated into the
 // command, so a workspace name or title can't inject shell syntax. Nil-safe
 // (no-op). Production callers should go through Enqueue, which adds the
@@ -97,10 +97,10 @@ func (r *StatusReporter) Report(unread, otherUnread int, workspace, title string
 	}
 	cmd := exec.Command("sh", "-c", r.command)
 	cmd.Env = append(os.Environ(),
-		"SLK_UNREAD="+strconv.Itoa(unread),
-		"SLK_OTHER_UNREAD="+strconv.Itoa(otherUnread),
-		"SLK_WORKSPACE="+workspace,
-		"SLK_TITLE="+title,
+		"MMK_UNREAD="+strconv.Itoa(unread),
+		"MMK_OTHER_UNREAD="+strconv.Itoa(otherUnread),
+		"MMK_WORKSPACE="+workspace,
+		"MMK_TITLE="+title,
 	)
 	return cmd.Run()
 }

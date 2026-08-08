@@ -3,7 +3,7 @@ package service
 import (
 	"sync"
 
-	"github.com/gammons/slk/internal/cache"
+	"github.com/nosovk/mmk/internal/cache"
 )
 
 type WorkspaceInfo struct {

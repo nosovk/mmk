@@ -2,7 +2,7 @@ package emoji
 
 // CodeMap returns the standard-emoji shortcode→glyph map, keyed by
 // ":name:" (all Slack aliases) with bare-glyph values (no trailing
-// space). It is slk's replacement for kyokomi/emoji's CodeMap(), sourced
+// space). It is mmk's replacement for kyokomi/emoji's CodeMap(), sourced
 // from the bundled iamcal/emoji-data table (slacknames_gen.go).
 //
 // The returned map is shared and must not be mutated by callers (all

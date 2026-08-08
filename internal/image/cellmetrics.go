@@ -3,7 +3,7 @@ package image
 import (
 	"strconv"
 
-	"github.com/gammons/slk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/debuglog"
 )
 
 // CellPixels returns the (width, height) of a terminal cell in pixels.

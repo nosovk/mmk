@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // ConnectionState represents the WebSocket connection status.
@@ -305,7 +305,7 @@ func (m Model) View(width int) string {
 	// Render separators and trailing padding with the SurfaceDark background so
 	// the right-side pills read as one continuous bar even when the terminal's
 	// default background differs from the theme's surface_dark color (e.g. a
-	// dark terminal running a light slk theme, which previously left a stray
+	// dark terminal running a light mmk theme, which previously left a stray
 	// dark cell between segments).
 	sep := lipgloss.NewStyle().Background(styles.SurfaceDark).Render(" ")
 	trailing := lipgloss.NewStyle().Background(styles.SurfaceDark).Render("  ")

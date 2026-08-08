@@ -30,8 +30,8 @@ package ui
 import (
 	"charm.land/lipgloss/v2"
 
-	"github.com/gammons/slk/internal/ui/presencemenu"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/presencemenu"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // applyOverlays composes any active overlays onto screen and

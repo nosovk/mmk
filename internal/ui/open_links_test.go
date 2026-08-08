@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/messages"
 )
 
 func pressO(app *App) tea.Cmd {

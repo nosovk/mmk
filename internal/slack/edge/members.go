@@ -21,7 +21,7 @@ const usersListFilter = "everyone AND NOT bots AND NOT apps"
 // UsersList returns the members of one channel, server-ranked.
 //
 // This is the channel-scoped replacement for a users.list walk. The
-// distinction is the entire point: slk's ~50-page users.list sweep is
+// distinction is the entire point: mmk's ~50-page users.list sweep is
 // what gets a Grid account signed out for "data scraping", and in 8
 // captures of the official web client there is no workspace-wide
 // member fetch at all — every member lookup it makes is scoped to a

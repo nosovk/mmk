@@ -13,7 +13,7 @@ package ui
 import (
 	"charm.land/lipgloss/v2"
 
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // renderStatusRow returns the composed status row (rail-spacer +

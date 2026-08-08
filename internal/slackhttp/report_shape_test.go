@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The shutdown hook in cmd/slk/main.go prints exactly this. main() has
+// The shutdown hook in cmd/mmk/main.go prints exactly this. main() has
 // no test seam (recorded in the Phase 1 outcomes), so pin the thing it
 // prints instead.
 func TestDefaultCounterReport_ShapeForShutdownDump(t *testing.T) {

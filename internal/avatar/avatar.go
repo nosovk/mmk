@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	imgpkg "github.com/gammons/slk/internal/image"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 const (

@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/config"
-	"github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/mentionpicker"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/config"
+	"github.com/nosovk/mmk/internal/emoji"
+	"github.com/nosovk/mmk/internal/ui/mentionpicker"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 func TestComposeViewPlaceholder(t *testing.T) {

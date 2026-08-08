@@ -1,7 +1,7 @@
 // internal/ui/services.go
 //
 // Service interfaces that group cohesive subsets of the App's
-// collaborator callbacks. Wired by cmd/slk/main.go.
+// collaborator callbacks. Wired by cmd/mmk/main.go.
 //
 // Phase 3 of the SOLID refactor of internal/ui/app.go: introduces
 // service interfaces (DIP + ISP) to replace the flat collection of
@@ -29,15 +29,15 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/channelfinder"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/reactionpicker"
+	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/ui/channelfinder"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/reactionpicker"
 )
 
 // ReactionService is the App's interface to the Slack reaction API
 // and the user's recent-emoji-use history (frecency). Implementations
-// are wired by cmd/slk/main.go.
+// are wired by cmd/mmk/main.go.
 //
 // All methods are best-effort and nil-safe at the adapter level: an
 // implementation built via NewReactionService with a nil component
@@ -65,7 +65,7 @@ type ReactionService interface {
 // NewReactionService builds a ReactionService from individual
 // function closures. Any function may be nil; the resulting service
 // no-ops that operation and returns the zero value for read paths.
-// Used by both cmd/slk/main.go (production wiring) and tests (fake
+// Used by both cmd/mmk/main.go (production wiring) and tests (fake
 // closures).
 func NewReactionService(
 	add ReactionAddFunc,
@@ -129,7 +129,7 @@ func (r reactionAdapter) RecordFrecent(emoji string) {
 // last_read_ts to render its unread boundary — that's a thread-display
 // concern even though the data is channel-scoped.
 //
-// Implementations are wired by cmd/slk/main.go. Build one via
+// Implementations are wired by cmd/mmk/main.go. Build one via
 // NewThreadService from a ThreadServiceFuncs struct so unused
 // methods can be left nil without trailing positional nils.
 type ThreadService interface {
@@ -189,7 +189,7 @@ type ThreadServiceFuncs struct {
 }
 
 // NewThreadService builds a ThreadService from a ThreadServiceFuncs
-// bundle. Used by both cmd/slk/main.go (production wiring) and tests
+// bundle. Used by both cmd/mmk/main.go (production wiring) and tests
 // (fake closures).
 func NewThreadService(fns ThreadServiceFuncs) ThreadService {
 	return threadAdapter{fns: fns}
@@ -255,7 +255,7 @@ func (t threadAdapter) ChannelLastRead(channelID ids.ChannelID) string {
 
 // MessageService is the App's interface to Slack's per-message
 // operations: send, edit, delete, mark-unread, and permalink lookup.
-// Implementations are wired by cmd/slk/main.go.
+// Implementations are wired by cmd/mmk/main.go.
 //
 // All methods are best-effort and nil-safe at the adapter level: an
 // implementation built via NewMessageService with a nil component
@@ -302,7 +302,7 @@ type MessageServiceFuncs struct {
 }
 
 // NewMessageService builds a MessageService from a MessageServiceFuncs
-// bundle. Used by cmd/slk/main.go (production wiring) and tests.
+// bundle. Used by cmd/mmk/main.go (production wiring) and tests.
 func NewMessageService(fns MessageServiceFuncs) MessageService {
 	return messageAdapter{fns: fns}
 }
@@ -354,7 +354,7 @@ func (m messageAdapter) Permalink(ctx context.Context, channelID ids.ChannelID, 
 // ChannelService is the App's interface to the Slack channels API,
 // the local SQLite channel cache, and per-channel session bookkeeping
 // (visit timestamps, navigation-history lookups, membership fetches).
-// Implementations are wired by cmd/slk/main.go.
+// Implementations are wired by cmd/mmk/main.go.
 //
 // Largest service in the App. Mixes three concerns that happen to
 // share the channel-as-domain-object boundary:
@@ -573,7 +573,7 @@ type SearchServiceFuncs struct {
 }
 
 // NewSearchService builds a SearchService from a SearchServiceFuncs
-// bundle. Used by cmd/slk/main.go (production wiring) and tests.
+// bundle. Used by cmd/mmk/main.go (production wiring) and tests.
 func NewSearchService(fns SearchServiceFuncs) SearchService { return searchAdapter{fns: fns} }
 
 // noopSearchService is the default SearchService wired into App by

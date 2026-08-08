@@ -23,7 +23,7 @@ package ui
 import (
 	"charm.land/lipgloss/v2"
 
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // renderSidebar returns the composed sidebar panel string,

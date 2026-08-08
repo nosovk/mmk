@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gammons/slk/internal/ids"
+	"github.com/nosovk/mmk/internal/ids"
 )
 
 // Permalink is the parsed form of a Slack archive permalink.

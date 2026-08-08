@@ -25,9 +25,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/debuglog"
-	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/text"
+	"github.com/nosovk/mmk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/text"
 )
 
 // activeSearch is the in-channel `/` search state: the query, its

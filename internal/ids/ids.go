@@ -1,5 +1,5 @@
 // Package ids declares named string types for the domain
-// identifiers that flow across slk's module boundaries.
+// identifiers that flow across mmk's module boundaries.
 //
 // Phase 7 of the SOLID refactor of internal/ui/app.go. The
 // motivation is the bug class where two "just a string"
@@ -16,10 +16,10 @@
 // MessageService, ThreadService, ChannelService) and the
 // XxxFunc callback types in internal/ui/callbacks.go that flow
 // closures into the service adapters. Internal-to-package
-// string fields on App and inside the cache / slack / cmd/slk
+// string fields on App and inside the cache / slack / cmd/mmk
 // packages stay as `string`. Conversions happen at the boundary:
 // App callsites pass `ids.ChannelID(a.activeChannelID)`;
-// cmd/slk closures receive typed parameters and convert back to
+// cmd/mmk closures receive typed parameters and convert back to
 // `string` for SQLite / HTTP serialization.
 //
 // Named string types serialize transparently with encoding/json

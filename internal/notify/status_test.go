@@ -11,15 +11,15 @@ import (
 
 func TestStatusReporter_RunsWithEnv(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
-	sr := NewStatusReporter(`printf '%s|%s|%s|%s' "$SLK_UNREAD" "$SLK_OTHER_UNREAD" "$SLK_WORKSPACE" "$SLK_TITLE" >` + out)
-	if err := sr.Report(3, 1, "Tone Labs", "slk TL (3) +1"); err != nil {
+	sr := NewStatusReporter(`printf '%s|%s|%s|%s' "$MMK_UNREAD" "$MMK_OTHER_UNREAD" "$MMK_WORKSPACE" "$MMK_TITLE" >` + out)
+	if err := sr.Report(3, 1, "Tone Labs", "mmk TL (3) +1"); err != nil {
 		t.Fatalf("Report error: %v", err)
 	}
 	got, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatalf("reading status_command output: %v", err)
 	}
-	if want := "3|1|Tone Labs|slk TL (3) +1"; string(got) != want {
+	if want := "3|1|Tone Labs|mmk TL (3) +1"; string(got) != want {
 		t.Errorf("status_command received %q, want %q", got, want)
 	}
 }
@@ -64,7 +64,7 @@ func TestStatusReporter_SerializesAndCoalesces(t *testing.T) {
 	out := filepath.Join(dir, "out")
 	started := filepath.Join(dir, "started")
 	gate := filepath.Join(dir, "gate")
-	sr := NewStatusReporter(`echo "$SLK_UNREAD" >>` + out +
+	sr := NewStatusReporter(`echo "$MMK_UNREAD" >>` + out +
 		`; if [ ! -f ` + gate + ` ]; then touch ` + started +
 		`; while [ ! -f ` + gate + ` ]; do sleep 0.01; done; fi`)
 
@@ -100,7 +100,7 @@ func TestStatusReporter_SerializesAndCoalesces(t *testing.T) {
 // exists to prevent would leave a stale state as the last line.
 func TestStatusReporter_BurstConvergesToFinalState(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
-	sr := NewStatusReporter(`echo "$SLK_UNREAD" >>` + out)
+	sr := NewStatusReporter(`echo "$MMK_UNREAD" >>` + out)
 	const last = 50
 	for i := 0; i <= last; i++ {
 		sr.Enqueue(i, 0, "ws", "t")
@@ -140,7 +140,7 @@ func TestStatusReporter_NotInjected(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out")
 	pwned := filepath.Join(dir, "pwned")
-	sr := NewStatusReporter(`printf '%s' "$SLK_WORKSPACE" >` + out)
+	sr := NewStatusReporter(`printf '%s' "$MMK_WORKSPACE" >` + out)
 	if err := sr.Report(1, 0, "; touch "+pwned, "t"); err != nil {
 		t.Fatalf("Report error: %v", err)
 	}

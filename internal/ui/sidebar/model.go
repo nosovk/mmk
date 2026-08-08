@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/debuglog"
-	emojiutil "github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/text"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/cache"
+	"github.com/nosovk/mmk/internal/debuglog"
+	emojiutil "github.com/nosovk/mmk/internal/emoji"
+	"github.com/nosovk/mmk/internal/text"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -890,7 +890,7 @@ func (m *Model) rebuildFilter() {
 	// synchronous SQLite GetWorkspaceReadState) and runs a sort over the
 	// channel list. It's called on every channel switch via
 	// SetActiveChannelID -- one of two readStateReader hits per switch
-	// (the other is inside buildCache). SLK_DEBUG-gated.
+	// (the other is inside buildCache). MMK_DEBUG-gated.
 	var perfStart time.Time
 	if debuglog.Enabled() {
 		perfStart = time.Now()
@@ -1115,7 +1115,7 @@ func (m *Model) buildCache(width int) {
 	// (second SQLite GetWorkspaceReadState per channel switch), and
 	// produces a styled row per visible item. Called on every channel
 	// switch via View() after the cache is invalidated by
-	// SetActiveChannelID. SLK_DEBUG-gated.
+	// SetActiveChannelID. MMK_DEBUG-gated.
 	var perfStart time.Time
 	if debuglog.Enabled() {
 		perfStart = time.Now()

@@ -1,4 +1,4 @@
-module github.com/gammons/slk
+module github.com/nosovk/mmk
 
 go 1.26.1
 

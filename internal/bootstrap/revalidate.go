@@ -6,14 +6,14 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/slack/edge"
+	"github.com/nosovk/mmk/internal/cache"
+	"github.com/nosovk/mmk/internal/slack/edge"
 )
 
 // revalidate refreshes the cache against edgeapi instead of
 // enumerating it.
 //
-// This is the function that replaces slk's ~50-page users.list sweep.
+// This is the function that replaces mmk's ~50-page users.list sweep.
 // The official client issues zero users.list and zero
 // conversations.list calls across all 8 captures; it sends
 // {id: version} for what it holds and gets back only what moved. A
@@ -59,7 +59,7 @@ func revalidate(ctx context.Context, deps Deps, out *Result, logf func(string, .
 
 	// Two independent steps, not one early-returning sequence: a
 	// failed channels/info says nothing about users/info, and losing
-	// the user pass to it would send slk back to resolving every
+	// the user pass to it would send mmk back to resolving every
 	// author one users.info call at a time — the fan-out this phase
 	// exists to delete.
 	revalidateChannels(ctx, deps, out, logf)
@@ -75,7 +75,7 @@ func revalidate(ctx context.Context, deps Deps, out *Result, logf func(string, .
 // user's conversations are owned by many teams within the org and the
 // edge cache keys records under the owning team: a single call scoped
 // to the auth.test team resolved zero of one Grid user's 217
-// conversations (gammons/slk#5). On a non-Grid workspace every
+// conversations (gammons/mmk#5). On a non-Grid workspace every
 // context team is expected to be the workspace team, so the partition
 // is a single group and the request shape is identical to before. An
 // empty context team groups under the workspace team, preserving the
@@ -114,8 +114,8 @@ func revalidateChannels(ctx context.Context, deps Deps, out *Result, logf func(s
 	if err != nil {
 		// Degrade to sending 0 for everything, which asks for full
 		// records: more bytes back, but correct. The map returned
-		// beside the error is discarded — a version slk cannot vouch
-		// for makes the server withhold a record slk does not have.
+		// beside the error is discarded — a version mmk cannot vouch
+		// for makes the server withhold a record mmk does not have.
 		logf("bootstrap: reading cached channel versions: %v (revalidating everything from scratch)", err)
 		cached = nil
 	}
@@ -391,11 +391,11 @@ func conditionalVersions(ids []string, cached map[string]int64) map[string]int64
 // channelType maps an edge result onto the cache's `type` column,
 // whose values are "channel", "private", "dm" and "group_dm".
 //
-// The order is load-bearing and mirrors cmd/slk's own classification
+// The order is load-bearing and mirrors cmd/mmk's own classification
 // in buildChannelItem: an MPDM is private too, and a DM is neither, so
 // testing is_private first would file every group DM under "private".
 //
-// cmd/slk has a fifth value, "app", for a DM whose counterparty is a
+// cmd/mmk has a fifth value, "app", for a DM whose counterparty is a
 // bot. It is not reachable from here — a channels/info result says
 // nothing about who is on the other end — so a bot DM revalidates to
 // "dm". That is recoverable rather than lost: connectWorkspace

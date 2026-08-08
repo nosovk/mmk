@@ -18,7 +18,7 @@
 // '&a.panelCacheRail' to '&a.renderCache.rail' and friends.
 package ui
 
-import "github.com/gammons/slk/internal/ui/wintree"
+import "github.com/nosovk/mmk/internal/ui/wintree"
 
 // panelCache stores the fully-wrapped (border + exactSize) output of
 // a single panel keyed on a tuple of inputs that affect its rendering.

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slk/internal/config"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/config"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 func TestHighlightSearchTerms_PlainText(t *testing.T) {

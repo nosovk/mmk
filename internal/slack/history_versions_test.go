@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/nosovk/mmk/internal/slackhttp"
 )
 
 // Fixture values. Every one is distinct, and none is a zero value, so a
@@ -224,7 +224,7 @@ func TestHistoryWithVersions_NonPositiveLimitGetsTheDefault(t *testing.T) {
 
 // Pins the documented-not-clamped decision: a caller-supplied limit
 // reaches the wire verbatim, including the 50/200/500 page sizes that
-// are slk's current fingerprint. Clamping here would silently return
+// are mmk's current fingerprint. Clamping here would silently return
 // fewer messages than the caller asked for, and would convert one
 // oversized request into a burst of correctly-sized ones — the worse
 // fingerprint of the two. See HistoryOpts.Limit.
@@ -635,7 +635,7 @@ func TestHistoryWithVersions_NonJSONBodyIsAnError(t *testing.T) {
 	}
 }
 
-// The captures record eight response keys; slk models four of them.
+// The captures record eight response keys; mmk models four of them.
 // The four it ignores, plus anything Slack adds later, must not break
 // the decode.
 func TestHistoryWithVersions_UnknownFieldsAreIgnored(t *testing.T) {

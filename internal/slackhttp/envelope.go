@@ -94,7 +94,7 @@ func (e *Envelope) SessionID() string {
 // _x_id at call-composition time with no uniqueness clamp: in
 // initial-load.har, 53 requests produced 52 distinct values, with
 // 741e4b14-1785407067.503 sent twice 68 ms apart. Forcing uniqueness
-// would give slk a perfectly monotonic sequence where real Chrome
+// would give mmk a perfectly monotonic sequence where real Chrome
 // shows occasional same-millisecond collisions — a distributional
 // difference, and this package exists to remove those.
 func (e *Envelope) RequestID() string {

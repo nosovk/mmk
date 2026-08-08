@@ -6,7 +6,7 @@ import (
 	"image/color"
 	"strings"
 
-	"github.com/gammons/slk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/debuglog"
 	"golang.org/x/image/draw"
 )
 

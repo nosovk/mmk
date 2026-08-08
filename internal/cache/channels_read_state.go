@@ -92,7 +92,7 @@ func (db *DB) BatchUpdateChannelReadState(updates []ChannelReadStateUpdate) erro
 // This is the boot/bootstrap path. Unlike BatchUpdateChannelReadState
 // (which only touches rows named in the batch), the reset step clears
 // stale unread flags for channels the user read in another client
-// while slk was closed — channels that Slack's client.counts response
+// while mmk was closed — channels that Slack's client.counts response
 // omits entirely (the unread-counts endpoint need not list read
 // channels). last_read_ts of an absent channel is left untouched:
 // there is no fresh value to apply and has_unread=0 already suppresses

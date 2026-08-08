@@ -17,8 +17,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/presencemenu"
-	"github.com/gammons/slk/internal/ui/statusbar"
+	"github.com/nosovk/mmk/internal/ui/presencemenu"
+	"github.com/nosovk/mmk/internal/ui/statusbar"
 )
 
 // workspaceStatus caches the latest StatusChangeMsg per team so the

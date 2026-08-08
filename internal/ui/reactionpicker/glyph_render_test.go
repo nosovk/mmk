@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	slkemoji "github.com/gammons/slk/internal/emoji"
-	imgpkg "github.com/gammons/slk/internal/image"
+	slkemoji "github.com/nosovk/mmk/internal/emoji"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 // TestPickerRendersFireGlyph guards the composition-safe emoji
-// fallback fix at /home/grant/local_code/slk/docs/superpowers/specs/2026-05-24-emoji-shortcode-fallback-design.md.
+// fallback fix at /home/grant/local_code/mmk/docs/superpowers/specs/2026-05-24-emoji-shortcode-fallback-design.md.
 // Opens the picker, types "fire", renders the frame, and asserts the
 // 🔥 glyph (U+1F525) is present in the output — confirming the
 // picker did NOT fall back to literal ":fire:" text for a simple

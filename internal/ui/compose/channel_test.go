@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/ui/channelpicker"
-	"github.com/gammons/slk/internal/ui/mentionpicker"
+	"github.com/nosovk/mmk/internal/ui/channelpicker"
+	"github.com/nosovk/mmk/internal/ui/mentionpicker"
 )
 
 func chans() []channelpicker.Channel {

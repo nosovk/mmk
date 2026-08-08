@@ -100,7 +100,7 @@ func (db *DB) SetChannelSyncedAt(channelID string, unixSec int64) error {
 // workspace except keepChannelID, so each one refetches the next time
 // it is opened.
 //
-// This is what makes reconnect cost a constant number of requests. slk
+// This is what makes reconnect cost a constant number of requests. mmk
 // used to answer a reconnect by fetching conversations.history for
 // every channel it had ever cached — 288 calls in one measured
 // three-minute session, 250 of them (86%) returning zero messages —

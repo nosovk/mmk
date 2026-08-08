@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	imgpkg "github.com/gammons/slk/internal/image"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 // fakeFetcher implements PlaceFetcher for unit tests. Behavior is

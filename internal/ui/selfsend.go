@@ -1,7 +1,7 @@
 // internal/ui/selfsend.go
 //
 // Self-originated send tracking, used to suppress Slack WebSocket echoes
-// of slk-posted messages so the optimistic-instant-display path is the
+// of mmk-posted messages so the optimistic-instant-display path is the
 // sole renderer.
 //
 // Phase 2b of the SOLID refactor of internal/ui/app.go: extracts the
@@ -31,7 +31,7 @@ import (
 	"time"
 )
 
-// selfSendWindow is the maximum time we expect between a user's slk-
+// selfSendWindow is the maximum time we expect between a user's mmk-
 // originated send (SendMessageMsg / EditMessageMsg / etc. dispatch) and
 // the matching chat.postMessage HTTP response landing as MessageSentMsg.
 // While MarkInFlight has been called within this window for a channel,
@@ -50,7 +50,7 @@ type selfSendDedup struct {
 	// call per channel; checked against selfSendWindow.
 	//
 	// Cross-session messages (sent from the official Slack client while
-	// slk is open) do NOT update this map and continue to display via
+	// mmk is open) do NOT update this map and continue to display via
 	// the normal WS-echo path.
 	lastSendByChannel map[string]time.Time
 
@@ -70,7 +70,7 @@ func newSelfSendDedup() *selfSendDedup {
 	}
 }
 
-// MarkInFlight records that the user just submitted a slk-originated
+// MarkInFlight records that the user just submitted a mmk-originated
 // send (chat.postMessage / chat.update / thread reply) for channelID.
 // While the timestamp is within selfSendWindow, the WS echo for self-
 // user messages on this channel is dropped so the optimistic path is
@@ -83,7 +83,7 @@ func (d *selfSendDedup) MarkInFlight(channelID string) {
 	d.lastSendByChannel[channelID] = time.Now()
 }
 
-// InFlight reports whether the user submitted an slk-originated send
+// InFlight reports whether the user submitted an mmk-originated send
 // for channelID within the last selfSendWindow. Cross-session sends
 // (e.g. from the official Slack client) never update the map, so
 // their WS echoes are not suppressed.

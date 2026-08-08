@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/help"
+	"github.com/nosovk/mmk/internal/ui/help"
 )
 
 // Regression: when only the help modal is open, App.View must re-render

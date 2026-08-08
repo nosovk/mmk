@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/messages"
 )
 
 // BenchmarkViewScroll simulates rapid j/k scrolling: a thread with many

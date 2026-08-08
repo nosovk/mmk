@@ -43,7 +43,7 @@ func TestCanonicalSlackName(t *testing.T) {
 }
 
 // TestCodeMapParity sanity-checks that the iamcal-derived glyph table
-// matches the glyphs slk previously got from kyokomi/emoji for a spread
+// matches the glyphs mmk previously got from kyokomi/emoji for a spread
 // of emoji shapes (simple, VS16, keycap, ZWJ family, flag).
 func TestCodeMapParity(t *testing.T) {
 	want := map[string]string{

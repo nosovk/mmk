@@ -31,7 +31,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/gammons/slk/internal/ui/statusbar"
+	"github.com/nosovk/mmk/internal/ui/statusbar"
 
 	"golang.design/x/clipboard"
 )

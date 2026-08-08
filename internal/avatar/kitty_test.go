@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	imgpkg "github.com/gammons/slk/internal/image"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 // TestRender_KittyAvatarUploadsAndPlaceholders asserts that, when the

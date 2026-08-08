@@ -7,13 +7,13 @@ import (
 	"sync"
 	"time"
 
-	slk "github.com/gammons/slk/internal/slack"
+	mmk "github.com/nosovk/mmk/internal/slack"
 )
 
-// SectionsClient is the subset of slk.Client SectionStore needs.
+// SectionsClient is the subset of mmk.Client SectionStore needs.
 // Defined as an interface so tests can pass fakes.
 type SectionsClient interface {
-	GetChannelSections(ctx context.Context) ([]slk.SidebarSection, error)
+	GetChannelSections(ctx context.Context) ([]mmk.SidebarSection, error)
 	// GetStarredChannels backs the stars section membership.
 	// channelSections.list returns built-in section types (stars,
 	// recent_apps) with an empty channel_ids array; stars.list is the
@@ -29,7 +29,7 @@ type SectionsClient interface {
 type SectionStore struct {
 	mu               sync.RWMutex
 	ready            bool
-	sectionsByID     map[string]*slk.SidebarSection
+	sectionsByID     map[string]*mmk.SidebarSection
 	channelToSection map[string]string
 	lastBootstrap    time.Time
 }
@@ -38,7 +38,7 @@ type SectionStore struct {
 // Bootstrap completes successfully.
 func NewSectionStore() *SectionStore {
 	return &SectionStore{
-		sectionsByID:     map[string]*slk.SidebarSection{},
+		sectionsByID:     map[string]*mmk.SidebarSection{},
 		channelToSection: map[string]string{},
 	}
 }
@@ -74,7 +74,7 @@ func (s *SectionStore) Bootstrap(ctx context.Context, client SectionsClient) err
 	}
 
 	// Build new maps.
-	byID := make(map[string]*slk.SidebarSection, len(sections))
+	byID := make(map[string]*mmk.SidebarSection, len(sections))
 	c2s := map[string]string{}
 	for i := range sections {
 		sec := &sections[i]
@@ -128,7 +128,7 @@ func (s *SectionStore) PopulateStars(channelIDs []string) {
 		return
 	}
 	var starsSectionID string
-	var stars *slk.SidebarSection
+	var stars *mmk.SidebarSection
 	for id, sec := range s.sectionsByID {
 		if sec.Type == "stars" {
 			starsSectionID = id
@@ -188,7 +188,7 @@ func (s *SectionStore) SectionForChannel(channelID string) (string, bool) {
 // points at it. When multiple candidate heads exist (orphans), the
 // one with the highest LastUpdate wins as a heuristic; this is a
 // best-effort recovery for malformed state.
-func (s *SectionStore) OrderedSections() []*slk.SidebarSection {
+func (s *SectionStore) OrderedSections() []*mmk.SidebarSection {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if !s.ready {
@@ -201,7 +201,7 @@ func (s *SectionStore) OrderedSections() []*slk.SidebarSection {
 			pointedAt[sec.Next] = true
 		}
 	}
-	var head *slk.SidebarSection
+	var head *mmk.SidebarSection
 	for id, sec := range s.sectionsByID {
 		if !pointedAt[id] {
 			if head == nil || sec.LastUpdate > head.LastUpdate {
@@ -214,7 +214,7 @@ func (s *SectionStore) OrderedSections() []*slk.SidebarSection {
 		return nil
 	}
 
-	out := make([]*slk.SidebarSection, 0, len(s.sectionsByID))
+	out := make([]*mmk.SidebarSection, 0, len(s.sectionsByID))
 	visited := map[string]bool{}
 	cur := head
 	for cur != nil && !visited[cur.ID] {
@@ -235,10 +235,10 @@ func (s *SectionStore) OrderedSections() []*slk.SidebarSection {
 // catch-all), direct_messages (default DM bucket), stars (Slack's
 // Starred feature — only when non-empty, mirroring recent_apps so users
 // without starred channels don't see an empty header). recent_apps is
-// only rendered when non-empty (slk has its own Apps logic for the
+// only rendered when non-empty (mmk has its own Apps logic for the
 // empty case). Everything else is hidden (slack_connect,
 // salesforce_records, agents, anything new).
-func includeInSidebar(sec *slk.SidebarSection) bool {
+func includeInSidebar(sec *mmk.SidebarSection) bool {
 	if sec.IsRedacted {
 		return false
 	}
@@ -256,7 +256,7 @@ func includeInSidebar(sec *slk.SidebarSection) bool {
 // ApplyUpsert applies a channel_section_upserted WS event (also used
 // for create / rename / reorder / emoji change). Last-write-wins by
 // LastUpdate: stale events are dropped.
-func (s *SectionStore) ApplyUpsert(ev slk.ChannelSectionUpserted) {
+func (s *SectionStore) ApplyUpsert(ev mmk.ChannelSectionUpserted) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.ready {
@@ -266,7 +266,7 @@ func (s *SectionStore) ApplyUpsert(ev slk.ChannelSectionUpserted) {
 		return
 	}
 	prev := s.sectionsByID[ev.ID]
-	sec := &slk.SidebarSection{
+	sec := &mmk.SidebarSection{
 		ID:         ev.ID,
 		Name:       ev.Name,
 		Type:       ev.Type,

@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/gammons/slk/internal/cache"
+	"github.com/nosovk/mmk/internal/cache"
 )
 
 func setupTestDB(t *testing.T) *cache.DB {

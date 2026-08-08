@@ -38,7 +38,7 @@ func TestProbeKittyGraphics_WrapsProbeInTmux(t *testing.T) {
 // guard for issue #50. The historical implementation leaked a goroutine
 // that kept reading from r forever after the probe timed out; that
 // goroutine then stole bytes from whatever reader the host installed
-// next (bubbletea), making slk unresponsive in zellij / tmux without
+// next (bubbletea), making mmk unresponsive in zellij / tmux without
 // allow-passthrough.
 //
 // We use os.Pipe to get a real pollable *os.File pair. We expect that:

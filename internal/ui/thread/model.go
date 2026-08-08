@@ -10,17 +10,17 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gammons/slk/internal/debuglog"
-	emojiutil "github.com/gammons/slk/internal/emoji"
+	"github.com/nosovk/mmk/internal/debuglog"
+	emojiutil "github.com/nosovk/mmk/internal/emoji"
 
-	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/ui/imgrender"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/messages/blockkit"
-	"github.com/gammons/slk/internal/ui/scrollbar"
-	"github.com/gammons/slk/internal/ui/selection"
-	"github.com/gammons/slk/internal/ui/styles"
-	"github.com/gammons/slk/internal/usergroups"
+	imgpkg "github.com/nosovk/mmk/internal/image"
+	"github.com/nosovk/mmk/internal/ui/imgrender"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/messages/blockkit"
+	"github.com/nosovk/mmk/internal/ui/scrollbar"
+	"github.com/nosovk/mmk/internal/ui/selection"
+	"github.com/nosovk/mmk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/usergroups"
 )
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
@@ -231,7 +231,7 @@ func (m *Model) SetImageContext(ctx imgrender.ImageContext) {
 }
 
 // SetEmojiContext configures emoji-image rendering for thread replies.
-// Should be called once at startup (cmd/slk/main.go) and again after
+// Should be called once at startup (cmd/mmk/main.go) and again after
 // CustomEmojisLoadedMsg arrives (via SetEmojiCustoms). Mirrors
 // messages.Model.SetEmojiContext.
 func (m *Model) SetEmojiContext(ctx EmojiContext) {

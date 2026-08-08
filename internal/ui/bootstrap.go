@@ -29,7 +29,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/styles"
 )
 
 // loadingEntry is one workspace's row in the startup overlay.
@@ -57,7 +57,7 @@ func (b *workspaceBootstrap) IsLoading() bool {
 
 // SetWorkspaces seeds the overlay with one "connecting" entry per
 // workspace name and turns the overlay on. Called at program start
-// from cmd/slk/main.go before any Slack connection is attempted.
+// from cmd/mmk/main.go before any Slack connection is attempted.
 func (b *workspaceBootstrap) SetWorkspaces(names []string) {
 	b.loading = true
 	b.states = nil

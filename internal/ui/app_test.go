@@ -14,15 +14,15 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/ids"
-	imgpkg "github.com/gammons/slk/internal/image"
-	"github.com/gammons/slk/internal/ui/compose"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/sidebar"
-	"github.com/gammons/slk/internal/ui/statusbar"
-	"github.com/gammons/slk/internal/ui/styles"
-	"github.com/gammons/slk/internal/ui/workspace"
+	"github.com/nosovk/mmk/internal/cache"
+	"github.com/nosovk/mmk/internal/ids"
+	imgpkg "github.com/nosovk/mmk/internal/image"
+	"github.com/nosovk/mmk/internal/ui/compose"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/sidebar"
+	"github.com/nosovk/mmk/internal/ui/statusbar"
+	"github.com/nosovk/mmk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/workspace"
 	"golang.design/x/clipboard"
 )
 
@@ -1359,7 +1359,7 @@ func TestApp_WorkspaceReadyAppliesPerWorkspaceTheme(t *testing.T) {
 // in the pane. The optimistic version (which carries the locally-converted
 // mrkdwn from compose) must REPLACE the WS-echo version, not be silently
 // dropped — Slack normalises wire-form text, so the WS echo's Text may
-// differ from what slk's renderer expects.
+// differ from what mmk's renderer expects.
 func TestApp_DuplicateMessageEventDoesNotDoubleAppend(t *testing.T) {
 	app := NewApp()
 	app.SetCurrentUserID("USELF")
@@ -1973,7 +1973,7 @@ func TestSmartPaste_ImagePresent_AttachesToCompose(t *testing.T) {
 	if atts[0].Mime != "image/png" {
 		t.Errorf("expected image/png, got %q", atts[0].Mime)
 	}
-	if !strings.HasPrefix(atts[0].Filename, "slk-paste-") || !strings.HasSuffix(atts[0].Filename, ".png") {
+	if !strings.HasPrefix(atts[0].Filename, "mmk-paste-") || !strings.HasSuffix(atts[0].Filename, ".png") {
 		t.Errorf("unexpected filename: %q", atts[0].Filename)
 	}
 	if atts[0].Size != int64(len(pngBytes)) {
@@ -3038,7 +3038,7 @@ func TestConversationOpenedMsg_InactiveWorkspaceIgnored(t *testing.T) {
 	}
 }
 
-// TestSelfSendInFlight_SuppressesEarlyWSEcho asserts that when a slk-
+// TestSelfSendInFlight_SuppressesEarlyWSEcho asserts that when a mmk-
 // originated send has been marked in-flight for a channel, an
 // arriving WS echo from the same user is dropped. Without this guard,
 // the WS echo (with Slack's normalised text) would render alongside
@@ -3052,7 +3052,7 @@ func TestSelfSendInFlight_SuppressesEarlyWSEcho(t *testing.T) {
 	app.SetCurrentUserID("USELF")
 	app.activeChannelID = "C1"
 
-	// User submits a slk-originated send. SendMessageMsg appends an
+	// User submits a mmk-originated send. SendMessageMsg appends an
 	// optimistic placeholder (instant-display) AND records the
 	// in-flight timestamp.
 	app.Update(SendMessageMsg{ChannelID: "C1", Text: "Hello\nWorld"})
@@ -3156,7 +3156,7 @@ func TestSendMessage_InstantDisplay(t *testing.T) {
 
 // TestSendMessage_InstantDisplayConvertsCommonMarkToSlackMrkdwn locks
 // in the bug fix where the optimistic placeholder was storing the
-// user's raw CommonMark text. The slk renderer expects Slack mrkdwn
+// user's raw CommonMark text. The mmk renderer expects Slack mrkdwn
 // (single-asterisk bold, single-underscore italic, single-backtick
 // code), so without conversion the placeholder rendered "**bold**"
 // literally and then re-rendered with proper styling once the HTTP
@@ -3205,7 +3205,7 @@ func TestSendMessage_FailureRollsBackPlaceholder(t *testing.T) {
 }
 
 // TestSelfSendInFlight_PassesThroughCrossSession asserts that a
-// WS echo for the current user that arrived with no slk-originated
+// WS echo for the current user that arrived with no mmk-originated
 // send in flight (i.e. cross-session: the user sent from the
 // official Slack client) is still applied to the pane.
 func TestSelfSendInFlight_PassesThroughCrossSession(t *testing.T) {
@@ -4254,7 +4254,7 @@ func TestNotifyReadStateChanged_PopulatesWindowTitle(t *testing.T) {
 
 	app.notifyReadStateChanged()
 
-	if got, want := app.windowTitle, "slk SW (1) +1"; got != want {
+	if got, want := app.windowTitle, "mmk SW (1) +1"; got != want {
 		t.Errorf("windowTitle = %q want %q", got, want)
 	}
 }
@@ -4263,7 +4263,7 @@ func TestNotifyReadStateChanged_PreBootstrap(t *testing.T) {
 	app := NewApp()
 	// activeTeamID intentionally left blank
 	app.notifyReadStateChanged()
-	if got, want := app.windowTitle, "slk"; got != want {
+	if got, want := app.windowTitle, "mmk"; got != want {
 		t.Errorf("pre-bootstrap windowTitle = %q want %q", got, want)
 	}
 }
@@ -4279,7 +4279,7 @@ func TestNotifyReadStateChanged_NoUnreads(t *testing.T) {
 
 	app.notifyReadStateChanged()
 
-	if got, want := app.windowTitle, "slk SW"; got != want {
+	if got, want := app.windowTitle, "mmk SW"; got != want {
 		t.Errorf("windowTitle = %q want %q", got, want)
 	}
 }
@@ -4292,20 +4292,20 @@ func TestNotifyReadStateChanged_NoUnreads(t *testing.T) {
 // disables the feature.
 func TestView_PropagatesWindowTitle(t *testing.T) {
 	app := NewApp()
-	app.windowTitle = "slk SW (2) +1"
+	app.windowTitle = "mmk SW (2) +1"
 
 	// Pre-layout branch (width/height==0).
 	v := app.View()
-	if v.WindowTitle != "slk SW (2) +1" {
-		t.Errorf("pre-layout View.WindowTitle = %q want %q", v.WindowTitle, "slk SW (2) +1")
+	if v.WindowTitle != "mmk SW (2) +1" {
+		t.Errorf("pre-layout View.WindowTitle = %q want %q", v.WindowTitle, "mmk SW (2) +1")
 	}
 
 	// Main branch: give the app a real canvas size and re-render.
 	app.width = 100
 	app.height = 30
 	v = app.View()
-	if v.WindowTitle != "slk SW (2) +1" {
-		t.Errorf("main View.WindowTitle = %q want %q", v.WindowTitle, "slk SW (2) +1")
+	if v.WindowTitle != "mmk SW (2) +1" {
+		t.Errorf("main View.WindowTitle = %q want %q", v.WindowTitle, "mmk SW (2) +1")
 	}
 }
 

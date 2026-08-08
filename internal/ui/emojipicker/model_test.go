@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slk/internal/emoji"
-	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/nosovk/mmk/internal/emoji"
+	imgpkg "github.com/nosovk/mmk/internal/image"
 )
 
 func sampleEntries() []emoji.EmojiEntry {

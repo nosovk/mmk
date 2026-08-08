@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gammons/slk/internal/slack/boot"
+	"github.com/nosovk/mmk/internal/slack/boot"
 )
 
 // The names the fake records. They are the API method names rather than
@@ -352,7 +352,7 @@ type fakeDeps struct {
 	historyCachedVersions   map[string]string
 
 	// cachedVersions is what the Store hands back for the opened
-	// channel, i.e. the messages slk already holds.
+	// channel, i.e. the messages mmk already holds.
 	cachedVersions    map[string]string
 	cachedVersionsErr error
 	// messageVersionsFor records the channel the Store was asked
@@ -564,7 +564,7 @@ func TestRun_CallsUserBootThenCounts(t *testing.T) {
 }
 
 func TestRun_NeverEnumerates(t *testing.T) {
-	// The regression guard this whole package exists for. slk's
+	// The regression guard this whole package exists for. mmk's
 	// Enterprise Grid accounts get signed out for "data scraping",
 	// and across 8 captures the official client issues ZERO
 	// users.list, ZERO conversations.list, and zero per-channel
@@ -728,7 +728,7 @@ func TestRun_NilLogDoesNotPanic(t *testing.T) {
 
 func TestRun_MissingBootDependencyIsAnError(t *testing.T) {
 	// Deps is a struct of interfaces built at a call site in
-	// cmd/slk/main.go, so a forgotten field is a nil interface and a
+	// cmd/mmk/main.go, so a forgotten field is a nil interface and a
 	// nil-interface method call is a panic that takes the whole TUI
 	// down with a stack trace instead of a message.
 	//
@@ -854,7 +854,7 @@ func TestRun_ViewPathCarriesEverySection(t *testing.T) {
 func TestRun_FallsBackWhenViewIgnoresTheChannelParam(t *testing.T) {
 	// The unverified-param failure mode. The server answers 200 with a
 	// perfectly good response for the WRONG conversation. Without the
-	// id comparison slk renders someone else's channel and nothing
+	// id comparison mmk renders someone else's channel and nothing
 	// anywhere reports an error.
 	f := newFakeDeps()
 	f.deps.OpenChannelID = "C_WANT"
@@ -983,7 +983,7 @@ func TestRun_FallbackDiscardsTheRejectedViewSections(t *testing.T) {
 	//
 	// It is the same bug as rendering the wrong channel's messages,
 	// one field over. On the ignored-param path those users are the
-	// authors of ANOTHER conversation, so slk would show a member list
+	// authors of ANOTHER conversation, so mmk would show a member list
 	// and author avatars belonging to a channel the user is not
 	// looking at — and on the error path they come from a body Slack
 	// attached to a failure. A response rejected as untrustworthy has
@@ -1051,7 +1051,7 @@ func TestRun_CarriesHasMoreFalse(t *testing.T) {
 func TestRun_FallbackSendsCachedVersions(t *testing.T) {
 	// The fallback is conversations.history WITH cached_latest_updates
 	// — the incremental-sync primitive. Falling back to a plain
-	// history fetch would re-download scrollback slk already holds,
+	// history fetch would re-download scrollback mmk already holds,
 	// which is the behaviour this phase removes.
 	f := newFakeDeps()
 	f.deps.OpenChannelID = "C_WANT"
@@ -1062,7 +1062,7 @@ func TestRun_FallbackSendsCachedVersions(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(f.historyCachedVersions) != 1 {
-		t.Errorf("history was sent %d cached versions; want the 1 slk holds", len(f.historyCachedVersions))
+		t.Errorf("history was sent %d cached versions; want the 1 mmk holds", len(f.historyCachedVersions))
 	}
 	if !reflect.DeepEqual(f.historyCachedVersions, f.cachedVersions) {
 		t.Errorf("history was sent %#v; want %#v", f.historyCachedVersions, f.cachedVersions)
@@ -1106,7 +1106,7 @@ func TestRun_CachedVersionsFailureIsNotFatal(t *testing.T) {
 		t.Error("cached versions failed and Run skipped the history fallback entirely")
 	}
 	if len(f.historyCachedVersions) != 0 {
-		t.Errorf("history was sent %#v; the read FAILED, so its return value must be discarded — vouching for versions we do not hold means the server withholds messages slk never received", f.historyCachedVersions)
+		t.Errorf("history was sent %#v; the read FAILED, so its return value must be discarded — vouching for versions we do not hold means the server withholds messages mmk never received", f.historyCachedVersions)
 	}
 	if len(res.Messages) == 0 {
 		t.Error("no messages after a degraded fallback")
@@ -1133,7 +1133,7 @@ func TestRun_ChannelOpenFailureIsNotFatal(t *testing.T) {
 	// captured on Enterprise Grid — the environment this phase exists
 	// for — so an unknown_method there followed by any history hiccup
 	// is exactly how a Grid user would meet this. "This channel looks
-	// empty" is a recoverable Tuesday; "slk will not connect" is not.
+	// empty" is a recoverable Tuesday; "mmk will not connect" is not.
 	f := newFakeDeps()
 	f.deps.OpenChannelID = "C_WANT"
 	f.viewErr = errors.New("unknown_method")
@@ -1286,7 +1286,7 @@ func TestRun_OpeningAChannelIsStillNotAFanOut(t *testing.T) {
 
 func TestRun_MissingChannelOpenDependenciesAreErrors(t *testing.T) {
 	// Same reasoning as the Boot and Counts guards: these three are
-	// nil only because a Deps literal in cmd/slk/main.go forgot a
+	// nil only because a Deps literal in cmd/mmk/main.go forgot a
 	// field, and calling through a nil interface panics.
 	//
 	// All three are checked BEFORE conversations.view is attempted,

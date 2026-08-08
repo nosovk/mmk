@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/styles"
-	"github.com/gammons/slk/internal/usergroups"
+	"github.com/nosovk/mmk/internal/cache"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/usergroups"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -508,7 +508,7 @@ func (m *Model) View(height, width int) string {
 	var bannerLine string
 	bodyHeight := height
 	if !m.subscriptionsAvailable {
-		bannerText := "Threads list unavailable — Slack subscription state could not be fetched. slk will retry on the next reconnect."
+		bannerText := "Threads list unavailable — Slack subscription state could not be fetched. mmk will retry on the next reconnect."
 		if w := lipgloss.Width(bannerText); w > width {
 			// Truncate to width.
 			runes := []rune(bannerText)

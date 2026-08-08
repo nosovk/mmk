@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/sidebar"
+	"github.com/nosovk/mmk/internal/ui/messages"
+	"github.com/nosovk/mmk/internal/ui/sidebar"
 )
 
 // makeBenchApp builds a populated App approximating a real user session: a
@@ -78,7 +78,7 @@ func BenchmarkAppViewIdle(b *testing.B) {
 }
 
 // makeWideScrollApp builds a NORMAL-mode app at an ultrawide terminal size
-// (477x130, matching a real user's session in slk-debug.log) with focus on
+// (477x130, matching a real user's session in mmk-debug.log) with focus on
 // the messages pane -- the j/k scroll hot path. This is the case the
 // compositor memo does NOT help: every scroll bumps messagepane.Version, so
 // the bordered top region re-renders and the screen re-composites.

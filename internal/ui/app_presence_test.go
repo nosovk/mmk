@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammons/slk/internal/ui/presencemenu"
+	"github.com/nosovk/mmk/internal/ui/presencemenu"
 )
 
 func TestApplyOptimisticStatusSetActive(t *testing.T) {

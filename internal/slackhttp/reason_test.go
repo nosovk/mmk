@@ -56,7 +56,7 @@ func TestReasonInnermostWins(t *testing.T) {
 
 func TestDefaultReasonMatchesCapture(t *testing.T) {
 	// Each pair was read off the 2026-07-30 captures of the official
-	// web client. These are the endpoints slk actually calls; the
+	// web client. These are the endpoints mmk actually calls; the
 	// values are what the real client tags them with.
 	cases := map[string]string{
 		"client.userBoot":            "initial-data",
@@ -81,7 +81,7 @@ func TestDefaultReasonMatchesCapture(t *testing.T) {
 func TestDefaultReasonForUnmappedMethodIsNonEmpty(t *testing.T) {
 	// Emitting NOTHING is the separator this exists to remove: a body
 	// carrying _x_mode but no _x_reason matches ~6% of the official
-	// client's traffic and would match 100% of slk's. A plausible but
+	// client's traffic and would match 100% of mmk's. A plausible but
 	// unverified value is strictly better than a structurally absent
 	// field.
 	for _, method := range []string{"chat.postMessage", "reactions.add", "", "some.unknown.method"} {
@@ -96,14 +96,14 @@ func TestDefaultReasonForUnmappedMethodIsNonEmpty(t *testing.T) {
 //
 // TestDefaultReasonForUnmappedMethodIsNonEmpty above rejects "" and
 // nothing else. That is not enough: genericReason covers every
-// endpoint absent from defaultReasons, which is most of slk's traffic,
-// so it is the single string that appears on the most requests slk
-// makes. A reviewer set it to "slk-tui-fetch" — an obviously
-// slk-specific value appearing zero times in the captures — and the
+// endpoint absent from defaultReasons, which is most of mmk's traffic,
+// so it is the single string that appears on the most requests mmk
+// makes. A reviewer set it to "mmk-tui-fetch" — an obviously
+// mmk-specific value appearing zero times in the captures — and the
 // entire suite passed.
 //
 // That is the exact failure reason.go's own comment argues against: a
-// wrong-but-attested reason keeps slk inside the 94% of requests that
+// wrong-but-attested reason keeps mmk inside the 94% of requests that
 // carry the field, whereas an invented one is a signature on nearly
 // every request. The nine values in defaultReasons are each pinned to
 // their endpoint by TestDefaultReasonMatchesCapture; this pins the
@@ -126,12 +126,12 @@ func TestGenericReasonIsAValueTheOfficialClientSends(t *testing.T) {
 
 	// And it must be a reason the official client was actually
 	// observed sending. This is the assertion that would have caught
-	// "slk-tui-fetch".
+	// "mmk-tui-fetch".
 	shape := loadRequestShape(t)
 	observed := shape.WorkspaceAPI.XReasonObservedValues
 	if !slices.Contains(observed, genericReason) {
 		t.Errorf("genericReason = %q, which appears in NONE of the %d _x_reason values observed across the captures.\n"+
-			"An slk-invented reason is a per-request signature on every endpoint not in defaultReasons — the opposite of what this table exists to do.\n"+
+			"An mmk-invented reason is a per-request signature on every endpoint not in defaultReasons — the opposite of what this table exists to do.\n"+
 			"Pick a value from testdata/official-request-shape.json's x_reason_observed_values.",
 			genericReason, len(observed))
 	}

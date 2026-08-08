@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/ui/workspace"
+	"github.com/nosovk/mmk/internal/ui/workspace"
 )
 
 // TestApp_ClickOnWorkspaceRailSwitches asserts that clicking a

@@ -13,13 +13,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/nosovk/mmk/internal/slackhttp"
 )
 
 // TestTryDownload_NoCustomUserAgent verifies two related facts about
 // the image fetcher after the BrowserTransport switch:
 //  1. The fetcher no longer announces itself with the legacy
-//     slk/inline-image-fetcher User-Agent (which was just as flagable
+//     mmk/inline-image-fetcher User-Agent (which was just as flagable
 //     as Go-http-client/1.1).
 //  2. BrowserTransport correctly *skips* header injection for
 //     non-Slack hosts (the test uses a 127.0.0.1 httptest server),
@@ -53,11 +53,11 @@ func TestTryDownload_NoCustomUserAgent(t *testing.T) {
 	if ua := gotHeaders.Get("User-Agent"); strings.HasPrefix(ua, "Mozilla/5.0") {
 		t.Errorf("browser UA leaked to non-Slack host: %q", ua)
 	}
-	// The old explicit slk-specific UA must be gone — the fetcher no
+	// The old explicit mmk-specific UA must be gone — the fetcher no
 	// longer sets one. Go's default ("Go-http-client/1.1") is the
 	// expected fallback when no transport injects one.
-	if ua := gotHeaders.Get("User-Agent"); strings.Contains(ua, "slk/inline-image-fetcher") {
-		t.Errorf("legacy slk-specific UA still present: %q", ua)
+	if ua := gotHeaders.Get("User-Agent"); strings.Contains(ua, "mmk/inline-image-fetcher") {
+		t.Errorf("legacy mmk-specific UA still present: %q", ua)
 	}
 }
 

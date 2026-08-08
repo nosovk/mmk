@@ -19,7 +19,7 @@
 // continues to work for white-box tests.
 package ui
 
-import "github.com/gammons/slk/internal/ids"
+import "github.com/nosovk/mmk/internal/ids"
 
 // navStack is a per-workspace browser-style back/forward history of
 // channel IDs. cursor points at the current entry; len(entries)==0
@@ -35,7 +35,7 @@ type navStack struct {
 const navStackMax = 50
 
 // navHistoryStore holds per-workspace navigation stacks. Lazy-creates
-// a stack on first Push for each teamID. Cleared only when slk exits;
+// a stack on first Push for each teamID. Cleared only when mmk exits;
 // the stacks are session-only by design.
 type navHistoryStore struct {
 	stacks map[string]*navStack

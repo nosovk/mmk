@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/nosovk/mmk/internal/slackhttp"
 )
 
 // fullViewBody is a conversations.view response shaped like the
@@ -420,7 +420,7 @@ func TestConversationsView_OmitsChannelWhenEmpty(t *testing.T) {
 // TestConversationsView_SendsChannelWhenNonEmpty pins the other half.
 //
 // The channel param is UNVERIFIED — see ConversationsView's doc
-// comment. This test pins what slk sends, not that Slack honours it.
+// comment. This test pins what mmk sends, not that Slack honours it.
 func TestConversationsView_SendsChannelWhenNonEmpty(t *testing.T) {
 	_, rec := mustView(t, fullViewBody, "C0OPENED99")
 
@@ -1030,7 +1030,7 @@ func TestConversationsView_ChannelIDDetectsAnIgnoredChannelParam(t *testing.T) {
 
 	res, rec := mustView(t, fullViewBody, asked)
 
-	// What slk asked for went out on the wire...
+	// What mmk asked for went out on the wire...
 	if got := rec.form.Get("channel"); got != asked {
 		t.Fatalf("form[channel] = %q; want %q", got, asked)
 	}
@@ -1063,7 +1063,7 @@ func TestConversationsView_DecodesResponseMetadata(t *testing.T) {
 // assertion, not a runtime one.
 //
 // It exists because narrowing any of these to `int` is currently
-// invisible: slk ships only amd64 and arm64 (.goreleaser.yaml), where
+// invisible: mmk ships only amd64 and arm64 (.goreleaser.yaml), where
 // `int` is already 64 bits, so no value-based assertion in this file
 // can tell the two apart. The hazard is latent, not active — but it
 // activates silently the day a 32-bit target is added, and the failure
@@ -1137,7 +1137,7 @@ func TestConversationsView_PopulatedBotsSurviveAsRawBytes(t *testing.T) {
 // application-level failure mode. The Web API answers HTTP 200 for
 // these, so `ok` is the only signal; without the check a rejected
 // `channel` param would sail through as a channel with zero messages
-// and zero users, and slk would render an empty channel rather than
+// and zero users, and mmk would render an empty channel rather than
 // fall back.
 func TestConversationsView_OKFalseIsAnError(t *testing.T) {
 	var rec recordedCall
@@ -1271,7 +1271,7 @@ func TestConversationsView_PropagatesPostError(t *testing.T) {
 
 // TestConversationsView_IgnoresUnknownFields pins forward
 // compatibility. Slack adds top-level and nested keys to this response
-// without notice; a decoder that rejected them would break slk on
+// without notice; a decoder that rejected them would break mmk on
 // Slack's schedule.
 func TestConversationsView_IgnoresUnknownFields(t *testing.T) {
 	const body = `{

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gammons/slk/internal/debuglog"
+	"github.com/nosovk/mmk/internal/debuglog"
 	"github.com/slack-go/slack"
 )
 
@@ -29,7 +29,7 @@ type EventHandler interface {
 
 	// OnChannelMarked is delivered when Slack pushes a channel_marked /
 	// im_marked / group_marked / mpim_marked event (read state changed
-	// in another client, or via slk's own MarkChannel/MarkChannelUnread
+	// in another client, or via mmk's own MarkChannel/MarkChannelUnread
 	// echoing back). ts is the new last_read watermark; unreadCount is
 	// the canonical workspace-side unread count for the channel (use to
 	// drive the sidebar badge).
