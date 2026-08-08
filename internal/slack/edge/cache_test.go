@@ -274,7 +274,7 @@ func TestChannelsInfo_ScopesThePathToTheGivenTeam(t *testing.T) {
 	// owning team. The team in the request path is therefore a
 	// per-call decision, not a client property: scoping every request
 	// to the auth.test team is what resolved zero of raff's 217
-	// conversations (gammons/mmk#5).
+	// conversations (gammons/slk#5).
 	rec := newRecorder(t, alwaysEmpty)
 	c := rec.client() // constructed with team T04T4TH8W
 

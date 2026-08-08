@@ -4,18 +4,18 @@ import (
 	"context"
 	"testing"
 
-	mmk "github.com/nosovk/mmk/internal/slack"
+	slackclient "github.com/nosovk/mmk/internal/slack"
 )
 
-// fakeSectionsClient implements the subset of mmk.Client SectionStore needs.
+// fakeSectionsClient implements the subset of slackclient.Client SectionStore needs.
 type fakeSectionsClient struct {
-	sections []mmk.SidebarSection
+	sections []slackclient.SidebarSection
 	starIDs  []string
 	starErr  error
 	getErr   error
 }
 
-func (f *fakeSectionsClient) GetChannelSections(ctx context.Context) ([]mmk.SidebarSection, error) {
+func (f *fakeSectionsClient) GetChannelSections(ctx context.Context) ([]slackclient.SidebarSection, error) {
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -45,7 +45,7 @@ func TestSectionStore_Bootstrap_Empty(t *testing.T) {
 
 func TestSectionStore_Bootstrap_BuildsLinkedListOrder(t *testing.T) {
 	// Build: head=A → B → C → tail
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "B", Name: "Books", Type: "standard", Next: "C", LastUpdate: 100, ChannelIDs: []string{"C2"}, ChannelsCount: 1},
 		{ID: "A", Name: "Alerts", Type: "standard", Next: "B", LastUpdate: 100, ChannelIDs: []string{"C1"}, ChannelsCount: 1},
 		{ID: "C", Name: "Channels", Type: "channels", Next: "", LastUpdate: 100},
@@ -72,7 +72,7 @@ func TestSectionStore_Bootstrap_TruncatedSection_LogsAndContinues(t *testing.T) 
 	// in channel_ids_page. v1 trusts the first-page data and lets the
 	// remaining 2 stay in the catch-all "Channels" bucket until WS
 	// deltas migrate them. Bootstrap must NOT fail in this case.
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Next: "", LastUpdate: 100,
 			ChannelIDs:     []string{"C1", "C2", "C3"},
 			ChannelsCount:  5,
@@ -97,7 +97,7 @@ func TestSectionStore_Bootstrap_TruncatedSection_LogsAndContinues(t *testing.T) 
 }
 
 func TestSectionStore_OrderedSections_FiltersSystemTypes(t *testing.T) {
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "S", Type: "salesforce_records", Next: "G", LastUpdate: 1},
 		{ID: "G", Type: "agents", Next: "K", LastUpdate: 1},
 		{ID: "K", Type: "slack_connect", Next: "U", LastUpdate: 1},
@@ -119,7 +119,7 @@ func TestSectionStore_OrderedSections_FiltersSystemTypes(t *testing.T) {
 // non-empty stars section must render in the sidebar, matching how the
 // official Slack client surfaces starred channels.
 func TestSectionStore_OrderedSections_StarsRenderWhenNonEmpty(t *testing.T) {
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "ST", Type: "stars", Name: "", Next: "U", LastUpdate: 1,
 			ChannelIDs: []string{"C1"}, ChannelsCount: 1},
 		{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
@@ -142,7 +142,7 @@ func TestSectionStore_OrderedSections_StarsRenderWhenNonEmpty(t *testing.T) {
 // An empty stars section must stay hidden so users who haven't starred
 // anything don't see an empty header — mirrors recent_apps semantics.
 func TestSectionStore_OrderedSections_StarsHiddenWhenEmpty(t *testing.T) {
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "ST", Type: "stars", Name: "", Next: "U", LastUpdate: 1},
 		{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1,
 			ChannelIDs: []string{"C1"}, ChannelsCount: 1},
@@ -163,7 +163,7 @@ func TestSectionStore_OrderedSections_StarsHiddenWhenEmpty(t *testing.T) {
 // stars section, so they render under the Starred header rather than
 // falling through to the type-default bucket.
 func TestSectionStore_SectionForChannel_StarsClaimed(t *testing.T) {
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "ST", Type: "stars", Name: "", Next: "U", LastUpdate: 1,
 			ChannelIDs: []string{"C9"}, ChannelsCount: 1},
 		{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
@@ -185,7 +185,7 @@ func TestSectionStore_SectionForChannel_StarsClaimed(t *testing.T) {
 // authoritative source for starred channels. Without this call, a
 // bootstrapped stars section stays empty and includeInSidebar hides it.
 func TestSectionStore_PopulateStars_FillsEmptyStarsSection(t *testing.T) {
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "ST", Type: "stars", Name: "", Next: "U", LastUpdate: 1},
 		{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
 	}
@@ -221,7 +221,7 @@ func TestSectionStore_PopulateStars_FillsEmptyStarsSection(t *testing.T) {
 // PopulateStars is a no-op when there is no stars section (workspace
 // doesn't have one, or it was deleted). It must not synthesize one.
 func TestSectionStore_PopulateStars_NoOpWithoutStarsSection(t *testing.T) {
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
 	}
 	c := &fakeSectionsClient{sections: sections}
@@ -238,7 +238,7 @@ func TestSectionStore_PopulateStars_NoOpWithoutStarsSection(t *testing.T) {
 // star/unstar events stay consistent. Re-starring the same channel and
 // un-starring another should reflect in the new state.
 func TestSectionStore_PopulateStars_ReplacesPreviousStarList(t *testing.T) {
-	sections := []mmk.SidebarSection{
+	sections := []slackclient.SidebarSection{
 		{ID: "ST", Type: "stars", Name: "", Next: "U", LastUpdate: 1},
 		{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
 	}
@@ -269,7 +269,7 @@ func TestSectionStore_PopulateStars_ReplacesPreviousStarList(t *testing.T) {
 // Bootstrap call site is automatically covered.
 func TestBootstrap_PopulatesStars(t *testing.T) {
 	c := &fakeSectionsClient{
-		sections: []mmk.SidebarSection{
+		sections: []slackclient.SidebarSection{
 			{ID: "ST", Type: "stars", Next: "U", LastUpdate: 1},
 			{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
 		},
@@ -298,7 +298,7 @@ func TestBootstrap_PopulatesStars(t *testing.T) {
 // next successful bootstrap.
 func TestBootstrap_StarsFetchErrorIsBestEffort(t *testing.T) {
 	c := &fakeSectionsClient{
-		sections: []mmk.SidebarSection{
+		sections: []slackclient.SidebarSection{
 			{ID: "U", Type: "standard", Name: "Mine", Next: "", LastUpdate: 1},
 		},
 		starErr: context.DeadlineExceeded,
@@ -332,12 +332,12 @@ func TestSectionStore_NotReady_SectionForChannelFalse(t *testing.T) {
 
 func TestApplyUpsert_NewSection(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Name: "A", LastUpdate: 100},
 	}}
 	_ = store.Bootstrap(context.Background(), c)
 
-	store.ApplyUpsert(mmk.ChannelSectionUpserted{
+	store.ApplyUpsert(slackclient.ChannelSectionUpserted{
 		ID: "B", Name: "Brand New", Type: "standard", Next: "", LastUpdate: 200,
 	})
 	got := store.OrderedSections()
@@ -354,11 +354,11 @@ func TestApplyUpsert_NewSection(t *testing.T) {
 
 func TestApplyUpsert_RenameExistingByID(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Name: "Old", Next: "", LastUpdate: 100},
 	}}
 	_ = store.Bootstrap(context.Background(), c)
-	store.ApplyUpsert(mmk.ChannelSectionUpserted{
+	store.ApplyUpsert(slackclient.ChannelSectionUpserted{
 		ID: "A", Name: "New", Type: "standard", Next: "", LastUpdate: 200,
 	})
 	got := store.OrderedSections()
@@ -369,12 +369,12 @@ func TestApplyUpsert_RenameExistingByID(t *testing.T) {
 
 func TestApplyUpsert_StaleEventIgnored(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Name: "Latest", Next: "", LastUpdate: 200},
 	}}
 	_ = store.Bootstrap(context.Background(), c)
 	// Older event arrives.
-	store.ApplyUpsert(mmk.ChannelSectionUpserted{
+	store.ApplyUpsert(slackclient.ChannelSectionUpserted{
 		ID: "A", Name: "Stale", Type: "standard", LastUpdate: 100,
 	})
 	got := store.OrderedSections()
@@ -385,7 +385,7 @@ func TestApplyUpsert_StaleEventIgnored(t *testing.T) {
 
 func TestApplyDelete_RemovesSectionAndChannels(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Name: "A", Next: "", LastUpdate: 100, ChannelIDs: []string{"C1"}, ChannelsCount: 1},
 	}}
 	_ = store.Bootstrap(context.Background(), c)
@@ -400,7 +400,7 @@ func TestApplyDelete_RemovesSectionAndChannels(t *testing.T) {
 
 func TestApplyChannelsAdded_UpdatesIndex(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Next: "", LastUpdate: 100},
 	}}
 	_ = store.Bootstrap(context.Background(), c)
@@ -417,7 +417,7 @@ func TestApplyChannelsAdded_OverwritesPreviousSection(t *testing.T) {
 	// Channel moves from A to B via remove-then-add (Slack's pattern):
 	// upsert into B should replace its membership in A.
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Next: "B", LastUpdate: 100, ChannelIDs: []string{"C1"}, ChannelsCount: 1},
 		{ID: "B", Type: "standard", Next: "", LastUpdate: 100},
 	}}
@@ -430,7 +430,7 @@ func TestApplyChannelsAdded_OverwritesPreviousSection(t *testing.T) {
 
 func TestApplyChannelsRemoved_DropsIndex(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Next: "", LastUpdate: 100, ChannelIDs: []string{"C1"}, ChannelsCount: 1},
 	}}
 	_ = store.Bootstrap(context.Background(), c)
@@ -442,7 +442,7 @@ func TestApplyChannelsRemoved_DropsIndex(t *testing.T) {
 
 func TestMaybeRebootstrap_DebouncedWithin30s(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "A", Type: "standard", Next: "", LastUpdate: 100},
 	}}
 	if err := store.Bootstrap(context.Background(), c); err != nil {
@@ -450,7 +450,7 @@ func TestMaybeRebootstrap_DebouncedWithin30s(t *testing.T) {
 	}
 	// First call: too soon, skipped.
 	calledAgain := false
-	c2 := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c2 := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "B", Type: "standard", Next: "", LastUpdate: 200},
 	}}
 	wrap := &countingClient{inner: c2, onCall: func() { calledAgain = true }}
@@ -465,7 +465,7 @@ type countingClient struct {
 	onCall func()
 }
 
-func (cc *countingClient) GetChannelSections(ctx context.Context) ([]mmk.SidebarSection, error) {
+func (cc *countingClient) GetChannelSections(ctx context.Context) ([]slackclient.SidebarSection, error) {
 	cc.onCall()
 	return cc.inner.GetChannelSections(ctx)
 }
@@ -483,7 +483,7 @@ func (cc *countingClient) GetStarredChannels(ctx context.Context) ([]string, err
 // type-default bucketing.
 func TestSectionForChannel_HidesNonRenderableSections(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		// A channel in a slack_connect section: real, indexed, but the
 		// section type is hidden by the renderability filter.
 		{ID: "L_SC", Type: "slack_connect", Next: "L_STD", LastUpdate: 100,
@@ -514,7 +514,7 @@ func TestSectionForChannel_HidesNonRenderableSections(t *testing.T) {
 // must not leak their Section ID upward.
 func TestSectionForChannel_HidesRedactedSections(t *testing.T) {
 	store := NewSectionStore()
-	c := &fakeSectionsClient{sections: []mmk.SidebarSection{
+	c := &fakeSectionsClient{sections: []slackclient.SidebarSection{
 		{ID: "L_R", Type: "standard", Name: "Hidden", Next: "", LastUpdate: 100,
 			IsRedacted: true,
 			ChannelIDs: []string{"C_REDACTED"}, ChannelsCount: 1},

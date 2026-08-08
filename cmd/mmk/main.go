@@ -2475,7 +2475,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 	// notices a channel that is merely absent.
 	//
 	// But users.conversations must not be FATAL either. On the
-	// Enterprise Grid org in gammons/mmk#5 it is rejected outright, and
+	// Enterprise Grid org in gammons/slk#5 it is rejected outright, and
 	// treating that as fatal dropped the entire workspace: no
 	// channels, no threads, no active workspace, and -- until the
 	// commit before this one -- no logged reason. userBoot had already

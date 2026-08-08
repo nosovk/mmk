@@ -6,10 +6,10 @@ import (
 	"strings"
 	"sync"
 
-	mmk "github.com/nosovk/mmk/internal/slack"
+	slackclient "github.com/nosovk/mmk/internal/slack"
 )
 
-// MutedChannelsClient is the subset of mmk.Client MuteStore needs.
+// MutedChannelsClient is the subset of slackclient.Client MuteStore needs.
 // Defined as an interface so tests can pass fakes.
 type MutedChannelsClient interface {
 	// GetMutedChannels returns the IDs of channels the authenticated
@@ -124,7 +124,7 @@ func (s *MuteStore) ApplyPrefChange(name, value string) bool {
 		next = parseMutedChannelsPref(value)
 	case "all_notifications_prefs":
 		next = map[string]bool{}
-		for _, id := range mmk.ParseMutedFromAllNotificationsPrefs(value) {
+		for _, id := range slackclient.ParseMutedFromAllNotificationsPrefs(value) {
 			next[id] = true
 		}
 	default:

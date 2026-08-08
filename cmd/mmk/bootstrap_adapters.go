@@ -380,7 +380,7 @@ func applyBootUsers(wctx *WorkspaceContext, res *bootstrap.Result) {
 // slack.Channel values the sidebar builder consumes.
 //
 // It exists because users.conversations is not reliably available. On
-// the Enterprise Grid org in gammons/mmk#5 that call is rejected, and
+// the Enterprise Grid org in gammons/slk#5 that call is rejected, and
 // because connectWorkspace treated the failure as fatal the whole
 // workspace was dropped: no channels, no threads, and no active
 // workspace at all. userBoot had already returned all 217 of that

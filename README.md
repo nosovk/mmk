@@ -191,6 +191,13 @@ Contributions are welcome. A few ground rules:
   Understand the diff, make sure it builds and passes `go vet ./...` and
   `go test ./...`, and be ready to explain your choices in review.
 
+### Release hosting
+
+The release configuration assumes this repository is hosted at
+`github.com/nosovk/mmk`. A `GITHUB_TOKEN` scoped only to the upstream
+`gammons/slk` repository cannot publish releases to `nosovk/mmk`; the token used
+by the release workflow must have permission to publish to this repository.
+
 ## Disclaimer
 
 `mmk` is an independent, unofficial project. It is not affiliated with, endorsed by, or sponsored by Slack Technologies, LLC or Salesforce, Inc. "Slack" is a trademark of Slack Technologies, LLC; it is used here only to describe the service this client interoperates with.

@@ -6,7 +6,7 @@ import (
 
 	"github.com/nosovk/mmk/internal/config"
 	"github.com/nosovk/mmk/internal/service"
-	mmk "github.com/nosovk/mmk/internal/slack"
+	slackclient "github.com/nosovk/mmk/internal/slack"
 	"github.com/slack-go/slack"
 )
 
@@ -92,10 +92,10 @@ func TestBuildChannelItem_Channel(t *testing.T) {
 // returns a fixed slice of sections so we can construct a real
 // *service.SectionStore (Bootstrap-driven) from a known mapping.
 type fakeSectionsClient struct {
-	sections []mmk.SidebarSection
+	sections []slackclient.SidebarSection
 }
 
-func (f *fakeSectionsClient) GetChannelSections(_ context.Context) ([]mmk.SidebarSection, error) {
+func (f *fakeSectionsClient) GetChannelSections(_ context.Context) ([]slackclient.SidebarSection, error) {
 	return f.sections, nil
 }
 
@@ -109,9 +109,9 @@ func (f *fakeSectionsClient) GetStarredChannels(_ context.Context) ([]string, er
 // includeInSidebar's filter (not that it matters for SectionForChannel).
 func bootstrappedStore(t *testing.T, mapping map[string][]string) *service.SectionStore {
 	t.Helper()
-	secs := make([]mmk.SidebarSection, 0, len(mapping))
+	secs := make([]slackclient.SidebarSection, 0, len(mapping))
 	for id, chans := range mapping {
-		secs = append(secs, mmk.SidebarSection{
+		secs = append(secs, slackclient.SidebarSection{
 			ID:         id,
 			Name:       id,
 			Type:       "channels",

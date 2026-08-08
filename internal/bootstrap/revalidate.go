@@ -75,7 +75,7 @@ func revalidate(ctx context.Context, deps Deps, out *Result, logf func(string, .
 // user's conversations are owned by many teams within the org and the
 // edge cache keys records under the owning team: a single call scoped
 // to the auth.test team resolved zero of one Grid user's 217
-// conversations (gammons/mmk#5). On a non-Grid workspace every
+// conversations (gammons/slk#5). On a non-Grid workspace every
 // context team is expected to be the workspace team, so the partition
 // is a single group and the request shape is identical to before. An
 // empty context team groups under the workspace team, preserving the

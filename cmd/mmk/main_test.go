@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,8 +23,29 @@ func TestApplicationIdentity(t *testing.T) {
 	}
 }
 
-func TestRepositoryIdentitySurfaces(t *testing.T) {
+func TestBuildAndReleaseIdentitySurfaces(t *testing.T) {
 	root := filepath.Join("..", "..")
+
+	assertContains(t, filepath.Join(root, "go.mod"), "module github.com/nosovk/mmk")
+	assertFileContainsAll(t, filepath.Join(root, "Makefile"), []string{
+		"BINARY=mmk",
+		"-o $(BUILD_DIR)/$(BINARY) ./cmd/mmk",
+	})
+	assertFileContainsAll(t, filepath.Join(root, ".goreleaser.yaml"), []string{
+		"project_name: mmk",
+		"main: ./cmd/mmk",
+		"binary: mmk",
+		"package_name: mmk",
+		"owner: nosovk",
+		"name: mmk",
+	})
+
+	if info, err := os.Stat(filepath.Join(root, "cmd", "mmk")); err != nil || !info.IsDir() {
+		t.Errorf("cmd/mmk must exist as a directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "cmd", "slk")); !os.IsNotExist(err) {
+		t.Errorf("cmd/slk must not exist, stat error = %v", err)
+	}
 
 	flake := readIdentityFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{`pname = "mmk";`, "packages.default = mmk;", "packages.mmk = mmk;"} {
@@ -41,32 +63,74 @@ func TestRepositoryIdentitySurfaces(t *testing.T) {
 			t.Errorf(".gitignore missing %q", want)
 		}
 	}
-	for _, stale := range []string{"/slk", "slk-debug.log"} {
-		if strings.Contains(gitignore, stale) {
-			t.Errorf(".gitignore still contains %q", stale)
+	assertForbidden(t, ".gitignore", gitignore, regexp.MustCompile(`(?m)^/slk$|^slk-debug\.log$`))
+}
+
+func TestGoSourcesPreserveIdentityAndUpstreamReferences(t *testing.T) {
+	root := filepath.Join("..", "..")
+	forbidden := regexp.MustCompile(`gammons/mmk#5|\bmmk\s+"github\.com/nosovk/mmk/internal/slack"|github\.com/gammons/slk/internal|cmd/slk|SLK_|slk-debug\.log`)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || path == filepath.Join(root, "cmd", "mmk", "main_test.go") {
+			return nil
+		}
+		assertForbidden(t, path, readIdentityFile(t, path), forbidden)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan Go sources: %v", err)
 	}
+}
 
-	status := readIdentityFile(t, filepath.Join(root, "docs", "STATUS.md"))
-	staleStatusIdentity := regexp.MustCompile(`(?m)^# slk Implementation Status$|(?m)^slk/$|cmd/slk|\bslk uses\b`)
-	if stale := staleStatusIdentity.FindString(status); stale != "" {
-		t.Errorf("docs/STATUS.md contains stale project identity %q", stale)
-	}
-
+func TestActiveDocumentationIdentity(t *testing.T) {
+	root := filepath.Join("..", "..")
 	wikiFiles, err := filepath.Glob(filepath.Join(root, "wiki", "*.md"))
 	if err != nil {
 		t.Fatalf("glob active wiki pages: %v", err)
 	}
-	staleIdentity := regexp.MustCompile(`github\.com/gammons/(?:slk|mmk)|getslk\.sh|cmd/slk|slk_|\bslk\b|SLK_|slk-debug|(?:config|cache|share)/slk`)
-	for _, name := range wikiFiles {
-		body := readIdentityFile(t, name)
-		for lineNumber, line := range strings.Split(body, "\n") {
-			if strings.Contains(line, "derived from [gammons/slk]") {
-				continue
-			}
-			if stale := staleIdentity.FindString(line); stale != "" {
-				t.Errorf("%s:%d contains stale identity %q", filepath.Base(name), lineNumber+1, stale)
-			}
+	activeDocs := append(wikiFiles,
+		filepath.Join(root, "README.md"),
+		filepath.Join(root, "docs", "STATUS.md"),
+	)
+	forbidden := regexp.MustCompile(`github\.com/gammons/mmk|github\.com/gammons/slk/cmd|cmd/slk|(?:^|[ /])slk_|\bSLK_[A-Z_]+|slk-debug\.log|\.(?:config|cache)/slk|\.local/share/slk|XDG_[A-Z_]+/slk|(?m)^# slk Implementation Status$|(?m)^slk/$`)
+	for _, name := range activeDocs {
+		assertForbidden(t, name, readIdentityFile(t, name), forbidden)
+	}
+}
+
+func TestReleaseHostingAssumptionIsDocumented(t *testing.T) {
+	readme := readIdentityFile(t, filepath.Join("..", "..", "README.md"))
+	for _, want := range []string{"github.com/nosovk/mmk", "GITHUB_TOKEN", "gammons/slk", "cannot publish"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README release notes missing %q", want)
+		}
+	}
+}
+
+func assertContains(t *testing.T, name, want string) {
+	t.Helper()
+	if body := readIdentityFile(t, name); !strings.Contains(body, want) {
+		t.Errorf("%s missing %q", name, want)
+	}
+}
+
+func assertFileContainsAll(t *testing.T, name string, wants []string) {
+	t.Helper()
+	body := readIdentityFile(t, name)
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s missing %q", name, want)
+		}
+	}
+}
+
+func assertForbidden(t *testing.T, name, body string, pattern *regexp.Regexp) {
+	t.Helper()
+	for lineNumber, line := range strings.Split(body, "\n") {
+		if stale := pattern.FindString(line); stale != "" {
+			t.Errorf("%s:%d contains forbidden identity %q", name, lineNumber+1, stale)
 		}
 	}
 }
