@@ -1,6 +1,15 @@
 package mattermost
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestChannelDoesNotContainPerUserReadState(t *testing.T) {
+	if _, ok := reflect.TypeFor[Channel]().FieldByName("LastViewedAt"); ok {
+		t.Fatal("Channel contains LastViewedAt; read state belongs to ChannelMembership")
+	}
+}
 
 func TestChannelKindDecodesOpenChannel(t *testing.T) {
 	kind, err := ParseChannelKind("O")

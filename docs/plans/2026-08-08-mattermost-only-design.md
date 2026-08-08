@@ -96,13 +96,12 @@ type Team struct {
 }
 
 type Channel struct {
-	ID           string
-	ServerID     string
-	TeamID       string
-	Name         string
-	DisplayName  string
-	Kind         ChannelKind
-	LastViewedAt int64
+	ID          string
+	ServerID    string
+	TeamID      string
+	Name        string
+	DisplayName string
+	Kind        ChannelKind
 }
 
 type Message struct {

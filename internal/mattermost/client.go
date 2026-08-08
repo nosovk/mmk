@@ -15,6 +15,8 @@ import (
 const (
 	defaultHTTPTimeout  = 30 * time.Second
 	maxSuccessBodyBytes = 10 << 20
+	// The unpaginated cross-team channel endpoint needs a higher finite cap.
+	maxChannelBodyBytes = 64 << 20
 	maxErrorBodyBytes   = 1 << 20
 )
 
@@ -140,17 +142,15 @@ func (c *Client) ChannelsForUser(ctx context.Context, userID string) ([]Channel,
 		return nil, errors.New("Mattermost user ID must not be empty")
 	}
 
-	var wire []channelResponse
-	if err := c.do(ctx, http.MethodGet, "users/"+url.PathEscape(userID)+"/channels", nil, &wire); err != nil {
+	response, err := c.request(ctx, http.MethodGet, "users/"+url.PathEscape(userID)+"/channels", nil)
+	if err != nil {
 		return nil, err
 	}
-	channels := make([]Channel, len(wire))
-	for i := range wire {
-		channel, err := wire[i].domain()
-		if err != nil {
-			return nil, fmt.Errorf("convert Mattermost channel %q: %w", wire[i].ID, err)
-		}
-		channels[i] = channel
+	defer response.Body.Close()
+
+	channels, err := decodeChannels(response.Body, maxChannelBodyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("decode Mattermost response: %w", err)
 	}
 	return channels, nil
 }
@@ -178,17 +178,35 @@ func (c *Client) ChannelMembershipsForUser(ctx context.Context, userID, teamID s
 }
 
 func (c *Client) do(ctx context.Context, method, endpoint string, body io.Reader, output any) error {
+	response, err := c.request(ctx, method, endpoint, body)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	if output == nil {
+		return nil
+	}
+	if err := decodeJSON(response.Body, output, maxSuccessBodyBytes); err != nil {
+		return fmt.Errorf("decode Mattermost response: %w", err)
+	}
+	return nil
+}
+
+// request performs shared request construction, authentication, transport, and
+// status handling. The caller owns the returned successful response body.
+func (c *Client) request(ctx context.Context, method, endpoint string, body io.Reader) (*http.Response, error) {
 	requestURL := *c.baseURL
 	requestURL.RawPath = strings.TrimRight(requestURL.EscapedPath(), "/") + "/" + strings.TrimLeft(endpoint, "/")
 	path, err := url.PathUnescape(requestURL.RawPath)
 	if err != nil {
-		return fmt.Errorf("build Mattermost request path: %w", err)
+		return nil, fmt.Errorf("build Mattermost request path: %w", err)
 	}
 	requestURL.Path = path
 
 	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), body)
 	if err != nil {
-		return fmt.Errorf("create Mattermost request: %w", err)
+		return nil, fmt.Errorf("create Mattermost request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	request.Header.Set("Accept", "application/json")
@@ -198,20 +216,14 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body io.Reader
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return redactError("perform Mattermost request", err, c.token)
+		return nil, redactError("perform Mattermost request", err, c.token)
 	}
-	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return decodeAPIError(response, c.token)
+		defer response.Body.Close()
+		return nil, decodeAPIError(response, c.token)
 	}
-	if output == nil {
-		return nil
-	}
-	if err := decodeJSON(response.Body, output, maxSuccessBodyBytes); err != nil {
-		return fmt.Errorf("decode Mattermost response: %w", err)
-	}
-	return nil
+	return response, nil
 }
 
 type redactedError struct {
@@ -293,6 +305,69 @@ func decodeJSON(reader io.Reader, output any, limit int64) error {
 		return err
 	}
 	return nil
+}
+
+func decodeChannels(reader io.Reader, limit int64) ([]Channel, error) {
+	counted := &countingReader{reader: io.LimitReader(reader, limit+1)}
+	decoder := json.NewDecoder(counted)
+
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, channelDecodeError(err, counted.count, limit)
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok || delimiter != '[' {
+		return nil, errors.New("Mattermost channel response must be a JSON array")
+	}
+
+	channels := make([]Channel, 0)
+	for decoder.More() {
+		var wire channelResponse
+		if err := decoder.Decode(&wire); err != nil {
+			return nil, channelDecodeError(err, counted.count, limit)
+		}
+		channel, err := wire.domain()
+		if err != nil {
+			return nil, fmt.Errorf("convert Mattermost channel %q: %w", wire.ID, err)
+		}
+		channels = append(channels, channel)
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, channelDecodeError(err, counted.count, limit)
+	}
+
+	var extra struct{}
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if counted.count > limit {
+			return nil, fmt.Errorf("%w of %d bytes", errResponseTooLarge, limit)
+		}
+		if err == nil {
+			return nil, errors.New("response contains multiple JSON values")
+		}
+		return nil, err
+	}
+	if counted.count > limit {
+		return nil, fmt.Errorf("%w of %d bytes", errResponseTooLarge, limit)
+	}
+	return channels, nil
+}
+
+func channelDecodeError(err error, count, limit int64) error {
+	if count > limit {
+		return fmt.Errorf("%w of %d bytes", errResponseTooLarge, limit)
+	}
+	return err
+}
+
+type countingReader struct {
+	reader io.Reader
+	count  int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.count += int64(n)
+	return n, err
 }
 
 type apiErrorResponse struct {

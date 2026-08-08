@@ -393,7 +393,7 @@ func TestClient_ChannelsForUserCallsCrossTeamEndpointAndReturnsCompleteResponse(
 		if got, want := r.Method, http.MethodGet; got != want {
 			t.Errorf("method = %q, want %q", got, want)
 		}
-		if got, want := r.URL.EscapedPath(), "/api/v4/users/user%2Fwith%20space/channels"; got != want {
+		if got, want := r.URL.EscapedPath(), "/mattermost/api/v4/users/user%2Fwith%20space/channels"; got != want {
 			t.Errorf("escaped path = %q, want %q", got, want)
 		}
 		if got := r.URL.RawQuery; got != "" {
@@ -410,7 +410,7 @@ func TestClient_ChannelsForUserCallsCrossTeamEndpointAndReturnsCompleteResponse(
 	}))
 	defer server.Close()
 
-	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	client, err := NewClient(server.URL+"/mattermost", "secret", WithHTTPClient(server.Client()))
 	if err != nil {
 		t.Fatalf("NewClient returned error: %v", err)
 	}
@@ -429,6 +429,64 @@ func TestClient_ChannelsForUserCallsCrossTeamEndpointAndReturnsCompleteResponse(
 	}
 }
 
+func TestClient_ChannelsForUserStreamsValidResponseAboveNormalLimit(t *testing.T) {
+	const channelCount = 1050
+	displayName := strings.Repeat("x", 10<<10)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "[")
+		for i := range channelCount {
+			if i > 0 {
+				_, _ = io.WriteString(w, ",")
+			}
+			_, _ = fmt.Fprintf(w, `{"id":"channel-%04d","team_id":"team-1","name":"channel-%04d","display_name":%q,"type":"O"}`, i, i, displayName)
+		}
+		_, _ = io.WriteString(w, "]")
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	channels, err := client.ChannelsForUser(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("ChannelsForUser returned error for valid response above %d bytes: %v", maxSuccessBodyBytes, err)
+	}
+	if got, want := len(channels), channelCount; got != want {
+		t.Fatalf("channel count = %d, want %d", got, want)
+	}
+	if got, want := channels[channelCount-1].ID, "channel-1049"; got != want {
+		t.Fatalf("last channel ID = %q, want %q", got, want)
+	}
+}
+
+func TestClient_ChannelsForUserRejectsResponseAboveChannelLimit(t *testing.T) {
+	const channelLimit = int64(64 << 20)
+	body := &trackingReadCloser{Reader: io.MultiReader(
+		strings.NewReader("["),
+		io.LimitReader(repeatingByteReader(' '), channelLimit+1),
+	)}
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       body,
+		}, nil
+	})}
+	client, err := NewClient("https://chat.example.com", "secret", WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	_, err = client.ChannelsForUser(context.Background(), "user-1")
+	if err == nil || !strings.Contains(err.Error(), "67108864") || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("error = %v, want channel response limit error", err)
+	}
+	if !body.closed {
+		t.Fatal("oversized channel response body was not closed")
+	}
+}
+
 func TestClient_ChannelsForUserConvertsAllChannelKindsInResponseOrder(t *testing.T) {
 	client := newJSONMattermostClient(t, `[
 		{"id":"private","team_id":"team-2","name":"private","display_name":"Private","type":"P","total_msg_count":2},
@@ -441,11 +499,14 @@ func TestClient_ChannelsForUserConvertsAllChannelKindsInResponseOrder(t *testing
 	if err != nil {
 		t.Fatalf("ChannelsForUser returned error: %v", err)
 	}
-	wantKinds := []ChannelKind{ChannelKindPrivate, ChannelKindPublic, ChannelKindGroup, ChannelKindDirect}
-	for i, want := range wantKinds {
-		if got := channels[i].Kind; got != want {
-			t.Fatalf("channels[%d].Kind = %v, want %v", i, got, want)
-		}
+	want := []Channel{
+		{ID: "private", TeamID: "team-2", Name: "private", DisplayName: "Private", Kind: ChannelKindPrivate},
+		{ID: "public", TeamID: "team-1", Name: "public", DisplayName: "Public", Kind: ChannelKindPublic},
+		{ID: "group", Name: "group", DisplayName: "Group", Kind: ChannelKindGroup},
+		{ID: "direct", Name: "direct", Kind: ChannelKindDirect},
+	}
+	if !reflect.DeepEqual(channels, want) {
+		t.Fatalf("channels = %#v, want %#v", channels, want)
 	}
 }
 
@@ -534,6 +595,15 @@ func TestClient_ChannelsForUserReportsMalformedJSON(t *testing.T) {
 	_, err := client.ChannelsForUser(context.Background(), "user-1")
 	if err == nil || !strings.Contains(err.Error(), "decode Mattermost response") {
 		t.Fatalf("error = %v, want contextual decode error", err)
+	}
+}
+
+func TestClient_ChannelsForUserRejectsTrailingJSON(t *testing.T) {
+	client := newJSONMattermostClient(t, `[{"id":"channel-1","type":"O"}] {"extra":true}`)
+
+	_, err := client.ChannelsForUser(context.Background(), "user-1")
+	if err == nil || !strings.Contains(err.Error(), "multiple JSON values") {
+		t.Fatalf("error = %v, want multiple JSON values error", err)
 	}
 }
 
@@ -879,6 +949,15 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 type trackingReadCloser struct {
 	io.Reader
 	closed bool
+}
+
+type repeatingByteReader byte
+
+func (r repeatingByteReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(r)
+	}
+	return len(p), nil
 }
 
 func (r *trackingReadCloser) Close() error {

@@ -144,7 +144,7 @@ Expected: FAIL with missing methods.
 
 **Step 3: Implement endpoint methods and boundary conversion**
 
-Decode only fields needed by `mmk`. Classify open, private, direct, and group channels at the boundary.
+Decode only fields needed by `mmk`. Stream the unpaginated cross-team channel array under a finite 64 MiB limit, and classify open, private, direct, and group channels at the boundary.
 
 **Step 4: Verify GREEN**
 

@@ -61,13 +61,12 @@ func (u User) DisplayName() string {
 // code must decode the wire type separately and convert it with
 // ParseChannelKind.
 type Channel struct {
-	ID           string
-	ServerID     string
-	TeamID       string
-	Name         string
-	DisplayName  string
-	Kind         ChannelKind
-	LastViewedAt int64
+	ID          string
+	ServerID    string
+	TeamID      string
+	Name        string
+	DisplayName string
+	Kind        ChannelKind
 }
 
 // ChannelMembership contains the per-user read metadata returned separately
