@@ -21,6 +21,18 @@ func secretStoreUnavailable(cause error) error {
 	return fmt.Errorf("%w: unlock your system credential store and ensure a desktop session is available: %v", ErrSecretStoreUnavailable, cause)
 }
 
+func secretString(owned []byte) string {
+	secret := string(owned)
+	clear(owned)
+	return secret
+}
+
+func withSecretBytes(secret string, use func([]byte) error) error {
+	owned := []byte(secret)
+	defer clear(owned)
+	return use(owned)
+}
+
 type OSSecretStore struct{}
 
 func NewOSSecretStore() *OSSecretStore { return &OSSecretStore{} }

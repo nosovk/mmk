@@ -20,16 +20,20 @@ type fakeWindowsCredentialAPI struct {
 	writtenTarget string
 	writtenUser   string
 	deletedTarget string
+	returned      []byte
+	passed        []byte
 }
 
 func (f *fakeWindowsCredentialAPI) read(target string) ([]byte, error) {
-	return append([]byte(nil), f.value...), f.readErr
+	f.returned = append([]byte(nil), f.value...)
+	return f.returned, f.readErr
 }
 
 func (f *fakeWindowsCredentialAPI) write(target, username string, value []byte) error {
 	f.writtenTarget = target
 	f.writtenUser = username
 	f.written = append([]byte(nil), value...)
+	f.passed = value
 	return f.writeErr
 }
 
@@ -47,17 +51,40 @@ func TestWindowsCredentialStoreUsesGenericTargetAndAccount(t *testing.T) {
 	if err != nil || got != "old-token" {
 		t.Fatalf("get = %q, %v", got, err)
 	}
+	for i, value := range api.returned {
+		if value != 0 {
+			t.Fatalf("read byte %d was not cleared", i)
+		}
+	}
 	if err := store.set(serverID, "new-token"); err != nil {
 		t.Fatal(err)
 	}
 	if api.writtenTarget != WindowsCredentialTargetName(serverID) || api.writtenUser != SecretAccountName(serverID) || string(api.written) != "new-token" {
 		t.Fatalf("write = target %q user %q value %q", api.writtenTarget, api.writtenUser, api.written)
 	}
+	for i, value := range api.passed {
+		if value != 0 {
+			t.Fatalf("write byte %d was not cleared", i)
+		}
+	}
 	if err := store.delete(serverID); err != nil {
 		t.Fatal(err)
 	}
 	if api.deletedTarget != WindowsCredentialTargetName(serverID) {
 		t.Fatalf("deleted target = %q", api.deletedTarget)
+	}
+}
+
+func TestCopyAndClearCredentialBlobWipesNativeView(t *testing.T) {
+	blob := []byte("native-token")
+	got := copyAndClearCredentialBlob(blob)
+	if string(got) != "native-token" {
+		t.Fatalf("copy = %q", got)
+	}
+	for i, value := range blob {
+		if value != 0 {
+			t.Fatalf("native blob byte %d was not cleared", i)
+		}
 	}
 }
 

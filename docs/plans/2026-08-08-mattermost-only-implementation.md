@@ -183,6 +183,8 @@ Expected: FAIL because the Mattermost onboarding path does not exist.
 
 Create testable non-interactive onboarding logic taking a secret-store interface. Wire `mmk --add-server` to the existing form library. Store URL and display metadata in TOML and PAT only in secure storage.
 
+The production transaction validates first, then acquires an OS file lock, re-reads the latest config under that lock, updates or appends only the matching `[[mattermost_servers]]` table, writes through an atomic same-directory rename, and conditionally rolls the credential back only if it still equals the token written by this operation.
+
 **Step 4: Verify GREEN**
 
 Run the complete Task 5 package command again and expect PASS.

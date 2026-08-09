@@ -80,6 +80,20 @@ func TestDarwinReleaseBuildEnablesNativeKeychainBridge(t *testing.T) {
 	}
 }
 
+func TestCICompilesPlatformCredentialAdaptersWithoutLiveStores(t *testing.T) {
+	workflow := readIdentityFile(t, filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	for _, want := range []string{
+		"runs-on: windows-latest",
+		"runs-on: macos-latest",
+		"CGO_ENABLED: 1",
+		"go test ./internal/mattermost ./internal/config ./internal/lockfile ./cmd/mmk",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf("ci.yml missing %q", want)
+		}
+	}
+}
+
 func TestGoSourcesPreserveIdentityAndUpstreamReferences(t *testing.T) {
 	root := filepath.Join("..", "..")
 	forbidden := regexp.MustCompile(malformedUpstreamIssuePattern() + `|\bmmk\s+"github\.com/nosovk/mmk/internal/slack"|github\.com/gammons/slk/internal|cmd/slk|SLK_|slk-debug\.log`)

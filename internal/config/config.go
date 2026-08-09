@@ -233,15 +233,21 @@ func Default() Config {
 }
 
 func Load(path string) (Config, error) {
-	cfg := Default()
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return cfg, nil
+			return Default(), nil
 		}
-		return cfg, err
+		return Default(), err
 	}
+	return LoadBytes(data)
+}
+
+// LoadBytes parses a complete config document using the same defaults and
+// validation as Load. It is used after acquiring the onboarding transaction
+// lock so callers operate on the latest on-disk bytes.
+func LoadBytes(data []byte) (Config, error) {
+	cfg := Default()
 
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return cfg, err

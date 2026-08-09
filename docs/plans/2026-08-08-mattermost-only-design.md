@@ -123,6 +123,8 @@ Direct-message display names are derived from channel participants. Artificial d
 
 Configuration stores only non-secret server metadata. Tokens are stored in the operating-system credential store. If secure storage is unavailable, onboarding fails with an actionable error instead of writing a plaintext token.
 
+Onboarding validates before taking the config lock, then holds an OS-level lock across the latest config re-read, credential replacement, targeted TOML edit, and atomic rename. If the config write fails, credential rollback is conditional on the stored token still matching the token written by that onboarding attempt, so a concurrent credential change is reported instead of overwritten.
+
 ## Startup And Data Flow
 
 ```text

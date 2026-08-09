@@ -283,3 +283,23 @@ func TestAddServerReportsRollbackFailureWithoutPAT(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestAddServerDoesNotClobberConcurrentCredentialOnRollback(t *testing.T) {
+	const token = "our-token"
+	cfg := config.Default()
+	secrets := &fakeSecrets{}
+	validator := &fakeValidator{user: &User{ID: "user-1"}}
+
+	err := AddServer(context.Background(), &cfg, AddServerInput{URL: "https://chat.example.com", Token: token},
+		func(string, string) (ServerValidator, error) { return validator, nil }, secrets,
+		func(candidate config.Config) error {
+			secrets.values[candidate.Servers[0].ID] = "other-writer-token"
+			return errors.New("save failed")
+		})
+	if !errors.Is(err, ErrConcurrentCredentialChange) || strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "other-writer-token") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(secrets.values) != 1 {
+		t.Fatalf("credential was deleted: %#v", secrets.values)
+	}
+}

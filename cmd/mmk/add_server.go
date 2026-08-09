@@ -10,8 +10,8 @@ import (
 
 	"charm.land/huh/v2"
 	"github.com/nosovk/mmk/internal/config"
+	"github.com/nosovk/mmk/internal/lockfile"
 	"github.com/nosovk/mmk/internal/mattermost"
-	toml "github.com/pelletier/go-toml/v2"
 )
 
 type topLevelCommand string
@@ -63,29 +63,15 @@ func addServer() error {
 	}
 
 	configPath := filepath.Join(xdgConfig(), "config.toml")
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	if err := mattermost.AddServer(context.Background(), &cfg, mattermost.AddServerInput{
+	server, err := mattermost.AddServerTransaction(context.Background(), mattermost.AddServerInput{
 		URL:         strings.TrimSpace(values.URL),
 		Token:       values.Token,
 		DisplayName: values.DisplayName,
-	}, mattermost.NewValidator, mattermost.NewOSSecretStore(), func(candidate config.Config) error {
-		return saveMattermostConfig(configPath, candidate)
-	}); err != nil {
+	}, mattermost.NewValidator, mattermost.NewOSSecretStore(), fileConfigTransaction{path: configPath})
+	if err != nil {
 		return err
 	}
 
-	root, _ := mattermost.CanonicalServerRoot(values.URL)
-	serverID := mattermost.ServerID(root)
-	server := cfg.Servers[len(cfg.Servers)-1]
-	for i := range cfg.Servers {
-		if cfg.Servers[i].ID == serverID {
-			server = cfg.Servers[i]
-			break
-		}
-	}
 	name := server.DisplayName
 	if name == "" {
 		name = server.URL
@@ -94,15 +80,35 @@ func addServer() error {
 	return nil
 }
 
-func saveMattermostConfig(configPath string, cfg config.Config) error {
-	data, err := toml.Marshal(cfg)
+type fileConfigTransaction struct {
+	path string
+}
+
+func (t fileConfigTransaction) Lock(ctx context.Context) (func() error, error) {
+	lock, err := lockfile.Acquire(ctx, t.path+".lock")
 	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
+		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+	return lock.Release, nil
+}
+
+func (t fileConfigTransaction) Load(context.Context) (config.Config, []byte, error) {
+	document, err := os.ReadFile(t.path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return config.Config{}, nil, err
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		document = nil
+	}
+	cfg, err := config.LoadBytes(document)
+	return cfg, document, err
+}
+
+func (t fileConfigTransaction) Save(_ context.Context, document []byte) error {
+	if err := os.MkdirAll(filepath.Dir(t.path), 0755); err != nil {
 		return err
 	}
 	configWriteMu.Lock()
 	defer configWriteMu.Unlock()
-	return writeConfigAtomic(configPath, data)
+	return writeConfigAtomic(t.path, document)
 }

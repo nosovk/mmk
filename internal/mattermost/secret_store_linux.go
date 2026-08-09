@@ -32,7 +32,7 @@ func (s *OSSecretStore) Get(_ context.Context, serverID string) (string, error) 
 	if unlocked[0].Secret == nil {
 		return "", ErrSecretNotFound
 	}
-	return string(unlocked[0].Secret.Value), nil
+	return secretString(unlocked[0].Secret.Value), nil
 }
 
 func (s *OSSecretStore) Set(_ context.Context, serverID, token string) error {
@@ -45,11 +45,14 @@ func (s *OSSecretStore) Set(_ context.Context, serverID, token string) error {
 	if err != nil {
 		return secretStoreUnavailable(err)
 	}
-	secret := gosecret.NewSecret(service.Session, nil, []byte(token), "text/plain")
-	if _, err := collection.CreateItem(SecretAccountName(serverID), secretAttributes(serverID), secret, true); err != nil {
-		return secretStoreUnavailable(err)
-	}
-	return nil
+	return withSecretBytes(token, func(value []byte) error {
+		secret := gosecret.NewSecret(service.Session, nil, value, "text/plain")
+		defer clear(secret.Value)
+		if _, err := collection.CreateItem(SecretAccountName(serverID), secretAttributes(serverID), secret, true); err != nil {
+			return secretStoreUnavailable(err)
+		}
+		return nil
+	})
 }
 
 func (s *OSSecretStore) Delete(_ context.Context, serverID string) error {

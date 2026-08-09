@@ -37,6 +37,37 @@ func TestCanonicalServerRootEquivalentSpellings(t *testing.T) {
 	}
 }
 
+func TestCanonicalServerRootNormalizesDNSRootDotAndIDNA(t *testing.T) {
+	inputs := []string{
+		"https://example.com./mattermost",
+		"https://bücher.example/mattermost",
+		"https://xn--bcher-kva.example/mattermost",
+	}
+	wants := []string{
+		"https://example.com/mattermost",
+		"https://xn--bcher-kva.example/mattermost",
+		"https://xn--bcher-kva.example/mattermost",
+	}
+	for i, input := range inputs {
+		got, err := CanonicalServerRoot(input)
+		if err != nil {
+			t.Fatalf("CanonicalServerRoot(%q): %v", input, err)
+		}
+		if got != wants[i] {
+			t.Errorf("CanonicalServerRoot(%q) = %q, want %q", input, got, wants[i])
+		}
+	}
+	if ServerID(wants[1]) != ServerID(wants[2]) {
+		t.Fatal("Unicode and punycode hostnames produced different IDs")
+	}
+}
+
+func TestCanonicalServerRootRejectsInvalidIDNA(t *testing.T) {
+	if _, err := CanonicalServerRoot("https://a..example.com"); err == nil {
+		t.Fatal("accepted invalid IDNA hostname")
+	}
+}
+
 func TestCanonicalServerRootKeepsDeploymentSubpathsDistinct(t *testing.T) {
 	rootA, err := CanonicalServerRoot("https://example.com/mattermost/api/v4")
 	if err != nil {

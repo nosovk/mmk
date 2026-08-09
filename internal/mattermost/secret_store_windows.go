@@ -44,6 +44,7 @@ type windowsCredentialStore struct {
 
 func (s windowsCredentialStore) get(serverID string) (string, error) {
 	value, err := s.api.read(WindowsCredentialTargetName(serverID))
+	defer clear(value)
 	if errors.Is(err, windows.ERROR_NOT_FOUND) {
 		return "", ErrSecretNotFound
 	}
@@ -57,7 +58,9 @@ func (s windowsCredentialStore) set(serverID, token string) error {
 	if len(token) > maxCredentialBlobBytes {
 		return fmt.Errorf("Mattermost token exceeds Windows Credential Manager's %d-byte limit", maxCredentialBlobBytes)
 	}
-	err := s.api.write(WindowsCredentialTargetName(serverID), SecretAccountName(serverID), []byte(token))
+	err := withSecretBytes(token, func(value []byte) error {
+		return s.api.write(WindowsCredentialTargetName(serverID), SecretAccountName(serverID), value)
+	})
 	if err != nil {
 		return windowsCredentialError("write Windows credential", err, token)
 	}
@@ -125,7 +128,13 @@ func (nativeWindowsCredentialAPI) read(target string) ([]byte, error) {
 	if credential.CredentialBlobSize == 0 {
 		return []byte{}, nil
 	}
-	return append([]byte(nil), unsafe.Slice(credential.CredentialBlob, credential.CredentialBlobSize)...), nil
+	return copyAndClearCredentialBlob(unsafe.Slice(credential.CredentialBlob, credential.CredentialBlobSize)), nil
+}
+
+func copyAndClearCredentialBlob(blob []byte) []byte {
+	owned := append([]byte(nil), blob...)
+	clear(blob)
+	return owned
 }
 
 func (nativeWindowsCredentialAPI) write(target, username string, value []byte) error {

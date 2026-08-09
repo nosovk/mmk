@@ -45,15 +45,27 @@ func TestAddServerPATFieldIsMasked(t *testing.T) {
 func TestSaveMattermostConfigUsesAtomicConfigPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(path, []byte("[appearance]\ntheme = 'dracula'\n"), 0640); err != nil {
+	initial := "# preserve me\n[appearance]\ntheme = 'dracula'\nunknown = 'keep'\n"
+	if err := os.WriteFile(path, []byte(initial), 0640); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load(path)
+	tx := fileConfigTransaction{path: path}
+	unlock, err := tx.Lock(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Servers = []config.MattermostServer{{ID: "server-id", URL: "https://chat.example.com", UserID: "user-1"}}
-	if err := saveMattermostConfig(path, cfg); err != nil {
+	_, document, err := tx.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited, err := config.EditMattermostServer(document, config.MattermostServer{ID: "server-id", URL: "https://chat.example.com", UserID: "user-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Save(t.Context(), edited); err != nil {
+		t.Fatal(err)
+	}
+	if err := unlock(); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := config.Load(path)
@@ -62,6 +74,13 @@ func TestSaveMattermostConfigUsesAtomicConfigPath(t *testing.T) {
 	}
 	if len(loaded.Servers) != 1 || loaded.Servers[0].ID != "server-id" {
 		t.Fatalf("servers = %#v", loaded.Servers)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "# preserve me") || !strings.Contains(string(raw), "unknown = 'keep'") {
+		t.Fatalf("document trivia was lost:\n%s", raw)
 	}
 	info, err := os.Stat(path)
 	if err != nil {

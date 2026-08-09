@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
 	"time"
+
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -106,6 +109,16 @@ func CanonicalServerRoot(rawURL string) (string, error) {
 		return "", errors.New("Mattermost base URL must not include encoded path separators")
 	}
 	hostname := strings.ToLower(parsed.Hostname())
+	if net.ParseIP(hostname) == nil {
+		hostname = strings.TrimSuffix(hostname, ".")
+		if hostname == "" || strings.Contains(hostname, "..") {
+			return "", errors.New("Mattermost base URL contains an invalid hostname")
+		}
+		hostname, err = idna.Lookup.ToASCII(hostname)
+		if err != nil {
+			return "", fmt.Errorf("normalize Mattermost hostname: %w", err)
+		}
+	}
 	port := parsed.Port()
 	if (parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80") {
 		port = ""

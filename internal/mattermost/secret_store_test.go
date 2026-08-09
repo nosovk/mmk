@@ -30,3 +30,30 @@ func TestSecretStoreUnavailableErrorIsActionable(t *testing.T) {
 		}
 	}
 }
+
+func TestSecretStringClearsOwnedBytes(t *testing.T) {
+	owned := []byte("secret-value")
+	if got := secretString(owned); got != "secret-value" {
+		t.Fatalf("secretString = %q", got)
+	}
+	for i, value := range owned {
+		if value != 0 {
+			t.Fatalf("owned byte %d was not cleared", i)
+		}
+	}
+}
+
+func TestWithSecretBytesClearsOwnedBytes(t *testing.T) {
+	var owned []byte
+	if err := withSecretBytes("secret-value", func(value []byte) error {
+		owned = value
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, value := range owned {
+		if value != 0 {
+			t.Fatalf("owned byte %d was not cleared", i)
+		}
+	}
+}
