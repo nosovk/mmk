@@ -16,7 +16,6 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
       - windows
     goarch:
       - amd64
@@ -25,6 +24,26 @@ builds:
       # Windows on arm64 is rare and not worth the matrix slot for a TUI
       - goos: windows
         goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  # macOS Keychain Services is only available through Security.framework,
+  # so Darwin releases are built with cgo on the macOS release runner.
+  - id: mmk-darwin
+    main: ./cmd/mmk
+    binary: mmk
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
     flags:
       - -trimpath
     ldflags:

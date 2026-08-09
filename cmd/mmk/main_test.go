@@ -66,6 +66,20 @@ func TestBuildAndReleaseIdentitySurfaces(t *testing.T) {
 	assertForbidden(t, ".gitignore", gitignore, regexp.MustCompile(`(?m)^/slk$|^slk-debug\.log$`))
 }
 
+func TestDarwinReleaseBuildEnablesNativeKeychainBridge(t *testing.T) {
+	root := filepath.Join("..", "..")
+	goreleaser := readIdentityFile(t, filepath.Join(root, ".goreleaser.yaml"))
+	for _, want := range []string{"id: mmk-darwin", "CGO_ENABLED=1"} {
+		if !strings.Contains(goreleaser, want) {
+			t.Errorf(".goreleaser.yaml missing %q", want)
+		}
+	}
+	workflow := readIdentityFile(t, filepath.Join(root, ".github", "workflows", "release.yml"))
+	if !strings.Contains(workflow, "runs-on: macos-latest") {
+		t.Error("release workflow must run on macOS to link Security.framework")
+	}
+}
+
 func TestGoSourcesPreserveIdentityAndUpstreamReferences(t *testing.T) {
 	root := filepath.Join("..", "..")
 	forbidden := regexp.MustCompile(malformedUpstreamIssuePattern() + `|\bmmk\s+"github\.com/nosovk/mmk/internal/slack"|github\.com/gammons/slk/internal|cmd/slk|SLK_|slk-debug\.log`)
