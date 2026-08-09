@@ -89,10 +89,24 @@ func upsertMattermostServer(exec mattermostExecer, server MattermostServer) erro
 	if err := validateMattermostServer(server); err != nil {
 		return err
 	}
+	// Equal revisions use lexical max per string field. This is commutative,
+	// deterministic, and enriches empty values without depending on arrival order.
 	_, err := exec.Exec(`INSERT INTO mattermost_servers (id, name, url, current_user_id, last_synced_at)
 		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET name=excluded.name, url=excluded.url,
-		current_user_id=excluded.current_user_id, last_synced_at=excluded.last_synced_at`,
+		ON CONFLICT(id) DO UPDATE SET
+		name=CASE
+			WHEN excluded.last_synced_at > mattermost_servers.last_synced_at THEN excluded.name
+			WHEN excluded.last_synced_at = mattermost_servers.last_synced_at THEN max(mattermost_servers.name, excluded.name)
+			ELSE mattermost_servers.name END,
+		url=CASE
+			WHEN excluded.last_synced_at > mattermost_servers.last_synced_at THEN excluded.url
+			WHEN excluded.last_synced_at = mattermost_servers.last_synced_at THEN max(mattermost_servers.url, excluded.url)
+			ELSE mattermost_servers.url END,
+		current_user_id=CASE
+			WHEN excluded.last_synced_at > mattermost_servers.last_synced_at THEN excluded.current_user_id
+			WHEN excluded.last_synced_at = mattermost_servers.last_synced_at THEN max(mattermost_servers.current_user_id, excluded.current_user_id)
+			ELSE mattermost_servers.current_user_id END,
+		last_synced_at=max(mattermost_servers.last_synced_at, excluded.last_synced_at)`,
 		server.ID, server.Name, server.URL, server.CurrentUserID, server.LastSyncedAt)
 	return wrapMattermostError("upserting server", err)
 }
@@ -180,8 +194,20 @@ func upsertMattermostUser(exec mattermostExecer, serverID string, user Mattermos
 	}
 	_, err := exec.Exec(`INSERT INTO mattermost_users
 		(server_id, id, username, nickname, first_name, last_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(server_id, id) DO UPDATE SET username=excluded.username, nickname=excluded.nickname,
-		first_name=excluded.first_name, last_name=excluded.last_name, updated_at=excluded.updated_at`,
+		ON CONFLICT(server_id, id) DO UPDATE SET
+		username=CASE WHEN excluded.updated_at > mattermost_users.updated_at THEN excluded.username
+			WHEN excluded.updated_at = mattermost_users.updated_at THEN max(mattermost_users.username, excluded.username)
+			ELSE mattermost_users.username END,
+		nickname=CASE WHEN excluded.updated_at > mattermost_users.updated_at THEN excluded.nickname
+			WHEN excluded.updated_at = mattermost_users.updated_at THEN max(mattermost_users.nickname, excluded.nickname)
+			ELSE mattermost_users.nickname END,
+		first_name=CASE WHEN excluded.updated_at > mattermost_users.updated_at THEN excluded.first_name
+			WHEN excluded.updated_at = mattermost_users.updated_at THEN max(mattermost_users.first_name, excluded.first_name)
+			ELSE mattermost_users.first_name END,
+		last_name=CASE WHEN excluded.updated_at > mattermost_users.updated_at THEN excluded.last_name
+			WHEN excluded.updated_at = mattermost_users.updated_at THEN max(mattermost_users.last_name, excluded.last_name)
+			ELSE mattermost_users.last_name END,
+		updated_at=max(mattermost_users.updated_at, excluded.updated_at)`,
 		serverID, user.ID, user.Username, user.Nickname, user.FirstName, user.LastName, user.UpdatedAt)
 	return wrapMattermostError("upserting user", err)
 }
@@ -227,9 +253,35 @@ func upsertMattermostChannel(exec mattermostExecer, serverID string, channel Mat
 	_, err := exec.Exec(`INSERT INTO mattermost_channels
 		(server_id, id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(server_id, id) DO UPDATE SET team_id=excluded.team_id, name=excluded.name,
-		display_name=excluded.display_name, kind=excluded.kind, total_msg_count=excluded.total_msg_count,
-		updated_at=excluded.updated_at, deleted_at=excluded.deleted_at`,
+		ON CONFLICT(server_id, id) DO UPDATE SET
+		team_id=CASE
+			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at)
+				THEN coalesce(excluded.team_id, mattermost_channels.team_id)
+			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at)
+				THEN CASE WHEN coalesce(excluded.team_id, '') > coalesce(mattermost_channels.team_id, '') THEN excluded.team_id ELSE mattermost_channels.team_id END
+			ELSE mattermost_channels.team_id END,
+		name=CASE
+			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at)
+				THEN CASE WHEN excluded.name <> '' THEN excluded.name ELSE mattermost_channels.name END
+			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.name, excluded.name)
+			ELSE mattermost_channels.name END,
+		display_name=CASE
+			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at)
+				THEN CASE WHEN excluded.display_name <> '' THEN excluded.display_name ELSE mattermost_channels.display_name END
+			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.display_name, excluded.display_name)
+			ELSE mattermost_channels.display_name END,
+		kind=CASE
+			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at)
+				THEN CASE
+					WHEN excluded.deleted_at > excluded.updated_at AND excluded.name = '' AND excluded.display_name = '' AND excluded.team_id IS NULL THEN mattermost_channels.kind
+					ELSE excluded.kind END
+			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.kind, excluded.kind)
+			ELSE mattermost_channels.kind END,
+		total_msg_count=CASE
+			WHEN max(excluded.updated_at, excluded.deleted_at) >= max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.total_msg_count, excluded.total_msg_count)
+			ELSE mattermost_channels.total_msg_count END,
+		updated_at=max(mattermost_channels.updated_at, excluded.updated_at),
+		deleted_at=max(mattermost_channels.deleted_at, excluded.deleted_at)`,
 		serverID, channel.ID, teamID, channel.Name, channel.DisplayName, channel.Kind,
 		channel.TotalMsgCount, channel.UpdatedAt, channel.DeletedAt)
 	return wrapMattermostError("upserting channel", err)
@@ -287,11 +339,22 @@ func upsertMattermostChannelMembership(exec mattermostExecer, serverID string, m
 	if min(membership.MsgCount, membership.MentionCount, membership.LastViewedAt, membership.UpdatedAt) < 0 {
 		return errors.New("Mattermost membership counts and timestamps must not be negative")
 	}
+	// Equal revisions merge counters/view time by max. In particular, revision
+	// zero remains useful for initial bootstrap rows and deterministic replays.
 	_, err := exec.Exec(`INSERT INTO mattermost_channel_memberships
 		(server_id, channel_id, user_id, msg_count, mention_count, last_viewed_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(server_id, channel_id, user_id) DO UPDATE SET msg_count=excluded.msg_count,
-		mention_count=excluded.mention_count, last_viewed_at=excluded.last_viewed_at, updated_at=excluded.updated_at`,
+		ON CONFLICT(server_id, channel_id, user_id) DO UPDATE SET
+		msg_count=CASE WHEN excluded.updated_at > mattermost_channel_memberships.updated_at THEN excluded.msg_count
+			WHEN excluded.updated_at = mattermost_channel_memberships.updated_at THEN max(mattermost_channel_memberships.msg_count, excluded.msg_count)
+			ELSE mattermost_channel_memberships.msg_count END,
+		mention_count=CASE WHEN excluded.updated_at > mattermost_channel_memberships.updated_at THEN excluded.mention_count
+			WHEN excluded.updated_at = mattermost_channel_memberships.updated_at THEN max(mattermost_channel_memberships.mention_count, excluded.mention_count)
+			ELSE mattermost_channel_memberships.mention_count END,
+		last_viewed_at=CASE WHEN excluded.updated_at > mattermost_channel_memberships.updated_at THEN excluded.last_viewed_at
+			WHEN excluded.updated_at = mattermost_channel_memberships.updated_at THEN max(mattermost_channel_memberships.last_viewed_at, excluded.last_viewed_at)
+			ELSE mattermost_channel_memberships.last_viewed_at END,
+		updated_at=max(mattermost_channel_memberships.updated_at, excluded.updated_at)`,
 		serverID, membership.ChannelID, membership.UserID, membership.MsgCount, membership.MentionCount,
 		membership.LastViewedAt, membership.UpdatedAt)
 	return wrapMattermostError("upserting channel membership", err)
@@ -360,6 +423,27 @@ func replaceMattermostChannelUserIDs(exec mattermostExecer, serverID, channelID 
 	return nil
 }
 
+func upsertMattermostChannelUserIDs(exec mattermostExecer, serverID, channelID string, userIDs []string) error {
+	if err := requireMattermostIDs(serverID, channelID); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if err := requireMattermostID("user", userID); err != nil {
+			return err
+		}
+		if _, exists := seen[userID]; exists {
+			continue
+		}
+		seen[userID] = struct{}{}
+		if _, err := exec.Exec(`INSERT INTO mattermost_channel_users (server_id, channel_id, user_id) VALUES (?, ?, ?)
+			ON CONFLICT(server_id, channel_id, user_id) DO NOTHING`, serverID, channelID, userID); err != nil {
+			return fmt.Errorf("upserting Mattermost channel participant: %w", err)
+		}
+	}
+	return nil
+}
+
 func (db *DB) ListMattermostChannelUserIDs(serverID, channelID string) ([]string, error) {
 	rows, err := db.conn.Query(`SELECT user_id FROM mattermost_channel_users WHERE server_id = ? AND channel_id = ? ORDER BY user_id`, serverID, channelID)
 	if err != nil {
@@ -422,7 +506,7 @@ func (db *DB) ApplyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnaps
 	}
 	sort.Strings(channelIDs)
 	for _, channelID := range channelIDs {
-		if err := replaceMattermostChannelUserIDs(tx, serverID, channelID, snapshot.ChannelUsers[channelID]); err != nil {
+		if err := upsertMattermostChannelUserIDs(tx, serverID, channelID, snapshot.ChannelUsers[channelID]); err != nil {
 			return fail(err)
 		}
 	}
@@ -440,13 +524,34 @@ func upsertMattermostPost(exec mattermostExecer, serverID string, post Mattermos
 	if err := validateMattermostPost(serverID, post); err != nil {
 		return err
 	}
+	// Keep the merge inside one SQLite statement so concurrent writers serialize
+	// on the row. Newer revisions update supplied fields; equal revisions merge
+	// commutatively, with max timestamps/counters and deletion dominance.
 	_, err := exec.Exec(`INSERT INTO mattermost_posts
 		(server_id, id, channel_id, user_id, root_id, text, created_at, updated_at, deleted_at, reply_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(server_id, id) DO UPDATE SET channel_id=excluded.channel_id, user_id=excluded.user_id,
-		root_id=excluded.root_id, text=excluded.text, created_at=excluded.created_at, updated_at=excluded.updated_at,
-		deleted_at=excluded.deleted_at, reply_count=excluded.reply_count
-		WHERE max(excluded.created_at, excluded.updated_at, excluded.deleted_at) >
+		ON CONFLICT(server_id, id) DO UPDATE SET
+		channel_id=CASE
+			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)
+				THEN CASE WHEN excluded.channel_id <> '' THEN excluded.channel_id ELSE mattermost_posts.channel_id END
+			ELSE max(mattermost_posts.channel_id, excluded.channel_id) END,
+		user_id=CASE
+			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)
+				THEN CASE WHEN excluded.user_id <> '' THEN excluded.user_id ELSE mattermost_posts.user_id END
+			ELSE max(mattermost_posts.user_id, excluded.user_id) END,
+		root_id=CASE
+			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)
+				THEN CASE WHEN excluded.root_id <> '' THEN excluded.root_id ELSE mattermost_posts.root_id END
+			ELSE max(mattermost_posts.root_id, excluded.root_id) END,
+		text=CASE
+			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)
+				THEN CASE WHEN excluded.text <> '' THEN excluded.text ELSE mattermost_posts.text END
+			ELSE max(mattermost_posts.text, excluded.text) END,
+		created_at=max(mattermost_posts.created_at, excluded.created_at),
+		updated_at=max(mattermost_posts.updated_at, excluded.updated_at),
+		deleted_at=max(mattermost_posts.deleted_at, excluded.deleted_at),
+		reply_count=max(mattermost_posts.reply_count, excluded.reply_count)
+		WHERE max(excluded.created_at, excluded.updated_at, excluded.deleted_at) >=
 		      max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)`,
 		serverID, post.ID, post.ChannelID, post.UserID, post.RootID, post.Text,
 		post.CreatedAt, post.UpdatedAt, post.DeletedAt, post.ReplyCount)
@@ -492,7 +597,8 @@ func (db *DB) ListMattermostChannelPosts(serverID, channelID string, limit int, 
 	if beforePostID != "" {
 		var createdAt int64
 		var id string
-		err := db.conn.QueryRow(`SELECT created_at, id FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND id = ?`,
+		err := db.conn.QueryRow(`SELECT created_at, id FROM mattermost_posts
+			WHERE server_id = ? AND channel_id = ? AND id = ? AND root_id = '' AND deleted_at = 0`,
 			serverID, channelID, beforePostID).Scan(&createdAt, &id)
 		if err != nil {
 			return nil, wrapMattermostError("resolving post anchor", err)
@@ -521,8 +627,8 @@ func (db *DB) MarkMattermostPostDeleted(serverID, postID string, deletedAt int64
 	if deletedAt < 0 {
 		return errors.New("Mattermost post deleted_at must not be negative")
 	}
-	result, err := db.conn.Exec(`UPDATE mattermost_posts SET deleted_at = ?
-		WHERE server_id = ? AND id = ? AND ? > max(created_at, updated_at, deleted_at)`, deletedAt, serverID, postID, deletedAt)
+	result, err := db.conn.Exec(`UPDATE mattermost_posts SET deleted_at = max(deleted_at, ?)
+		WHERE server_id = ? AND id = ? AND ? >= max(created_at, updated_at, deleted_at)`, deletedAt, serverID, postID, deletedAt)
 	if err != nil {
 		return fmt.Errorf("marking Mattermost post deleted: %w", err)
 	}

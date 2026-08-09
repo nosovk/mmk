@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -89,6 +92,30 @@ func TestMattermostMigrationCreatesRequiredIndexes(t *testing.T) {
 			t.Errorf("index %s count = %d, want 1", index, found)
 		}
 	}
+
+	wantColumns := map[string][]string{
+		"idx_mattermost_posts_channel_chronology": {"server_id", "channel_id", "created_at", "id"},
+		"idx_mattermost_posts_thread":             {"server_id", "channel_id", "root_id", "created_at", "id"},
+	}
+	for index, want := range wantColumns {
+		rows, err := db.conn.Query(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, index)
+		if err != nil {
+			t.Fatalf("pragma_index_info(%s): %v", index, err)
+		}
+		var got []string
+		for rows.Next() {
+			var column string
+			if err := rows.Scan(&column); err != nil {
+				rows.Close()
+				t.Fatalf("scan index %s: %v", index, err)
+			}
+			got = append(got, column)
+		}
+		rows.Close()
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("index %s columns = %v, want %v", index, got, want)
+		}
+	}
 }
 
 func TestMattermostMigrationEnforcesChannelAndForeignKeyConstraints(t *testing.T) {
@@ -153,5 +180,80 @@ func TestMattermostMigrationRollsBackDDLAndVersionOnFailure(t *testing.T) {
 	err = conn.QueryRow(`SELECT version FROM cache_schema_versions WHERE component = 'mattermost'`).Scan(&version)
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("version query error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestMattermostMigrationRejectsMalformedSequences(t *testing.T) {
+	tests := []struct {
+		name       string
+		migrations []mattermostMigration
+		want       string
+	}{
+		{"empty", nil, "must end at version 1"},
+		{"starts above one", []mattermostMigration{{version: 2}}, "start at version 1"},
+		{"gap", []mattermostMigration{{version: 1}, {version: 3}}, "contiguous"},
+		{"duplicate", []mattermostMigration{{version: 1}, {version: 1}}, "contiguous"},
+		{"beyond current", []mattermostMigration{{version: 1}, {version: 2}}, "newer than supported"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := New(":memory:")
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer db.Close()
+			err = db.migrateMattermost(test.migrations)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestMattermostMigrationConcurrentNewDatabaseOpens(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "cache.db")
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	dbs := make(chan *DB, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			db, err := New(dsn)
+			if err == nil {
+				dbs <- db
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	close(dbs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent New: %v", err)
+		}
+	}
+	for db := range dbs {
+		_ = db.Close()
+	}
+	if t.Failed() {
+		return
+	}
+
+	db, err := New(dsn)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	var count, version int
+	if err := db.conn.QueryRow(`SELECT COUNT(*), MAX(version) FROM cache_schema_versions WHERE component = 'mattermost'`).Scan(&count, &version); err != nil {
+		t.Fatalf("version row: %v", err)
+	}
+	if count != 1 || version != mattermostSchemaVersion {
+		t.Fatalf("version row = count %d version %d", count, version)
 	}
 }

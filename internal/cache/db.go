@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/nosovk/mmk/internal/debuglog"
 	_ "modernc.org/sqlite"
@@ -16,6 +17,11 @@ type DB struct {
 	// queries instead of failing startup.
 	ftsDisabled bool
 }
+
+// migrationMu serializes legacy probe-then-ALTER and FTS migrations across
+// concurrent New calls in this process. The Mattermost component migration
+// additionally uses BEGIN IMMEDIATE for database-level writer serialization.
+var migrationMu sync.Mutex
 
 // dsnPragmas are appended to every DSN passed to New(). They are
 // applied per-connection by modernc.org/sqlite as the pool opens new
@@ -62,6 +68,8 @@ func New(dsn string) (*DB, error) {
 	}
 
 	db := &DB{conn: conn}
+	migrationMu.Lock()
+	defer migrationMu.Unlock()
 	if err := db.migrate(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)

@@ -168,12 +168,148 @@ func TestMattermostSnapshotStoresSuppliedRawUsersMembershipsAndParticipants(t *t
 	}
 }
 
-func TestMattermostSnapshotCurrentUserOverridesDuplicateUsersEntry(t *testing.T) {
+func TestMattermostSnapshotParticipantUpsertsDoNotDeleteOmittedRows(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceMattermostChannelUserIDs("s1", "c1", []string{"u1", "u2"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := MattermostBootstrapSnapshot{
+		Server:      MattermostServer{ID: "s1", Name: "One", URL: "https://one.example", CurrentUserID: "u1", LastSyncedAt: 1},
+		CurrentUser: MattermostUser{ID: "u1", UpdatedAt: 1},
+		ChannelUsers: map[string][]string{
+			"c1": {"u1", "u3"},
+		},
+	}
+	if err := db.ApplyMattermostBootstrapSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	participants, err := db.ListMattermostChannelUserIDs("s1", "c1")
+	if err != nil || !reflect.DeepEqual(participants, []string{"u1", "u2", "u3"}) {
+		t.Fatalf("participants = %v, %v", participants, err)
+	}
+}
+
+func TestMattermostRevisionAwareUpsertsRejectDelayedSnapshotRows(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostUser("s1", MattermostUser{ID: "u1", Username: "new-user", UpdatedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Name: "new-channel", Kind: "public", UpdatedAt: 20, DeletedAt: 25}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannelMembership("s1", MattermostChannelMembership{ChannelID: "c1", UserID: "u1", MsgCount: 20, MentionCount: 2, LastViewedAt: 20, UpdatedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostServer(MattermostServer{ID: "s1", Name: "new-server", URL: "https://new.example", CurrentUserID: "u1", LastSyncedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := MattermostBootstrapSnapshot{
+		Server:      MattermostServer{ID: "s1", Name: "old-server", URL: "https://old.example", CurrentUserID: "u1", LastSyncedAt: 10},
+		CurrentUser: MattermostUser{ID: "u1", Username: "old-user", UpdatedAt: 10},
+		Channels:    []MattermostChannel{{ID: "c1", TeamID: "t1", Name: "old-channel", Kind: "public", UpdatedAt: 10}},
+		Memberships: []MattermostChannelMembership{{ChannelID: "c1", UserID: "u1", MsgCount: 1, UpdatedAt: 10}},
+	}
+	if err := db.ApplyMattermostBootstrapSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	server, _ := db.GetMattermostServer("s1")
+	user, _ := db.GetMattermostUser("s1", "u1")
+	channel, _ := db.GetMattermostChannel("s1", "c1")
+	membership, _ := db.GetMattermostChannelMembership("s1", "c1", "u1")
+	if server.Name != "new-server" || server.LastSyncedAt != 20 {
+		t.Errorf("server regressed: %#v", server)
+	}
+	if user.Username != "new-user" || user.UpdatedAt != 20 {
+		t.Errorf("user regressed: %#v", user)
+	}
+	if channel.Name != "new-channel" || channel.DeletedAt != 25 {
+		t.Errorf("channel regressed: %#v", channel)
+	}
+	if membership.MsgCount != 20 || membership.UpdatedAt != 20 {
+		t.Errorf("membership regressed: %#v", membership)
+	}
+}
+
+func TestMattermostEqualRevisionMergesAreOrderIndependent(t *testing.T) {
+	type result struct {
+		server     MattermostServer
+		user       MattermostUser
+		channel    MattermostChannel
+		membership MattermostChannelMembership
+	}
+	run := func(t *testing.T, reverse bool) result {
+		db := setupMattermostDB(t)
+		if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+			t.Fatal(err)
+		}
+		servers := []MattermostServer{
+			{ID: "s1", Name: "Alpha", URL: "https://a.example", CurrentUserID: "u1", LastSyncedAt: 10},
+			{ID: "s1", Name: "Zulu", URL: "https://z.example", CurrentUserID: "u1", LastSyncedAt: 10},
+		}
+		users := []MattermostUser{
+			{ID: "u1", Username: "alpha", FirstName: "Ada", UpdatedAt: 10},
+			{ID: "u1", Username: "zulu", LastName: "Lovelace", UpdatedAt: 10},
+		}
+		channels := []MattermostChannel{
+			{ID: "c1", TeamID: "t1", Name: "alpha", Kind: "public", TotalMsgCount: 2, UpdatedAt: 10},
+			{ID: "c1", TeamID: "t1", Name: "zulu", Kind: "public", TotalMsgCount: 5, UpdatedAt: 10, DeletedAt: 10},
+		}
+		memberships := []MattermostChannelMembership{
+			{ChannelID: "c1", UserID: "u1", MsgCount: 2, MentionCount: 1, LastViewedAt: 3, UpdatedAt: 10},
+			{ChannelID: "c1", UserID: "u1", MsgCount: 5, MentionCount: 2, LastViewedAt: 7, UpdatedAt: 10},
+		}
+		if reverse {
+			servers[0], servers[1] = servers[1], servers[0]
+			users[0], users[1] = users[1], users[0]
+			channels[0], channels[1] = channels[1], channels[0]
+			memberships[0], memberships[1] = memberships[1], memberships[0]
+		}
+		for i := range 2 {
+			if err := db.UpsertMattermostServer(servers[i]); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpsertMattermostUser("s1", users[i]); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpsertMattermostChannel("s1", channels[i]); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpsertMattermostChannelMembership("s1", memberships[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		server, _ := db.GetMattermostServer("s1")
+		user, _ := db.GetMattermostUser("s1", "u1")
+		channel, _ := db.GetMattermostChannel("s1", "c1")
+		membership, _ := db.GetMattermostChannelMembership("s1", "c1", "u1")
+		return result{server, user, channel, membership}
+	}
+	forward := run(t, false)
+	reverse := run(t, true)
+	if !reflect.DeepEqual(forward, reverse) {
+		t.Fatalf("equal-revision results differ:\nforward=%#v\nreverse=%#v", forward, reverse)
+	}
+	if forward.channel.DeletedAt != 10 || forward.user.FirstName != "Ada" || forward.user.LastName != "Lovelace" || forward.membership.MsgCount != 5 {
+		t.Fatalf("equal-revision enrichment missing: %#v", forward)
+	}
+}
+
+func TestMattermostSnapshotCurrentUserMergesDuplicateUsersEntryAtEqualRevision(t *testing.T) {
 	db := setupMattermostDB(t)
 	snapshot := MattermostBootstrapSnapshot{
-		Server:      MattermostServer{ID: "s1", Name: "One", URL: "https://one.example", CurrentUserID: "u1"},
-		CurrentUser: MattermostUser{ID: "u1", Username: "authoritative"},
-		Users:       []MattermostUser{{ID: "u1", Username: "stale-list-entry"}},
+		Server:      MattermostServer{ID: "s1", Name: "One", URL: "https://one.example", CurrentUserID: "u1", LastSyncedAt: 1},
+		CurrentUser: MattermostUser{ID: "u1", Username: "authoritative", FirstName: "Ada", UpdatedAt: 1},
+		Users:       []MattermostUser{{ID: "u1", Username: "stale-list-entry", LastName: "Lovelace", UpdatedAt: 1}},
 	}
 	if err := db.ApplyMattermostBootstrapSnapshot(snapshot); err != nil {
 		t.Fatalf("ApplyMattermostBootstrapSnapshot: %v", err)
@@ -182,16 +318,16 @@ func TestMattermostSnapshotCurrentUserOverridesDuplicateUsersEntry(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetMattermostUser: %v", err)
 	}
-	if user.Username != "authoritative" {
-		t.Fatalf("current user username = %q, want authoritative", user.Username)
+	if user.Username != "stale-list-entry" || user.FirstName != "Ada" || user.LastName != "Lovelace" {
+		t.Fatalf("equal-revision merged user = %#v", user)
 	}
 }
 
 func TestMattermostSnapshotIsAtomicUpsertOnly(t *testing.T) {
 	db := setupMattermostDB(t)
 	old := MattermostBootstrapSnapshot{
-		Server:      MattermostServer{ID: "s1", Name: "Old", URL: "https://one.example", CurrentUserID: "u1"},
-		CurrentUser: MattermostUser{ID: "u1", Username: "old"},
+		Server:      MattermostServer{ID: "s1", Name: "Old", URL: "https://one.example", CurrentUserID: "u1", LastSyncedAt: 1},
+		CurrentUser: MattermostUser{ID: "u1", Username: "old", UpdatedAt: 1},
 		Teams:       []MattermostTeam{{ID: "old-team", Name: "old"}},
 		Channels:    []MattermostChannel{{ID: "old-channel", TeamID: "old-team", Kind: "public"}},
 	}
@@ -200,8 +336,8 @@ func TestMattermostSnapshotIsAtomicUpsertOnly(t *testing.T) {
 	}
 
 	invalid := MattermostBootstrapSnapshot{
-		Server:      MattermostServer{ID: "s1", Name: "New", URL: "https://one.example", CurrentUserID: "u1"},
-		CurrentUser: MattermostUser{ID: "u1", Username: "new"},
+		Server:      MattermostServer{ID: "s1", Name: "New", URL: "https://one.example", CurrentUserID: "u1", LastSyncedAt: 2},
+		CurrentUser: MattermostUser{ID: "u1", Username: "new", UpdatedAt: 2},
 		Teams:       []MattermostTeam{{ID: "new-team", Name: "new"}},
 		Channels:    []MattermostChannel{{ID: "broken", TeamID: "missing", Kind: "public"}},
 	}
@@ -219,6 +355,8 @@ func TestMattermostSnapshotIsAtomicUpsertOnly(t *testing.T) {
 
 	updated := old
 	updated.Server.Name = "Updated"
+	updated.Server.LastSyncedAt = 3
+	updated.CurrentUser.UpdatedAt = 3
 	updated.Teams = []MattermostTeam{{ID: "new-team", Name: "new"}}
 	updated.Channels = nil
 	if err := db.ApplyMattermostBootstrapSnapshot(updated); err != nil {
@@ -316,8 +454,173 @@ func TestMattermostPostsUseRevisionConflictPolicyAndWindows(t *testing.T) {
 	if _, err := db.ListMattermostChannelPosts("s1", "c2", 10, "p3"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-channel anchor error = %v, want sql.ErrNoRows", err)
 	}
+	if _, err := db.ListMattermostChannelPosts("s1", "c1", 10, "r1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("reply anchor error = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := db.ListMattermostChannelPosts("s1", "c1", 10, "p2"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted anchor error = %v, want sql.ErrNoRows", err)
+	}
 	if err := db.MarkMattermostPostDeleted("s1", "missing", 60); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("unknown delete error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestMattermostPostEqualRevisionMergeIsOrderIndependent(t *testing.T) {
+	run := func(t *testing.T, reverse bool) MattermostPost {
+		db := setupMattermostDB(t)
+		if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+			t.Fatal(err)
+		}
+		posts := []MattermostPost{
+			{ID: "p1", ChannelID: "c1", UserID: "u1", Text: "body", CreatedAt: 10, UpdatedAt: 20, ReplyCount: 2},
+			{ID: "p1", ChannelID: "c1", RootID: "root", CreatedAt: 10, DeletedAt: 20, ReplyCount: 5},
+		}
+		if reverse {
+			posts[0], posts[1] = posts[1], posts[0]
+		}
+		for _, post := range posts {
+			if err := db.UpsertMattermostPost("s1", post); err != nil {
+				t.Fatal(err)
+			}
+		}
+		post, err := db.GetMattermostPost("s1", "p1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return post
+	}
+	forward := run(t, false)
+	reverse := run(t, true)
+	if !reflect.DeepEqual(forward, reverse) {
+		t.Fatalf("post merge differs: forward=%#v reverse=%#v", forward, reverse)
+	}
+	if forward.DeletedAt != 20 || forward.Text != "body" || forward.UserID != "u1" || forward.RootID != "root" || forward.ReplyCount != 5 {
+		t.Fatalf("post merge lost data: %#v", forward)
+	}
+}
+
+func TestMattermostMarkDeletedWinsAtEqualRevision(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1", Text: "edited", CreatedAt: 10, UpdatedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkMattermostPostDeleted("s1", "p1", 20); err != nil {
+		t.Fatal(err)
+	}
+	post, err := db.GetMattermostPost("s1", "p1")
+	if err != nil || post.DeletedAt != 20 || post.Text != "edited" {
+		t.Fatalf("post = %#v, %v", post, err)
+	}
+}
+
+func TestMattermostNewerChannelTombstonePreservesOmittedMetadata(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Name: "town-square", DisplayName: "Town Square", Kind: "public", TotalMsgCount: 9, UpdatedAt: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", Kind: "direct", DeletedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	channel, err := db.GetMattermostChannel("s1", "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if channel.TeamID != "t1" || channel.Name != "town-square" || channel.DisplayName != "Town Square" || channel.Kind != "public" || channel.TotalMsgCount != 9 || channel.DeletedAt != 20 {
+		t.Fatalf("channel = %#v", channel)
+	}
+}
+
+func TestMattermostConcurrentEqualRevisionPostUpsertsMergeDeterministically(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "cache.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.UpsertMattermostServer(MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	posts := []MattermostPost{
+		{ID: "p1", ChannelID: "c1", UserID: "u1", Text: "body", CreatedAt: 10, UpdatedAt: 20, ReplyCount: 2},
+		{ID: "p1", ChannelID: "c1", RootID: "root", CreatedAt: 10, DeletedAt: 20, ReplyCount: 5},
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, post := range posts {
+		post := post
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- db.UpsertMattermostPost("s1", post)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	post, err := db.GetMattermostPost("s1", "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if post.DeletedAt != 20 || post.Text != "body" || post.UserID != "u1" || post.RootID != "root" || post.ReplyCount != 5 {
+		t.Fatalf("concurrent merge = %#v", post)
+	}
+}
+
+func TestMattermostServerDeleteCascadesAllChildCategories(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostUser("s1", MattermostUser{ID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannelMembership("s1", MattermostChannelMembership{ChannelID: "c1", UserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceMattermostChannelUserIDs("s1", "c1", []string{"u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DeleteMattermostServer("s1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"mattermost_teams", "mattermost_users", "mattermost_channels", "mattermost_channel_memberships", "mattermost_channel_users", "mattermost_posts"} {
+		var count int
+		if err := db.conn.QueryRow(`SELECT COUNT(*) FROM ` + table + ` WHERE server_id = 's1'`).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Errorf("%s retained %d rows", table, count)
+		}
 	}
 }
 

@@ -249,7 +249,7 @@ Expected: FAIL because the schema still assumes Slack workspaces/messages.
 
 **Step 3: Implement minimal schema transition**
 
-Use the existing `cache.db` and add parallel `mattermost_*` tables with separately versioned transactional migrations. Preserve all Slack tables, APIs, and runtime behavior until Task 15; do not rename, drop, or repurpose legacy cache data. The v1 Mattermost bootstrap snapshot is atomic and upsert-only, so omitted rows are not pruned until authoritative retirement semantics exist.
+Use the existing `cache.db` and add parallel `mattermost_*` tables with separately versioned transactional migrations. Preserve all Slack tables, APIs, and runtime behavior until Task 15; do not rename, drop, or repurpose legacy cache data. The v1 Mattermost bootstrap snapshot is atomic and upsert-only, so omitted rows are not pruned until authoritative retirement semantics exist. Snapshot channel participants are union-upserted; only the explicit participant replacement API removes omitted relations. Server, user, channel, membership, and post rows reject older revisions and merge equal revisions deterministically; team metadata has no retained Mattermost revision in the compact domain and is therefore last-bootstrap-wins within a successful snapshot. Cache post ordering is local `(created_at, id)` ordering only. Task 9 reconstructs exact REST page order from Mattermost's response `order` array before presentation; Task 7 does not persist page ordinals or `order` arrays.
 
 **Step 4: Verify GREEN**
 
