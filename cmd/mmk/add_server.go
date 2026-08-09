@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -62,12 +61,14 @@ func addServer() error {
 		return errors.New("form cancelled")
 	}
 
-	configPath := filepath.Join(xdgConfig(), "config.toml")
+	configDir := xdgConfig()
+	registryPath := filepath.Join(configDir, "servers.toml")
+	lockPath := filepath.Join(configDir, "servers.lock")
 	server, err := mattermost.AddServerTransaction(context.Background(), mattermost.AddServerInput{
 		URL:         strings.TrimSpace(values.URL),
 		Token:       values.Token,
 		DisplayName: values.DisplayName,
-	}, mattermost.NewValidator, mattermost.NewOSSecretStore(), fileConfigTransaction{path: configPath})
+	}, mattermost.NewValidator, mattermost.NewOSSecretStore(), fileServerRegistryTransaction{registryPath: registryPath, lockPath: lockPath})
 	if err != nil {
 		return err
 	}
@@ -80,35 +81,23 @@ func addServer() error {
 	return nil
 }
 
-type fileConfigTransaction struct {
-	path string
+type fileServerRegistryTransaction struct {
+	registryPath string
+	lockPath     string
 }
 
-func (t fileConfigTransaction) Lock(ctx context.Context) (func() error, error) {
-	lock, err := lockfile.Acquire(ctx, t.path+".lock")
+func (t fileServerRegistryTransaction) Lock(ctx context.Context) (func() error, error) {
+	lock, err := lockfile.Acquire(ctx, t.lockPath)
 	if err != nil {
 		return nil, err
 	}
 	return lock.Release, nil
 }
 
-func (t fileConfigTransaction) Load(context.Context) (config.Config, []byte, error) {
-	document, err := os.ReadFile(t.path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return config.Config{}, nil, err
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		document = nil
-	}
-	cfg, err := config.LoadBytes(document)
-	return cfg, document, err
+func (t fileServerRegistryTransaction) Load(context.Context) (config.ServerRegistry, error) {
+	return config.LoadServerRegistry(t.registryPath)
 }
 
-func (t fileConfigTransaction) Save(_ context.Context, document []byte) error {
-	if err := os.MkdirAll(filepath.Dir(t.path), 0755); err != nil {
-		return err
-	}
-	configWriteMu.Lock()
-	defer configWriteMu.Unlock()
-	return writeConfigAtomic(t.path, document)
+func (t fileServerRegistryTransaction) Save(_ context.Context, registry config.ServerRegistry) error {
+	return config.SaveServerRegistry(t.registryPath, registry)
 }

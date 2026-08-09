@@ -26,14 +26,13 @@ type ServerValidator interface {
 }
 
 type ValidatorFactory func(canonicalRoot, token string) (ServerValidator, error)
-type ConfigSaver func(config.Config) error
 
-// ConfigTransaction serializes credential/config changes and supplies the
-// latest config document while the lock is held.
-type ConfigTransaction interface {
+// ServerRegistryTransaction serializes credential/registry changes and
+// supplies the latest registry while the lock is held.
+type ServerRegistryTransaction interface {
 	Lock(ctx context.Context) (unlock func() error, err error)
-	Load(ctx context.Context) (config.Config, []byte, error)
-	Save(ctx context.Context, document []byte) error
+	Load(ctx context.Context) (config.ServerRegistry, error)
+	Save(ctx context.Context, registry config.ServerRegistry) error
 }
 
 type AddServerInput struct {
@@ -43,8 +42,8 @@ type AddServerInput struct {
 }
 
 // AddServerTransaction validates credentials, then serializes the credential
-// and document update against all other processes using the same transaction.
-func AddServerTransaction(ctx context.Context, input AddServerInput, newValidator ValidatorFactory, secrets SecretStore, transaction ConfigTransaction) (server config.MattermostServer, err error) {
+// and registry update against all other processes using the same transaction.
+func AddServerTransaction(ctx context.Context, input AddServerInput, newValidator ValidatorFactory, secrets SecretStore, transaction ServerRegistryTransaction) (server config.MattermostServer, err error) {
 	if newValidator == nil || secrets == nil || transaction == nil {
 		return config.MattermostServer{}, errors.New("Mattermost server onboarding dependencies must not be nil")
 	}
@@ -64,19 +63,28 @@ func AddServerTransaction(ctx context.Context, input AddServerInput, newValidato
 		}
 	}()
 
-	cfg, document, err := transaction.Load(ctx)
+	registry, err := transaction.Load(ctx)
 	if err != nil {
-		return config.MattermostServer{}, fmt.Errorf("load current config: %w", err)
+		return config.MattermostServer{}, fmt.Errorf("load current Mattermost server registry: %w", err)
 	}
-	server, previousToken, hadPreviousToken, err := prepareServerCredential(ctx, cfg, input, root, user, secrets)
+	server, previousToken, hadPreviousToken, err := prepareServerCredential(ctx, registry, input, root, user, secrets)
 	if err != nil {
 		return config.MattermostServer{}, err
 	}
-	edited, err := config.EditMattermostServer(document, server)
-	if err != nil {
-		return config.MattermostServer{}, rollbackServerCredential(ctx, err, server.ID, input.Token, previousToken, hadPreviousToken, secrets)
+	updated := registry
+	updated.Servers = append([]config.MattermostServer(nil), registry.Servers...)
+	serverIndex := -1
+	for i := range updated.Servers {
+		if updated.Servers[i].ID == server.ID {
+			serverIndex = i
+			updated.Servers[i] = server
+			break
+		}
 	}
-	if err := transaction.Save(ctx, edited); err != nil {
+	if serverIndex < 0 {
+		updated.Servers = append(updated.Servers, server)
+	}
+	if err := transaction.Save(ctx, updated); err != nil {
 		return config.MattermostServer{}, rollbackServerCredential(ctx, err, server.ID, input.Token, previousToken, hadPreviousToken, secrets)
 	}
 	return server, nil
@@ -107,10 +115,10 @@ func validateServer(ctx context.Context, input AddServerInput, newValidator Vali
 	return root, user, nil
 }
 
-func prepareServerCredential(ctx context.Context, cfg config.Config, input AddServerInput, root string, user *User, secrets SecretStore) (config.MattermostServer, string, bool, error) {
+func prepareServerCredential(ctx context.Context, registry config.ServerRegistry, input AddServerInput, root string, user *User, secrets SecretStore) (config.MattermostServer, string, bool, error) {
 	server := config.MattermostServer{ID: ServerID(root), URL: root, DisplayName: strings.TrimSpace(input.DisplayName), UserID: user.ID, Username: user.Username}
 	exists := false
-	for _, configured := range cfg.Servers {
+	for _, configured := range registry.Servers {
 		if configured.ID == server.ID {
 			exists = true
 			break
@@ -134,7 +142,7 @@ func prepareServerCredential(ctx context.Context, cfg config.Config, input AddSe
 }
 
 func rollbackServerCredential(ctx context.Context, saveErr error, serverID, writtenToken, previousToken string, hadPreviousToken bool, secrets SecretStore) error {
-	saveFailure := redactError("save Mattermost server config", saveErr, writtenToken, previousToken)
+	saveFailure := redactError("save Mattermost server registry", saveErr, writtenToken, previousToken)
 	current, err := secrets.Get(ctx, serverID)
 	if errors.Is(err, ErrSecretNotFound) {
 		return errors.Join(saveFailure, ErrConcurrentCredentialChange)
@@ -154,77 +162,6 @@ func rollbackServerCredential(ctx context.Context, saveErr error, serverID, writ
 		return errors.Join(saveFailure, redactError("roll back Mattermost credential", err, writtenToken, previousToken))
 	}
 	return saveFailure
-}
-
-// AddServer validates credentials and transactionally persists a server.
-func AddServer(ctx context.Context, cfg *config.Config, input AddServerInput, newValidator ValidatorFactory, secrets SecretStore, save ConfigSaver) error {
-	if cfg == nil || newValidator == nil || secrets == nil || save == nil {
-		return errors.New("Mattermost server onboarding dependencies must not be nil")
-	}
-	root, err := CanonicalServerRoot(input.URL)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(input.Token) == "" {
-		return errors.New("Mattermost token must not be empty")
-	}
-
-	validator, err := newValidator(root, input.Token)
-	if err != nil {
-		return redactError("create Mattermost client", err, input.Token)
-	}
-	user, err := validator.CurrentUser(ctx)
-	if err != nil {
-		return redactError("validate Mattermost user", err, input.Token)
-	}
-	if user == nil || strings.TrimSpace(user.ID) == "" {
-		return errors.New("Mattermost validation returned no authenticated user")
-	}
-	if _, err := validator.TeamsForUser(ctx, user.ID); err != nil {
-		return redactError("validate Mattermost teams", err, input.Token)
-	}
-
-	id := ServerID(root)
-	candidate := *cfg
-	candidate.Servers = append([]config.MattermostServer(nil), cfg.Servers...)
-	server := config.MattermostServer{
-		ID:          id,
-		URL:         root,
-		DisplayName: strings.TrimSpace(input.DisplayName),
-		UserID:      user.ID,
-		Username:    user.Username,
-	}
-	serverIndex := -1
-	for i := range candidate.Servers {
-		if candidate.Servers[i].ID == id {
-			serverIndex = i
-			candidate.Servers[i] = server
-			break
-		}
-	}
-	if serverIndex < 0 {
-		candidate.Servers = append(candidate.Servers, server)
-	}
-
-	var previousToken string
-	hadPreviousToken := false
-	if serverIndex >= 0 {
-		previousToken, err = secrets.Get(ctx, id)
-		if err == nil {
-			hadPreviousToken = true
-		} else if !errors.Is(err, ErrSecretNotFound) {
-			return redactError("read previous Mattermost credential", err, input.Token)
-		}
-	}
-	if err := secrets.Set(ctx, id, input.Token); err != nil {
-		return redactError("store Mattermost credential", err, input.Token)
-	}
-	if err := save(candidate); err != nil {
-		return rollbackServerCredential(ctx, err, id, input.Token, previousToken, hadPreviousToken, secrets)
-	}
-
-	*cfg = candidate
-	return nil
 }
 
 func NewValidator(canonicalRoot, token string) (ServerValidator, error) {

@@ -42,51 +42,57 @@ func TestAddServerPATFieldIsMasked(t *testing.T) {
 	}
 }
 
-func TestSaveMattermostConfigUsesAtomicConfigPath(t *testing.T) {
+func TestSaveMattermostRegistryUsesDedicatedPathsAndNeverTouchesConfig(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	initial := "# preserve me\n[appearance]\ntheme = 'dracula'\nunknown = 'keep'\n"
-	if err := os.WriteFile(path, []byte(initial), 0640); err != nil {
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	configPath := filepath.Join(xdgConfig(), "config.toml")
+	serversPath := filepath.Join(xdgConfig(), "servers.toml")
+	lockPath := filepath.Join(xdgConfig(), "servers.lock")
+	initial := "[appearance]\ntheme = 'dracula'\n"
+	if err := os.MkdirAll(xdgConfig(), 0755); err != nil {
 		t.Fatal(err)
 	}
-	tx := fileConfigTransaction{path: path}
+	if err := os.WriteFile(configPath, []byte(initial), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tx := fileServerRegistryTransaction{registryPath: serversPath, lockPath: lockPath}
 	unlock, err := tx.Lock(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, document, err := tx.Load(t.Context())
+	registry, err := tx.Load(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	edited, err := config.EditMattermostServer(document, config.MattermostServer{ID: "server-id", URL: "https://chat.example.com", UserID: "user-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Save(t.Context(), edited); err != nil {
+	registry.Servers = append(registry.Servers, config.MattermostServer{ID: "server-id", URL: "https://chat.example.com", UserID: "user-1"})
+	if err := tx.Save(t.Context(), registry); err != nil {
 		t.Fatal(err)
 	}
 	if err := unlock(); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := config.Load(path)
+	loaded, err := config.LoadServerRegistry(serversPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(loaded.Servers) != 1 || loaded.Servers[0].ID != "server-id" {
 		t.Fatalf("servers = %#v", loaded.Servers)
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "# preserve me") || !strings.Contains(string(raw), "unknown = 'keep'") {
-		t.Fatalf("document trivia was lost:\n%s", raw)
+	if string(raw) != initial {
+		t.Fatalf("config.toml changed:\n%s", raw)
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(serversPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0640 {
-		t.Fatalf("mode = %o", info.Mode().Perm())
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("servers.lock missing: %v", err)
 	}
 }

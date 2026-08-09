@@ -3,71 +3,108 @@ package mattermost
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/nosovk/mmk/internal/config"
 )
 
-type fakeConfigTransaction struct {
+type fakeRegistryTransaction struct {
 	mu        sync.Mutex
-	document  []byte
-	loadCalls int
-	saveHook  func([]byte) error
+	registry  config.ServerRegistry
+	secrets   *fakeSecrets
 	loadErr   error
+	saveErr   error
+	saveHook  func(config.ServerRegistry) error
 	unlockErr error
-	unlocks   int
+	lockCalls int
+	loadCalls int
 	saveCalls int
+	unlocks   int
+	events    string
 }
 
-func (f *fakeConfigTransaction) Lock(context.Context) (func() error, error) {
+func (f *fakeRegistryTransaction) event(name string) {
+	if f.events != "" {
+		f.events += ","
+	}
+	f.events += name
+}
+
+func (f *fakeRegistryTransaction) Lock(context.Context) (func() error, error) {
+	f.lockCalls++
 	f.mu.Lock()
+	f.event("lock")
 	return func() error {
 		f.unlocks++
+		f.event("unlock")
 		f.mu.Unlock()
 		return f.unlockErr
 	}, nil
 }
 
-func (f *fakeConfigTransaction) Load(context.Context) (config.Config, []byte, error) {
+func (f *fakeRegistryTransaction) Load(context.Context) (config.ServerRegistry, error) {
 	f.loadCalls++
+	f.event("load")
 	if f.loadErr != nil {
-		return config.Config{}, nil, f.loadErr
+		return config.ServerRegistry{}, f.loadErr
 	}
-	cfg, err := config.LoadBytes(f.document)
-	return cfg, append([]byte(nil), f.document...), err
+	registry := f.registry
+	registry.Servers = append([]config.MattermostServer(nil), f.registry.Servers...)
+	return registry, nil
 }
 
-func (f *fakeConfigTransaction) Save(_ context.Context, document []byte) error {
+func (f *fakeRegistryTransaction) Save(_ context.Context, registry config.ServerRegistry) error {
 	f.saveCalls++
-	f.document = append([]byte(nil), document...)
+	f.event("save")
 	if f.saveHook != nil {
-		if err := f.saveHook(document); err != nil {
+		if err := f.saveHook(registry); err != nil {
 			return err
 		}
 	}
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	f.registry = registry
+	f.registry.Servers = append([]config.MattermostServer(nil), registry.Servers...)
 	return nil
 }
 
-func TestAddServerTransactionSerializesAndReloadsFreshConfig(t *testing.T) {
-	tx := &fakeConfigTransaction{document: []byte("# keep\n[feature]\nenabled = true\n")}
+type eventSecrets struct {
+	*fakeSecrets
+	tx *fakeRegistryTransaction
+}
+
+func (s eventSecrets) Get(ctx context.Context, serverID string) (string, error) {
+	s.tx.event("get")
+	return s.fakeSecrets.Get(ctx, serverID)
+}
+
+func (s eventSecrets) Set(ctx context.Context, serverID, token string) error {
+	s.tx.event("set")
+	return s.fakeSecrets.Set(ctx, serverID, token)
+}
+
+func (s eventSecrets) Delete(ctx context.Context, serverID string) error {
+	s.tx.event("delete")
+	return s.fakeSecrets.Delete(ctx, serverID)
+}
+
+func TestAddServerTransactionReloadsUnderLockAndPreservesConcurrentAddition(t *testing.T) {
+	tx := &fakeRegistryTransaction{registry: config.NewServerRegistry()}
 	secrets := &fakeSecrets{}
 	firstSaving := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	secondValidated := make(chan struct{})
-	secondLocked := make(chan struct{})
-	loadSecond := make(chan struct{})
-	var saveCount int
-	tx.saveHook = func(document []byte) error {
-		saveCount++
-		if saveCount == 1 {
+	var saves int
+	tx.saveHook = func(config.ServerRegistry) error {
+		saves++
+		if saves == 1 {
 			close(firstSaving)
 			<-releaseFirst
 		}
 		return nil
 	}
-
 	validatorFor := func(userID string, validated chan<- struct{}) ValidatorFactory {
 		return func(string, string) (ServerValidator, error) {
 			if validated != nil {
@@ -83,7 +120,7 @@ func TestAddServerTransactionSerializesAndReloadsFreshConfig(t *testing.T) {
 	}()
 	<-firstSaving
 	go func() {
-		_, err := AddServerTransaction(context.Background(), AddServerInput{URL: "https://two.example", Token: "token-two"}, validatorFor("user-two", secondValidated), secrets, lockingTransaction{ConfigTransaction: tx, locked: secondLocked, load: loadSecond})
+		_, err := AddServerTransaction(context.Background(), AddServerInput{URL: "https://two.example", Token: "token-two"}, validatorFor("user-two", secondValidated), secrets, tx)
 		errCh <- err
 	}()
 	<-secondValidated
@@ -91,164 +128,50 @@ func TestAddServerTransactionSerializesAndReloadsFreshConfig(t *testing.T) {
 		t.Fatalf("second transaction loaded before lock release: %d loads", tx.loadCalls)
 	}
 	close(releaseFirst)
-	<-secondLocked
-	tx.document = append(tx.document, []byte("# concurrent unrelated edit\n")...)
-	close(loadSecond)
 	for range 2 {
 		if err := <-errCh; err != nil {
 			t.Fatal(err)
 		}
 	}
-	text := string(tx.document)
-	for _, want := range []string{"# keep", "# concurrent unrelated edit", "https://one.example", "https://two.example"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("final document missing %q:\n%s", want, text)
-		}
-	}
-	if tx.loadCalls != 2 {
-		t.Fatalf("loads = %d, want one fresh load per transaction", tx.loadCalls)
+	if tx.loadCalls != 2 || len(tx.registry.Servers) != 2 || tx.registry.Servers[0].URL != "https://one.example" || tx.registry.Servers[1].URL != "https://two.example" {
+		t.Fatalf("registry = %#v, loads=%d", tx.registry, tx.loadCalls)
 	}
 }
 
-type lockingTransaction struct {
-	ConfigTransaction
-	locked chan<- struct{}
-	load   <-chan struct{}
-}
-
-func (t lockingTransaction) Load(ctx context.Context) (config.Config, []byte, error) {
-	<-t.load
-	return t.ConfigTransaction.Load(ctx)
-}
-
-func (t lockingTransaction) Lock(ctx context.Context) (func() error, error) {
-	unlock, err := t.ConfigTransaction.Lock(ctx)
-	if err == nil {
-		close(t.locked)
-	}
-	return unlock, err
-}
-
-func TestAddServerTransactionDoesNotClobberConcurrentCredentialOnRollback(t *testing.T) {
+func TestAddServerTransactionUpdatesExistingServerInPlace(t *testing.T) {
 	root, _ := CanonicalServerRoot("https://chat.example")
 	id := ServerID(root)
-	tests := []struct {
-		name     string
-		document string
-		oldToken string
-	}{
-		{name: "update", document: "[[mattermost_servers]]\nid='" + id + "'\nurl='" + root + "'\ndisplay_name=''\nuser_id='old'\nusername=''\n", oldToken: "old-token"},
-		{name: "new", document: "# empty\n"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			secrets := &fakeSecrets{values: map[string]string{}}
-			if tt.oldToken != "" {
-				secrets.values[id] = tt.oldToken
-			}
-			tx := &fakeConfigTransaction{document: []byte(tt.document)}
-			tx.saveHook = func([]byte) error {
-				secrets.values[id] = "other-writer-token"
-				return errors.New("save failed")
-			}
-			validator := &fakeValidator{user: &User{ID: "new-user"}}
-			_, err := AddServerTransaction(context.Background(), AddServerInput{URL: root, Token: "our-token"}, func(string, string) (ServerValidator, error) { return validator, nil }, secrets, tx)
-			if !errors.Is(err, ErrConcurrentCredentialChange) || strings.Contains(err.Error(), "our-token") || strings.Contains(err.Error(), "other-writer-token") {
-				t.Fatalf("error = %v", err)
-			}
-			if secrets.values[id] != "other-writer-token" {
-				t.Fatalf("concurrent credential was clobbered: %q", secrets.values[id])
-			}
-		})
-	}
-}
-
-func TestAddServerTransactionTreatsConcurrentCredentialDeletionAsChange(t *testing.T) {
-	root, _ := CanonicalServerRoot("https://chat.example")
-	id := ServerID(root)
+	tx := &fakeRegistryTransaction{registry: config.ServerRegistry{Version: config.ServerRegistryVersion, Servers: []config.MattermostServer{
+		{ID: "first", URL: "https://first.example", UserID: "first-user"},
+		{ID: id, URL: root, DisplayName: "Old", UserID: "old-user"},
+		{ID: "last", URL: "https://last.example", UserID: "last-user"},
+	}}}
 	secrets := &fakeSecrets{values: map[string]string{id: "old-token"}}
-	tx := &fakeConfigTransaction{
-		document: []byte("[[mattermost_servers]]\nid='" + id + "'\nurl='" + root + "'\n"),
-		saveHook: func([]byte) error {
-			delete(secrets.values, id)
-			return errors.New("save failed")
-		},
-	}
-	validator := &fakeValidator{user: &User{ID: "new-user"}}
+	validator := &fakeValidator{user: &User{ID: "new-user", Username: "alice"}}
 
-	_, err := AddServerTransaction(context.Background(), AddServerInput{URL: root, Token: "our-token"}, func(string, string) (ServerValidator, error) {
+	_, err := AddServerTransaction(t.Context(), AddServerInput{URL: root, Token: "new-token", DisplayName: "New"}, func(string, string) (ServerValidator, error) {
 		return validator, nil
 	}, secrets, tx)
-	if !errors.Is(err, ErrConcurrentCredentialChange) || strings.Contains(err.Error(), "our-token") || strings.Contains(err.Error(), "old-token") {
-		t.Fatalf("error = %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := secrets.values[id]; ok {
-		t.Fatalf("concurrently deleted credential was restored: %#v", secrets.values)
+	if len(tx.registry.Servers) != 3 || tx.registry.Servers[0].ID != "first" || tx.registry.Servers[1].ID != id || tx.registry.Servers[2].ID != "last" {
+		t.Fatalf("order changed: %#v", tx.registry.Servers)
+	}
+	if tx.registry.Servers[1].DisplayName != "New" || tx.registry.Servers[1].UserID != "new-user" || secrets.values[id] != "new-token" {
+		t.Fatalf("update failed: registry=%#v secrets=%#v", tx.registry, secrets.values)
 	}
 }
 
 func TestAddServerTransactionReportsUnlockFailureOnEarlyReturn(t *testing.T) {
 	unlockErr := errors.New("unlock failed")
-	tx := &fakeConfigTransaction{loadErr: errors.New("load failed"), unlockErr: unlockErr}
+	tx := &fakeRegistryTransaction{registry: config.NewServerRegistry(), loadErr: errors.New("load failed"), unlockErr: unlockErr}
 	validator := &fakeValidator{user: &User{ID: "user-1"}}
 
-	_, err := AddServerTransaction(context.Background(), AddServerInput{URL: "https://chat.example", Token: "token"}, func(string, string) (ServerValidator, error) {
+	_, err := AddServerTransaction(t.Context(), AddServerInput{URL: "https://chat.example", Token: "token"}, func(string, string) (ServerValidator, error) {
 		return validator, nil
 	}, &fakeSecrets{}, tx)
-	if !errors.Is(err, unlockErr) {
-		t.Fatalf("error = %v, want unlock failure in chain", err)
-	}
-	if tx.unlocks != 1 {
-		t.Fatalf("unlock calls = %d, want 1", tx.unlocks)
-	}
-}
-
-func TestAddServerTransactionRollsBackCredentialForUnsupportedInlineServers(t *testing.T) {
-	const token = "pat-super-secret"
-	existingRoot, _ := CanonicalServerRoot("https://existing.example")
-	existingID := ServerID(existingRoot)
-	document := []byte("mattermost_servers = [{ id = '" + existingID + "', url = '" + existingRoot + "' }]\n")
-
-	tests := []struct {
-		name      string
-		root      string
-		oldToken  string
-		wantToken string
-	}{
-		{name: "existing server restores prior token", root: existingRoot, oldToken: "old-token", wantToken: "old-token"},
-		{name: "new server removes newly written token", root: "https://new.example"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root, err := CanonicalServerRoot(tt.root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			id := ServerID(root)
-			secrets := &fakeSecrets{values: map[string]string{}}
-			if tt.oldToken != "" {
-				secrets.values[id] = tt.oldToken
-			}
-			tx := &fakeConfigTransaction{document: append([]byte(nil), document...)}
-			validator := &fakeValidator{user: &User{ID: "user-1"}}
-
-			_, err = AddServerTransaction(context.Background(), AddServerInput{URL: root, Token: token}, func(string, string) (ServerValidator, error) {
-				return validator, nil
-			}, secrets, tx)
-			if err == nil || !strings.Contains(err.Error(), "mattermost_servers must use [[mattermost_servers]] array tables") || strings.Contains(err.Error(), token) {
-				t.Fatalf("error = %v", err)
-			}
-			if tx.saveCalls != 0 || string(tx.document) != string(document) {
-				t.Fatalf("config changed: saves=%d document=%q", tx.saveCalls, tx.document)
-			}
-			got, ok := secrets.values[id]
-			if tt.wantToken == "" {
-				if ok {
-					t.Fatalf("new token remains installed: %q", got)
-				}
-			} else if !ok || got != tt.wantToken {
-				t.Fatalf("credential = %q, present=%v, want %q", got, ok, tt.wantToken)
-			}
-		})
+	if !errors.Is(err, unlockErr) || tx.unlocks != 1 {
+		t.Fatalf("error=%v unlocks=%d", err, tx.unlocks)
 	}
 }
