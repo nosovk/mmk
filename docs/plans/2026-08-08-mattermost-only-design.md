@@ -121,9 +121,32 @@ Direct-message display names are derived from channel participants. Artificial d
 
 `mmk --add-server` prompts for a server URL and Personal Access Token. It normalizes the URL and validates the credentials through `GET /api/v4/users/me` before saving anything.
 
-Configuration stores only non-secret server metadata. Tokens are stored in the operating-system credential store. If secure storage is unavailable, onboarding fails with an actionable error instead of writing a plaintext token.
+Mattermost connections are stored separately from general UI configuration:
 
-Onboarding validates before taking the config lock, then holds an OS-level lock across the latest config re-read, credential replacement, targeted TOML edit, and atomic rename. If the config write fails, credential rollback is conditional on the stored token still matching the token written by that onboarding attempt, so a concurrent credential change is reported instead of overwritten.
+```text
+~/.config/mmk/config.toml   # UI and application settings
+~/.config/mmk/servers.toml  # Mattermost server registry
+~/.config/mmk/servers.lock  # onboarding transaction lock
+```
+
+`servers.toml` is owned exclusively by the Mattermost connection layer and stores only non-secret server metadata. Tokens are stored in the operating-system credential store. If secure storage is unavailable, onboarding fails with an actionable error instead of writing a plaintext token.
+
+The registry format is versioned:
+
+```toml
+version = 1
+
+[[servers]]
+id = "chat-example-com-0123456789abcdef"
+url = "https://chat.example.com"
+display_name = "Example Chat"
+user_id = "user-id"
+username = "alice"
+```
+
+Onboarding takes an inter-process lock, re-reads `servers.toml`, updates an existing server in place or appends a new one, writes the PAT, and atomically replaces the registry. General `config.toml` writers never touch this file, preventing lost updates between UI settings and server onboarding.
+
+Onboarding validates before taking `servers.lock`, then holds the OS-level lock across the latest registry re-read, credential replacement, ordered registry update, and atomic rename. If the registry write fails, credential rollback is conditional on the stored token still matching the token written by that onboarding attempt, so a concurrent credential change is reported instead of overwritten.
 
 ## Startup And Data Flow
 

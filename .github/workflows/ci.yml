@@ -79,6 +79,12 @@ jobs:
       - name: Test injectable credential adapter
         run: go test ./internal/mattermost ./internal/config ./internal/lockfile ./cmd/mmk
 
+      - name: Vet relevant packages
+        run: go vet ./internal/mattermost ./internal/config ./internal/lockfile ./cmd/mmk
+
+      - name: Build command
+        run: go build ./cmd/mmk
+
   macos-credentials:
     name: macOS credential adapter
     runs-on: macos-latest
@@ -96,3 +102,32 @@ jobs:
 
       - name: Test injectable credential adapter
         run: go test ./internal/mattermost ./internal/config ./internal/lockfile ./cmd/mmk
+
+      - name: Vet relevant packages
+        run: go vet ./internal/mattermost ./internal/config ./internal/lockfile ./cmd/mmk
+
+      - name: Build command
+        run: go build ./cmd/mmk
+
+  darwin-nocgo-compile:
+    name: Darwin no-cgo compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Compile relevant tests without cgo
+        env:
+          GOOS: darwin
+          CGO_ENABLED: 0
+        run: |
+          go test -c -o /tmp/config.test ./internal/config
+          go test -c -o /tmp/mattermost.test ./internal/mattermost
+          go test -c -o /tmp/lockfile.test ./internal/lockfile
+          go test -c -o /tmp/mmk.test ./cmd/mmk

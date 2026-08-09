@@ -164,14 +164,14 @@ git commit -m "feat: load Mattermost teams and channels"
 **Files:**
 - Create: `internal/mattermost/auth.go`
 - Create: `internal/mattermost/auth_test.go`
-- Modify: `internal/config/config.go`
-- Modify: `internal/config/config_test.go`
+- Create: `internal/config/server_registry.go`
+- Create: `internal/config/server_registry_test.go`
 - Modify: `cmd/mmk/onboarding.go`
 - Create: `cmd/mmk/onboarding_mattermost_test.go`
 
 **Step 1: Write failing tests**
 
-Test URL normalization, server config persistence without tokens, credential-store key naming, validation through `/users/me`, and failure when secret storage is unavailable.
+Test URL normalization, versioned `servers.toml` persistence without tokens, credential-store key naming, validation through `/users/me`, and failure when secret storage is unavailable.
 
 **Step 2: Verify RED**
 
@@ -181,9 +181,9 @@ Expected: FAIL because the Mattermost onboarding path does not exist.
 
 **Step 3: Implement minimal onboarding core**
 
-Create testable non-interactive onboarding logic taking a secret-store interface. Wire `mmk --add-server` to the existing form library. Store URL and display metadata in TOML and PAT only in secure storage.
+Create testable non-interactive onboarding logic taking a secret-store interface. Wire `mmk --add-server` to the existing form library. Store URL and display metadata in the dedicated `~/.config/mmk/servers.toml` registry and PAT only in secure storage. Use `~/.config/mmk/servers.lock` to serialize the full read/credential-write/registry-write transaction across processes. Re-read the registry after acquiring the lock, update matching server IDs in place, append new servers, and atomically replace the registry. Do not edit general `config.toml`.
 
-The production transaction validates first, then acquires an OS file lock, re-reads the latest config under that lock, updates or appends only the matching `[[mattermost_servers]]` table, writes through an atomic same-directory rename, and conditionally rolls the credential back only if it still equals the token written by this operation.
+The production transaction validates first, then acquires `servers.lock`, re-reads the latest `servers.toml` under that lock, updates the matching `[[servers]]` entry in place or appends it, writes through an atomic same-directory rename, and conditionally rolls the credential back only if it still equals the token written by this operation. The registry decoder rejects unknown fields because this file has a single owner; new files use mode `0600`, and existing secure modes are preserved.
 
 **Step 4: Verify GREEN**
 
