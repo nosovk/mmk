@@ -2,6 +2,7 @@ package mattermost
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -586,6 +587,194 @@ func TestClient_ChannelMembershipsForUserValidatesIDsWithoutRequest(t *testing.T
 				t.Fatalf("requests = %d, want 0", got)
 			}
 		})
+	}
+}
+
+func TestClient_UsersByIDsPostsDeduplicatedIDsAndOrdersRequestedUsers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodPost; got != want {
+			t.Errorf("method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.Path, "/api/v4/users/ids"; got != want {
+			t.Errorf("path = %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("Content-Type"), "application/json"; got != want {
+			t.Errorf("Content-Type = %q, want %q", got, want)
+		}
+		var ids []string
+		if err := json.NewDecoder(r.Body).Decode(&ids); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if want := []string{"user-2", "user-1"}; !reflect.DeepEqual(ids, want) {
+			t.Fatalf("request IDs = %#v, want %#v", ids, want)
+		}
+		_, _ = io.WriteString(w, `[
+			{"id":"unexpected","username":"ignored"},
+			{"id":"user-1","username":"one"},
+			{"id":"user-2","nickname":"Two"},
+			{"id":"user-1","username":"duplicate"}
+		]`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	users, err := client.UsersByIDs(context.Background(), []string{"user-2", "user-1", "user-2"})
+	if err != nil {
+		t.Fatalf("UsersByIDs returned error: %v", err)
+	}
+	want := []User{
+		{ID: "user-2", Nickname: "Two"},
+		{ID: "user-1", Username: "one"},
+	}
+	if !reflect.DeepEqual(users, want) {
+		t.Fatalf("users = %#v, want %#v", users, want)
+	}
+}
+
+func TestClient_UsersByIDsBatchesOneHundredIDs(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		var ids []string
+		if err := json.NewDecoder(r.Body).Decode(&ids); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(ids) > 100 {
+			t.Errorf("batch size = %d, want at most 100", len(ids))
+		}
+		response := make([]userResponse, len(ids))
+		for i, id := range ids {
+			response[len(ids)-1-i] = userResponse{ID: id, Username: id}
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	ids := make([]string, 201)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("user-%03d", i)
+	}
+	users, err := client.UsersByIDs(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("UsersByIDs returned error: %v", err)
+	}
+	if got, want := requests.Load(), int32(3); got != want {
+		t.Fatalf("requests = %d, want %d", got, want)
+	}
+	for i := range users {
+		if got, want := users[i].ID, ids[i]; got != want {
+			t.Fatalf("users[%d].ID = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestClient_UsersByIDsValidatesAndHandlesEmptyInputWithoutRequest(t *testing.T) {
+	requests := &atomic.Int32{}
+	client := newCountingMattermostClient(t, requests)
+
+	users, err := client.UsersByIDs(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("UsersByIDs empty input returned error: %v", err)
+	}
+	if users == nil || len(users) != 0 {
+		t.Fatalf("users = %#v, want non-nil empty slice", users)
+	}
+	if _, err := client.UsersByIDs(context.Background(), []string{"user-1", " "}); err == nil {
+		t.Fatal("UsersByIDs accepted a blank ID")
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
+func TestClient_UsersByGroupChannelIDsPostsBatchesAndIgnoresUnexpectedKeys(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if got, want := r.URL.Path, "/api/v4/users/group_channels"; got != want {
+			t.Errorf("path = %q, want %q", got, want)
+		}
+		var ids []string
+		if err := json.NewDecoder(r.Body).Decode(&ids); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(ids) > 100 {
+			t.Errorf("batch size = %d, want at most 100", len(ids))
+		}
+		response := map[string][]userResponse{"unexpected": {{ID: "ignored"}}}
+		for _, id := range ids {
+			response[id] = []userResponse{{ID: "member-" + id, Nickname: id}}
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	ids := make([]string, 101)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("channel-%03d", i)
+	}
+	ids = append(ids, ids[0])
+	usersByChannel, err := client.UsersByGroupChannelIDs(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("UsersByGroupChannelIDs returned error: %v", err)
+	}
+	if got, want := requests.Load(), int32(2); got != want {
+		t.Fatalf("requests = %d, want %d", got, want)
+	}
+	if _, ok := usersByChannel["unexpected"]; ok {
+		t.Fatal("result retained an unexpected response key")
+	}
+	if got, want := usersByChannel[ids[0]], []User{{ID: "member-" + ids[0], Nickname: ids[0]}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("users for %q = %#v, want %#v", ids[0], got, want)
+	}
+}
+
+func TestClient_UsersByGroupChannelIDsValidatesAndHandlesEmptyInputWithoutRequest(t *testing.T) {
+	requests := &atomic.Int32{}
+	client := newCountingMattermostClient(t, requests)
+
+	users, err := client.UsersByGroupChannelIDs(context.Background(), []string{})
+	if err != nil {
+		t.Fatalf("UsersByGroupChannelIDs empty input returned error: %v", err)
+	}
+	if users == nil || len(users) != 0 {
+		t.Fatalf("users = %#v, want non-nil empty map", users)
+	}
+	if _, err := client.UsersByGroupChannelIDs(context.Background(), []string{"channel-1", "\t"}); err == nil {
+		t.Fatal("UsersByGroupChannelIDs accepted a blank ID")
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
+func TestClient_BulkUserMethodsReturnContextualBatchErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, `{"message":"upstream unavailable"}`)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	if _, err := client.UsersByIDs(context.Background(), []string{"user-1"}); err == nil || !strings.Contains(err.Error(), "users by IDs batch 1") {
+		t.Fatalf("UsersByIDs error = %v, want batch context", err)
+	}
+	if _, err := client.UsersByGroupChannelIDs(context.Background(), []string{"channel-1"}); err == nil || !strings.Contains(err.Error(), "group channel users batch 1") {
+		t.Fatalf("UsersByGroupChannelIDs error = %v, want batch context", err)
 	}
 }
 

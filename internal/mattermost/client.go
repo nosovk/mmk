@@ -1,6 +1,7 @@
 package mattermost
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -23,6 +24,7 @@ const (
 	// The unpaginated cross-team channel endpoint needs a higher finite cap.
 	maxChannelBodyBytes = 64 << 20
 	maxErrorBodyBytes   = 1 << 20
+	bulkLookupBatchSize = 100
 )
 
 type Client struct {
@@ -229,6 +231,120 @@ func (c *Client) ChannelMembershipsForUser(ctx context.Context, userID, teamID s
 		memberships[i] = wire[i].domain()
 	}
 	return memberships, nil
+}
+
+// UsersByIDs returns requested users in first-seen ID order. Mattermost users
+// not present in the request are ignored, as are duplicate response users.
+func (c *Client) UsersByIDs(ctx context.Context, ids []string) ([]User, error) {
+	unique, err := uniqueNonBlankIDs(ids, "Mattermost user ID")
+	if err != nil {
+		return nil, err
+	}
+	if len(unique) == 0 {
+		return []User{}, nil
+	}
+
+	usersByID := make(map[string]User, len(unique))
+	requested := make(map[string]struct{}, len(unique))
+	for _, id := range unique {
+		requested[id] = struct{}{}
+	}
+	for batchIndex, batch := range batches(unique, bulkLookupBatchSize) {
+		var wire []userResponse
+		if err := c.doJSON(ctx, http.MethodPost, "users/ids", batch, &wire); err != nil {
+			return nil, fmt.Errorf("fetch Mattermost users by IDs batch %d: %w", batchIndex+1, err)
+		}
+		for _, item := range wire {
+			if _, ok := requested[item.ID]; !ok {
+				continue
+			}
+			if _, exists := usersByID[item.ID]; exists {
+				continue
+			}
+			usersByID[item.ID] = *item.domain()
+		}
+	}
+
+	users := make([]User, 0, len(usersByID))
+	for _, id := range unique {
+		if user, ok := usersByID[id]; ok {
+			users = append(users, user)
+		}
+	}
+	return users, nil
+}
+
+// UsersByGroupChannelIDs returns group-channel participants for requested
+// channels. Unexpected response keys are ignored.
+func (c *Client) UsersByGroupChannelIDs(ctx context.Context, channelIDs []string) (map[string][]User, error) {
+	unique, err := uniqueNonBlankIDs(channelIDs, "Mattermost channel ID")
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string][]User, len(unique))
+	if len(unique) == 0 {
+		return result, nil
+	}
+
+	requested := make(map[string]struct{}, len(unique))
+	for _, id := range unique {
+		requested[id] = struct{}{}
+	}
+	for batchIndex, batch := range batches(unique, bulkLookupBatchSize) {
+		var wire map[string][]userResponse
+		if err := c.doJSON(ctx, http.MethodPost, "users/group_channels", batch, &wire); err != nil {
+			return nil, fmt.Errorf("fetch Mattermost group channel users batch %d: %w", batchIndex+1, err)
+		}
+		for channelID, items := range wire {
+			if _, ok := requested[channelID]; !ok {
+				continue
+			}
+			seen := make(map[string]struct{}, len(items))
+			users := make([]User, 0, len(items))
+			for _, item := range items {
+				if _, exists := seen[item.ID]; exists {
+					continue
+				}
+				seen[item.ID] = struct{}{}
+				users = append(users, *item.domain())
+			}
+			result[channelID] = users
+		}
+	}
+	return result, nil
+}
+
+func uniqueNonBlankIDs(ids []string, label string) ([]string, error) {
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for index, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("%s at index %d must not be empty", label, index)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique, nil
+}
+
+func batches[T any](values []T, size int) [][]T {
+	result := make([][]T, 0, (len(values)+size-1)/size)
+	for start := 0; start < len(values); start += size {
+		end := min(start+size, len(values))
+		result = append(result, values[start:end])
+	}
+	return result
+}
+
+func (c *Client) doJSON(ctx context.Context, method, endpoint string, input, output any) error {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(input); err != nil {
+		return fmt.Errorf("encode Mattermost request: %w", err)
+	}
+	return c.do(ctx, method, endpoint, &body, output)
 }
 
 func (c *Client) do(ctx context.Context, method, endpoint string, body io.Reader, output any) error {
