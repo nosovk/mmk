@@ -283,6 +283,7 @@ func (c *Client) request(ctx context.Context, method, endpoint string, body io.R
 type redactedError struct {
 	message string
 	matches func(error) bool
+	commit  func() bool
 }
 
 func (e *redactedError) Error() string {
@@ -291,6 +292,10 @@ func (e *redactedError) Error() string {
 
 func (e *redactedError) Is(target error) bool {
 	return e.matches != nil && e.matches(target)
+}
+
+func (e *redactedError) Committed() bool {
+	return e.commit != nil && e.commit()
 }
 
 func redactError(operation string, err error, secrets ...string) error {
@@ -303,6 +308,10 @@ func redactError(operation string, err error, secrets ...string) error {
 	return &redactedError{
 		message: operation + ": " + message,
 		matches: func(target error) bool { return errors.Is(err, target) },
+		commit: func() bool {
+			var committed interface{ Committed() bool }
+			return errors.As(err, &committed) && committed.Committed()
+		},
 	}
 }
 

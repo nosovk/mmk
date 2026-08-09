@@ -102,7 +102,7 @@ func TestAddServerTransactionPersistsValidatedServerAndToken(t *testing.T) {
 	if len(tx.registry.Servers) != 1 || tx.registry.Servers[0] != server || secrets.values[server.ID] != "new-token" || validator.teamCalls != 1 {
 		t.Fatalf("registry=%#v secrets=%#v team calls=%d", tx.registry, secrets.values, validator.teamCalls)
 	}
-	if tx.events != "lock,load,set,save,unlock" {
+	if tx.events != "lock,load,get,set,save,unlock" {
 		t.Fatalf("transaction sequence = %q", tx.events)
 	}
 }
@@ -127,6 +127,50 @@ func TestAddServerTransactionSaveFailureRestoresPreviousCredential(t *testing.T)
 	}
 	if secrets.values[id] != "old-token" || len(tx.registry.Servers) != 1 || tx.registry.Servers[0].DisplayName != "Old" {
 		t.Fatalf("rollback failed: secrets=%#v registry=%#v", secrets.values, tx.registry)
+	}
+}
+
+func TestAddServerTransactionRestoresOrphanCredentialOnPreCommitFailure(t *testing.T) {
+	root, _ := CanonicalServerRoot("https://chat.example")
+	id := ServerID(root)
+	saveErr := errors.New("save failed before replacement")
+	tx := &fakeRegistryTransaction{registry: config.NewServerRegistry(), saveErr: saveErr}
+	secrets := &fakeSecrets{values: map[string]string{id: "orphan-token"}}
+	validator := &fakeValidator{user: &User{ID: "user-1"}}
+
+	_, err := AddServerTransaction(t.Context(), AddServerInput{URL: root, Token: "new-token"}, func(string, string) (ServerValidator, error) {
+		return validator, nil
+	}, secrets, tx)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("error = %v", err)
+	}
+	if secrets.values[id] != "orphan-token" || len(secrets.deletes) != 0 {
+		t.Fatalf("orphan credential was not restored: values=%#v deletes=%v", secrets.values, secrets.deletes)
+	}
+}
+
+func TestAddServerTransactionKeepsPATAfterCommittedDurabilityFailure(t *testing.T) {
+	root, _ := CanonicalServerRoot("https://chat.example")
+	id := ServerID(root)
+	durabilityCause := errors.New("directory sync failed")
+	tx := &fakeRegistryTransaction{
+		registry: config.NewServerRegistry(),
+		saveErr:  config.NewCommittedServerRegistryError(durabilityCause),
+	}
+	secrets := &fakeSecrets{}
+	validator := &fakeValidator{user: &User{ID: "user-1"}}
+
+	server, err := AddServerTransaction(t.Context(), AddServerInput{URL: root, Token: "new-token"}, func(string, string) (ServerValidator, error) {
+		return validator, nil
+	}, secrets, tx)
+	if !errors.Is(err, durabilityCause) || !errors.Is(err, config.ErrServerRegistryDurability) || !config.RegistrySaveCommitted(err) {
+		t.Fatalf("error = %v", err)
+	}
+	if secrets.values[id] != "new-token" || len(secrets.deletes) != 0 {
+		t.Fatalf("committed save rolled back PAT: values=%#v deletes=%v", secrets.values, secrets.deletes)
+	}
+	if server.ID != id || len(tx.registry.Servers) != 1 || tx.registry.Servers[0] != server {
+		t.Fatalf("committed registry/server mismatch: server=%#v registry=%#v", server, tx.registry)
 	}
 }
 

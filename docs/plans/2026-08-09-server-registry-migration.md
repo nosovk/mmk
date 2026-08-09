@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Move Mattermost connection metadata out of the shared `config.toml` into a dedicated, versioned, atomically updated `servers.toml` registry.
+**Goal:** Move Mattermost connection metadata out of the shared `config.toml` into a dedicated, versioned `servers.toml` registry with atomic replacement visibility and explicit durability reporting.
 
 **Architecture:** `config.toml` remains owned by UI and legacy settings writers. Mattermost onboarding exclusively owns `servers.toml`, serializes transactions with `servers.lock`, stores PATs in the OS credential store, and conditionally rolls credentials back if registry persistence fails.
 
@@ -21,7 +21,7 @@
 
 **Step 1: Write failing registry tests**
 
-Test missing-file defaults, version validation, ordered round trips, duplicate ID rejection, unknown-field rejection or documented handling, token-free serialization, and atomic file replacement.
+Test missing-file defaults, version validation, ordered round trips, duplicate ID rejection, unknown-field rejection, token-free serialization, symlink rejection, pre-commit replacement failure, and post-commit durability failure.
 
 **Step 2: Verify RED**
 
@@ -40,7 +40,7 @@ type ServerRegistry struct {
 }
 ```
 
-Use version `1`, preserve server order, reject duplicate IDs and unknown fields, and atomically save through a same-directory temporary file, sync, close, rename, and directory sync where supported. Create registries with mode `0600` and preserve an existing mode only when it is already owner-only. Remove Mattermost server entries from the general `Config` type and delete the targeted general-TOML editor.
+Use version `1`, preserve server order, reject duplicate IDs, unknown fields, and symlinked registry paths. Save through a same-directory temporary file, sync and close it, then replace the registry. Return a typed save error that identifies whether replacement committed. Unix uses rename followed by best-effort directory sync; Windows uses `MoveFileExW` with replacement and write-through flags. Create registries with mode `0600` and preserve an existing mode only when it is already owner-only. Remove Mattermost server entries from the general `Config` type and delete the targeted general-TOML editor.
 
 **Step 4: Verify GREEN**
 
@@ -76,7 +76,7 @@ Expected: FAIL because onboarding still edits the general config document.
 
 **Step 3: Implement the registry transaction**
 
-Replace document-edit callbacks with registry load/save callbacks. Keep validation before the lock, then lock, reload, inspect previous credential, write PAT, atomically save registry, and release. Preserve conditional rollback and `ErrConcurrentCredentialChange` behavior.
+Replace document-edit callbacks with registry load/save callbacks. Keep validation before the lock, then lock, reload, inspect any previous credential regardless of registry membership, write PAT, replace the registry, and release. Preserve conditional rollback and `ErrConcurrentCredentialChange` behavior for pre-commit failures. Once replacement commits, retain the PAT and return a committed durability error instead of rolling back.
 
 **Step 4: Verify GREEN**
 

@@ -144,9 +144,11 @@ user_id = "user-id"
 username = "alice"
 ```
 
-Onboarding takes an inter-process lock, re-reads `servers.toml`, updates an existing server in place or appends a new one, writes the PAT, and atomically replaces the registry. General `config.toml` writers never touch this file, preventing lost updates between UI settings and server onboarding.
+Onboarding takes an inter-process lock, re-reads `servers.toml`, updates an existing server in place or appends a new one, writes the PAT, and replaces the registry with atomic visibility. General `config.toml` writers never touch this file, preventing lost updates between UI settings and server onboarding.
 
-Onboarding validates before taking `servers.lock`, then holds the OS-level lock across the latest registry re-read, credential replacement, ordered registry update, and atomic rename. If the registry write fails, credential rollback is conditional on the stored token still matching the token written by that onboarding attempt, so a concurrent credential change is reported instead of overwritten.
+Onboarding validates before taking `servers.lock`, then holds the OS-level lock across the latest registry re-read, credential replacement, ordered registry update, and replacement. A pre-replacement failure conditionally rolls the credential back only when the stored token still matches the token written by that onboarding attempt, so a concurrent credential change is reported instead of overwritten. Once replacement commits, the PAT is not rolled back; a later durability-sync failure reports that the registry is installed but crash durability could not be confirmed.
+
+On Unix, replacement uses a same-filesystem rename followed by best-effort parent-directory sync. On Windows, replacement uses `MoveFileExW` with replacement and write-through flags. These provide atomic visibility and request platform durability, but do not claim an unconditional crash-survival guarantee across every filesystem and storage stack. A symlinked `servers.toml` is rejected rather than followed.
 
 ## Startup And Data Flow
 

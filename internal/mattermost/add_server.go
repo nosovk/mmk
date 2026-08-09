@@ -67,7 +67,7 @@ func AddServerTransaction(ctx context.Context, input AddServerInput, newValidato
 	if err != nil {
 		return config.MattermostServer{}, fmt.Errorf("load current Mattermost server registry: %w", err)
 	}
-	server, previousToken, hadPreviousToken, err := prepareServerCredential(ctx, registry, input, root, user, secrets)
+	server, previousToken, hadPreviousToken, err := prepareServerCredential(ctx, input, root, user, secrets)
 	if err != nil {
 		return config.MattermostServer{}, err
 	}
@@ -85,6 +85,9 @@ func AddServerTransaction(ctx context.Context, input AddServerInput, newValidato
 		updated.Servers = append(updated.Servers, server)
 	}
 	if err := transaction.Save(ctx, updated); err != nil {
+		if config.RegistrySaveCommitted(err) {
+			return server, redactError("confirm Mattermost server registry durability", err, input.Token, previousToken)
+		}
 		return config.MattermostServer{}, rollbackServerCredential(ctx, err, server.ID, input.Token, previousToken, hadPreviousToken, secrets)
 	}
 	return server, nil
@@ -115,25 +118,12 @@ func validateServer(ctx context.Context, input AddServerInput, newValidator Vali
 	return root, user, nil
 }
 
-func prepareServerCredential(ctx context.Context, registry config.ServerRegistry, input AddServerInput, root string, user *User, secrets SecretStore) (config.MattermostServer, string, bool, error) {
+func prepareServerCredential(ctx context.Context, input AddServerInput, root string, user *User, secrets SecretStore) (config.MattermostServer, string, bool, error) {
 	server := config.MattermostServer{ID: ServerID(root), URL: root, DisplayName: strings.TrimSpace(input.DisplayName), UserID: user.ID, Username: user.Username}
-	exists := false
-	for _, configured := range registry.Servers {
-		if configured.ID == server.ID {
-			exists = true
-			break
-		}
-	}
-	var previousToken string
-	hadPreviousToken := false
-	if exists {
-		var err error
-		previousToken, err = secrets.Get(ctx, server.ID)
-		if err == nil {
-			hadPreviousToken = true
-		} else if !errors.Is(err, ErrSecretNotFound) {
-			return config.MattermostServer{}, "", false, redactError("read previous Mattermost credential", err, input.Token)
-		}
+	previousToken, err := secrets.Get(ctx, server.ID)
+	hadPreviousToken := err == nil
+	if err != nil && !errors.Is(err, ErrSecretNotFound) {
+		return config.MattermostServer{}, "", false, redactError("read previous Mattermost credential", err, input.Token)
 	}
 	if err := secrets.Set(ctx, server.ID, input.Token); err != nil {
 		return config.MattermostServer{}, "", false, redactError("store Mattermost credential", err, input.Token)

@@ -6,13 +6,42 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
 
 const ServerRegistryVersion = 1
+
+var ErrServerRegistryDurability = errors.New("Mattermost server registry installed but durability could not be confirmed")
+
+// ServerRegistrySaveError reports whether the replacement commit point was
+// crossed before a save failed. Callers must not roll back related state when
+// Committed returns true because the new registry is already visible.
+type ServerRegistrySaveError struct {
+	err       error
+	committed bool
+}
+
+func (e *ServerRegistrySaveError) Error() string { return e.err.Error() }
+func (e *ServerRegistrySaveError) Unwrap() error { return e.err }
+func (e *ServerRegistrySaveError) Committed() bool {
+	return e != nil && e.committed
+}
+
+func NewCommittedServerRegistryError(cause error) error {
+	return &ServerRegistrySaveError{err: errors.Join(ErrServerRegistryDurability, cause), committed: true}
+}
+
+func RegistrySaveCommitted(err error) bool {
+	var saveErr interface{ Committed() bool }
+	return errors.As(err, &saveErr) && saveErr.Committed()
+}
+
+type registrySaveOperations struct {
+	replace func(oldPath, newPath string) error
+	syncDir func(path string) error
+}
 
 // ServerRegistry is the complete, strictly owned servers.toml document.
 type ServerRegistry struct {
@@ -37,6 +66,9 @@ func NewServerRegistry() ServerRegistry {
 // LoadServerRegistry loads the strictly owned registry. Missing and empty
 // files represent an empty version-1 registry.
 func LoadServerRegistry(path string) (ServerRegistry, error) {
+	if err := rejectServerRegistrySymlink(path); err != nil {
+		return ServerRegistry{}, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -66,10 +98,22 @@ func LoadServerRegistryBytes(data []byte) (ServerRegistry, error) {
 	return registry, nil
 }
 
-// SaveServerRegistry validates and atomically replaces servers.toml through a
-// same-directory temporary file. Existing secure permissions are preserved;
-// otherwise the registry is restricted to 0600.
+// SaveServerRegistry validates and replaces servers.toml with atomic visibility
+// through a same-directory temporary file. A returned error may report
+// Committed() == true when replacement succeeded but durability confirmation
+// failed. Existing secure permissions are preserved; otherwise the registry is
+// restricted to 0600.
 func SaveServerRegistry(path string, registry ServerRegistry) error {
+	return saveServerRegistry(path, registry, registrySaveOperations{
+		replace: replaceServerRegistryFile,
+		syncDir: syncRegistryDirectory,
+	})
+}
+
+func saveServerRegistry(path string, registry ServerRegistry, operations registrySaveOperations) error {
+	if err := rejectServerRegistrySymlink(path); err != nil {
+		return err
+	}
 	if err := validateServerRegistry(registry); err != nil {
 		return err
 	}
@@ -109,10 +153,27 @@ func SaveServerRegistry(path string, registry ServerRegistry) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := operations.replace(temporaryPath, path); err != nil {
+		return &ServerRegistrySaveError{err: err}
+	}
+	if err := operations.syncDir(filepath.Dir(path)); err != nil {
+		return NewCommittedServerRegistryError(err)
+	}
+	return nil
+}
+
+func rejectServerRegistrySymlink(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	return syncRegistryDirectory(filepath.Dir(path))
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("Mattermost server registry path %q must not be a symlink", path)
+	}
+	return nil
 }
 
 func validateServerRegistry(registry ServerRegistry) error {
@@ -139,16 +200,4 @@ func validateServerRegistry(registry ServerRegistry) error {
 		}
 	}
 	return nil
-}
-
-func syncRegistryDirectory(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }

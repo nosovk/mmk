@@ -13,6 +13,19 @@ func secretAttributes(serverID string) map[string]string {
 	return map[string]string{"service": SecretServiceName(), "account": SecretAccountName(serverID)}
 }
 
+type linuxSecretSearchService interface {
+	SearchItems(attributes map[string]string) (unlockedItems []*gosecret.Item, lockedItems []*gosecret.Item, err error)
+	Close() error
+}
+
+type linuxSecretServiceFactory func() (linuxSecretSearchService, error)
+
+var newLinuxSecretSearchService linuxSecretServiceFactory = func() (linuxSecretSearchService, error) {
+	return gosecret.NewService()
+}
+
+var deleteLinuxSecretSearchItem = func(item *gosecret.Item) error { return item.Delete() }
+
 func (s *OSSecretStore) Get(_ context.Context, serverID string) (string, error) {
 	service, err := gosecret.NewService()
 	if err != nil {
@@ -43,8 +56,12 @@ func (s *OSSecretStore) Set(_ context.Context, serverID, token string) error {
 	})
 }
 
-func (s *OSSecretStore) Delete(_ context.Context, serverID string) error {
-	service, err := gosecret.NewService()
+func (s *OSSecretStore) Delete(ctx context.Context, serverID string) error {
+	return deleteLinuxSecret(ctx, serverID, newLinuxSecretSearchService, deleteLinuxSecretSearchItem)
+}
+
+func deleteLinuxSecret(_ context.Context, serverID string, newService linuxSecretServiceFactory, deleteItem func(*gosecret.Item) error) error {
+	service, err := newService()
 	if err != nil {
 		return secretStoreUnavailable(err)
 	}
@@ -61,7 +78,7 @@ func (s *OSSecretStore) Delete(_ context.Context, serverID string) error {
 			if item == nil {
 				continue
 			}
-			if err := item.Delete(); err != nil {
+			if err := deleteItem(item); err != nil {
 				return secretStoreUnavailable(err)
 			}
 		}

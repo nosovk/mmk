@@ -3,11 +3,96 @@
 package mattermost
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"r00t2.io/gosecret"
 )
+
+type fakeLinuxSecretSearchService struct {
+	unlocked []*gosecret.Item
+	locked   []*gosecret.Item
+	err      error
+	closed   bool
+}
+
+func (f *fakeLinuxSecretSearchService) SearchItems(map[string]string) ([]*gosecret.Item, []*gosecret.Item, error) {
+	return f.unlocked, f.locked, f.err
+}
+
+func (f *fakeLinuxSecretSearchService) Close() error {
+	f.closed = true
+	return nil
+}
+
+type fakeLinuxSecretItemDeleter struct {
+	calls int
+	errAt int
+	err   error
+}
+
+func (f *fakeLinuxSecretItemDeleter) delete(*gosecret.Item) error {
+	f.calls++
+	if f.calls == f.errAt {
+		return f.err
+	}
+	return nil
+}
+
+func TestOSSecretStoreDeleteClearsDuplicateResults(t *testing.T) {
+	first := gosecret.SecretValue("first-secret")
+	duplicate := gosecret.SecretValue("duplicate-secret")
+	service := &fakeLinuxSecretSearchService{unlocked: []*gosecret.Item{
+		{Secret: &gosecret.Secret{Value: first}},
+		{Secret: &gosecret.Secret{Value: duplicate}},
+	}}
+	deleter := &fakeLinuxSecretItemDeleter{}
+	originalServiceFactory := newLinuxSecretSearchService
+	originalDeleteItem := deleteLinuxSecretSearchItem
+	newLinuxSecretSearchService = func() (linuxSecretSearchService, error) { return service, nil }
+	deleteLinuxSecretSearchItem = deleter.delete
+	t.Cleanup(func() {
+		newLinuxSecretSearchService = originalServiceFactory
+		deleteLinuxSecretSearchItem = originalDeleteItem
+	})
+
+	err := NewOSSecretStore().Delete(context.Background(), "server-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleter.calls != 2 || !service.closed {
+		t.Fatalf("delete calls = %d, closed = %v", deleter.calls, service.closed)
+	}
+	assertZeroedSecretValue(t, first)
+	assertZeroedSecretValue(t, duplicate)
+}
+
+func TestOSSecretStoreDeleteClearsDuplicateResultsOnDeleteError(t *testing.T) {
+	first := gosecret.SecretValue("first-secret")
+	duplicate := gosecret.SecretValue("duplicate-secret")
+	sentinel := errors.New("delete failed")
+	service := &fakeLinuxSecretSearchService{unlocked: []*gosecret.Item{
+		{Secret: &gosecret.Secret{Value: first}},
+		{Secret: &gosecret.Secret{Value: duplicate}},
+	}}
+	deleter := &fakeLinuxSecretItemDeleter{errAt: 1, err: sentinel}
+	originalServiceFactory := newLinuxSecretSearchService
+	originalDeleteItem := deleteLinuxSecretSearchItem
+	newLinuxSecretSearchService = func() (linuxSecretSearchService, error) { return service, nil }
+	deleteLinuxSecretSearchItem = deleter.delete
+	t.Cleanup(func() {
+		newLinuxSecretSearchService = originalServiceFactory
+		deleteLinuxSecretSearchItem = originalDeleteItem
+	})
+
+	err := NewOSSecretStore().Delete(context.Background(), "server-id")
+	if !errors.Is(err, ErrSecretStoreUnavailable) || !service.closed {
+		t.Fatalf("error = %v, closed = %v", err, service.closed)
+	}
+	assertZeroedSecretValue(t, first)
+	assertZeroedSecretValue(t, duplicate)
+}
 
 func TestWithUnlockedSecretItemsClearsEveryReturnedValue(t *testing.T) {
 	first := gosecret.SecretValue("first-secret")

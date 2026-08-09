@@ -1,12 +1,64 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestServerRegistrySaveReportsPreCommitReplacementFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "servers.toml")
+	original := []byte("version = 1\n")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("replace failed")
+	registry := ServerRegistry{Version: ServerRegistryVersion, Servers: []MattermostServer{{ID: "one", URL: "https://one.example", UserID: "user-1"}}}
+
+	err := saveServerRegistry(path, registry, registrySaveOperations{
+		replace: func(string, string) error { return sentinel },
+		syncDir: func(string) error { t.Fatal("directory sync called before replacement"); return nil },
+	})
+	if !errors.Is(err, sentinel) || RegistrySaveCommitted(err) {
+		t.Fatalf("error = %v, committed = %v", err, RegistrySaveCommitted(err))
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("registry changed after pre-commit failure: %q", got)
+	}
+}
+
+func TestServerRegistrySaveReportsCommittedDurabilityFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "servers.toml")
+	if err := os.WriteFile(path, []byte("version = 1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("directory sync failed")
+	registry := ServerRegistry{Version: ServerRegistryVersion, Servers: []MattermostServer{{ID: "one", URL: "https://one.example", UserID: "user-1"}}}
+
+	err := saveServerRegistry(path, registry, registrySaveOperations{
+		replace: os.Rename,
+		syncDir: func(string) error { return sentinel },
+	})
+	if !errors.Is(err, sentinel) || !errors.Is(err, ErrServerRegistryDurability) || !RegistrySaveCommitted(err) {
+		t.Fatalf("error = %v, committed = %v", err, RegistrySaveCommitted(err))
+	}
+	got, loadErr := LoadServerRegistry(path)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if !reflect.DeepEqual(got, registry) {
+		t.Fatalf("installed registry = %#v, want %#v", got, registry)
+	}
+}
 
 func TestServerRegistryLoadMissingAndEmptyFiles(t *testing.T) {
 	dir := t.TempDir()
@@ -30,6 +82,34 @@ func TestServerRegistryLoadMissingAndEmptyFiles(t *testing.T) {
 	}
 	if registry.Version != ServerRegistryVersion || len(registry.Servers) != 0 {
 		t.Fatalf("empty registry = %#v", registry)
+	}
+}
+
+func TestServerRegistryRejectsSymlinkOnLoadAndSave(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.toml")
+	path := filepath.Join(dir, "servers.toml")
+	original := []byte("version = 1\n")
+	if err := os.WriteFile(target, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := LoadServerRegistry(path); err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("load error = %v", err)
+	}
+	registry := ServerRegistry{Version: ServerRegistryVersion, Servers: []MattermostServer{{ID: "one", URL: "https://one.example", UserID: "user-1"}}}
+	if err := SaveServerRegistry(path, registry); err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") || RegistrySaveCommitted(err) {
+		t.Fatalf("save error = %v, committed = %v", err, RegistrySaveCommitted(err))
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("symlink target changed: %q", got)
 	}
 }
 

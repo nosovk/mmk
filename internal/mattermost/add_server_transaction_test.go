@@ -63,6 +63,10 @@ func (f *fakeRegistryTransaction) Save(_ context.Context, registry config.Server
 		}
 	}
 	if f.saveErr != nil {
+		if config.RegistrySaveCommitted(f.saveErr) {
+			f.registry = registry
+			f.registry.Servers = append([]config.MattermostServer(nil), registry.Servers...)
+		}
 		return f.saveErr
 	}
 	f.registry = registry
