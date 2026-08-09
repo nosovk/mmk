@@ -157,11 +157,11 @@ func fetchTeamMemberships(ctx context.Context, client ServerBootstrapClient, ser
 		}
 		byTeam[result.index] = result.memberships
 	}
-	if firstErr != nil {
-		return nil, firstErr
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	memberships := make(map[string]mattermost.ChannelMembership)
 	for _, teamMemberships := range byTeam {

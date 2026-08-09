@@ -454,6 +454,53 @@ func TestServerBootstrapCancelsMembershipWorkersOnFirstError(t *testing.T) {
 	}
 }
 
+func TestServerBootstrapParentCancellationReturnsStableContextErrorAfterWorkersStop(t *testing.T) {
+	teams := []mattermost.Team{{ID: "team-a"}, {ID: "team-b"}, {ID: "team-c"}, {ID: "team-d"}}
+	started := make(chan struct{}, len(teams))
+	var mu sync.Mutex
+	active := 0
+	client := &fakeServerBootstrapClient{
+		currentUser: &mattermost.User{ID: "user-1"},
+		teams:       teams,
+		memberships: map[string][]mattermost.ChannelMembership{},
+		membershipHook: func(ctx context.Context, _ string) ([]mattermost.ChannelMembership, error) {
+			mu.Lock()
+			active++
+			mu.Unlock()
+			defer func() {
+				mu.Lock()
+				active--
+				mu.Unlock()
+			}()
+			started <- struct{}{}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := BootstrapServer(ctx, client, mattermost.Server{ID: "server-1", URL: "https://chat.example.com"})
+		done <- err
+	}()
+	for range teams {
+		<-started
+	}
+	cancel()
+	err := <-done
+	if err != context.Canceled {
+		t.Fatalf("error = %T %v, want exact context.Canceled", err, err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("errors.Is(%v, context.Canceled) = false", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active membership calls after return = %d, want 0", active)
+	}
+}
+
 func teamIDs(teams []mattermost.Team) []string {
 	ids := make([]string, len(teams))
 	for i := range teams {

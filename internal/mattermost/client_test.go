@@ -908,6 +908,76 @@ func TestClient_UsersByGroupChannelIDsRejectsMoreThanEightParticipants(t *testin
 	}
 }
 
+func TestClient_UsersByGroupChannelIDsCountsUniqueNonEmptyParticipants(t *testing.T) {
+	participants := make([]userResponse, 64)
+	for i := range participants {
+		if i%9 == 0 {
+			participants[i] = userResponse{}
+			continue
+		}
+		participants[i] = userResponse{ID: fmt.Sprintf("user-%d", i%8), Nickname: fmt.Sprintf("User %d", i%8)}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string][]userResponse{"group-1": participants})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	users, err := client.UsersByGroupChannelIDs(context.Background(), []string{"group-1"})
+	if err != nil {
+		t.Fatalf("UsersByGroupChannelIDs returned error: %v", err)
+	}
+	if got, want := len(users["group-1"]), 8; got != want {
+		t.Fatalf("unique participant count = %d, want %d", got, want)
+	}
+	for _, user := range users["group-1"] {
+		if user.ID == "" {
+			t.Fatal("empty wire user ID was retained")
+		}
+	}
+}
+
+func TestClient_UsersByGroupChannelIDsRejectsRawParticipantFlood(t *testing.T) {
+	participants := make([]userResponse, 65)
+	for i := range participants {
+		participants[i] = userResponse{ID: "duplicate"}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string][]userResponse{"group-1": participants})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	_, err = client.UsersByGroupChannelIDs(context.Background(), []string{"group-1"})
+	if err == nil || !strings.Contains(err.Error(), "group-1") || !strings.Contains(err.Error(), "64") {
+		t.Fatalf("error = %v, want contextual raw participant limit error", err)
+	}
+}
+
+func TestClient_UsersByGroupChannelIDsRejectsUnsafeNonEmptyParticipantID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string][]userResponse{
+			"group-1": {{ID: "valid-user"}, {ID: "unsafe/user"}},
+		})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	_, err = client.UsersByGroupChannelIDs(context.Background(), []string{"group-1"})
+	if err == nil || !strings.Contains(err.Error(), "group-1") || !strings.Contains(err.Error(), "unsafe/user") {
+		t.Fatalf("error = %v, want contextual unsafe participant ID error", err)
+	}
+}
+
 func TestClient_BulkUserMethodsReturnContextualBatchErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)

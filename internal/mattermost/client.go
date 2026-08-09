@@ -28,6 +28,8 @@ const (
 	maxBulkLookupIDs    = 10000
 	maxBulkIDBytes      = 128 // Mattermost uses 26-byte lowercase IDs; allow bounded fixture/legacy IDs.
 	maxGroupUsers       = 8
+	// Bound malformed duplicate-heavy responses before participant normalization.
+	maxRawGroupUsers = 64
 )
 
 type Client struct {
@@ -296,14 +298,23 @@ func (c *Client) UsersByGroupChannelIDs(ctx context.Context, channelIDs []string
 			if _, ok := requested[channelID]; !ok {
 				continue
 			}
-			if len(items) > maxGroupUsers {
-				return nil, fmt.Errorf("Mattermost group channel %q returned %d participants, maximum is %d", channelID, len(items), maxGroupUsers)
+			if len(items) > maxRawGroupUsers {
+				return nil, fmt.Errorf("Mattermost group channel %q returned %d raw user objects, maximum is %d", channelID, len(items), maxRawGroupUsers)
 			}
-			seen := make(map[string]struct{}, len(items))
-			users := make([]User, 0, len(items))
+			seen := make(map[string]struct{}, min(len(items), maxGroupUsers))
+			users := make([]User, 0, min(len(items), maxGroupUsers))
 			for _, item := range items {
+				if item.ID == "" {
+					continue
+				}
+				if err := validateBulkID(item.ID); err != nil {
+					return nil, fmt.Errorf("Mattermost group channel %q returned invalid user ID %q: %w", channelID, item.ID, err)
+				}
 				if _, exists := seen[item.ID]; exists {
 					continue
+				}
+				if len(users) == maxGroupUsers {
+					return nil, fmt.Errorf("Mattermost group channel %q returned more than %d unique participants", channelID, maxGroupUsers)
 				}
 				seen[item.ID] = struct{}{}
 				users = append(users, *item.domain())
