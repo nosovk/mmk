@@ -172,10 +172,29 @@ func TestAddServerTransactionReportsUnlockFailureOnEarlyReturn(t *testing.T) {
 	tx := &fakeRegistryTransaction{registry: config.NewServerRegistry(), loadErr: errors.New("load failed"), unlockErr: unlockErr}
 	validator := &fakeValidator{user: &User{ID: "user-1"}}
 
-	_, err := AddServerTransaction(t.Context(), AddServerInput{URL: "https://chat.example", Token: "token"}, func(string, string) (ServerValidator, error) {
+	server, err := AddServerTransaction(t.Context(), AddServerInput{URL: "https://chat.example", Token: "token"}, func(string, string) (ServerValidator, error) {
 		return validator, nil
 	}, &fakeSecrets{}, tx)
-	if !errors.Is(err, unlockErr) || tx.unlocks != 1 {
-		t.Fatalf("error=%v unlocks=%d", err, tx.unlocks)
+	if !errors.Is(err, unlockErr) || OnboardingTransactionCommitted(err) || server != (config.MattermostServer{}) || tx.unlocks != 1 {
+		t.Fatalf("server=%#v error=%v committed=%v unlocks=%d", server, err, OnboardingTransactionCommitted(err), tx.unlocks)
+	}
+}
+
+func TestAddServerTransactionMarksUnlockFailureAfterSuccessfulCommit(t *testing.T) {
+	root, _ := CanonicalServerRoot("https://chat.example")
+	id := ServerID(root)
+	unlockErr := errors.New("unlock failed after save")
+	tx := &fakeRegistryTransaction{registry: config.NewServerRegistry(), unlockErr: unlockErr}
+	secrets := &fakeSecrets{}
+	validator := &fakeValidator{user: &User{ID: "user-1", Username: "alice"}}
+
+	server, err := AddServerTransaction(t.Context(), AddServerInput{URL: root, Token: "new-token"}, func(string, string) (ServerValidator, error) {
+		return validator, nil
+	}, secrets, tx)
+	if !errors.Is(err, unlockErr) || !errors.Is(err, ErrOnboardingTransactionCommitted) || !OnboardingTransactionCommitted(err) {
+		t.Fatalf("error=%v committed=%v", err, OnboardingTransactionCommitted(err))
+	}
+	if server.ID != id || len(tx.registry.Servers) != 1 || tx.registry.Servers[0] != server || secrets.values[id] != "new-token" {
+		t.Fatalf("committed state lost: server=%#v registry=%#v secrets=%#v", server, tx.registry, secrets.values)
 	}
 }

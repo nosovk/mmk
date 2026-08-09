@@ -67,7 +67,7 @@ func deleteLinuxSecret(_ context.Context, serverID string, newService linuxSecre
 	}
 	defer service.Close()
 	unlocked, locked, err := service.SearchItems(secretAttributes(serverID))
-	return withUnlockedSecretItems(unlocked, func() error {
+	return withSecretSearchItems(unlocked, locked, func() error {
 		if err != nil {
 			return secretStoreUnavailable(err)
 		}
@@ -87,7 +87,7 @@ func deleteLinuxSecret(_ context.Context, serverID string, newService linuxSecre
 }
 
 func secretFromUnlockedItems(unlocked, locked []*gosecret.Item, searchErr error) (secret string, err error) {
-	err = withUnlockedSecretItems(unlocked, func() error {
+	err = withSecretSearchItems(unlocked, locked, func() error {
 		if searchErr != nil {
 			return secretStoreUnavailable(searchErr)
 		}
@@ -107,12 +107,34 @@ func secretFromUnlockedItems(unlocked, locked []*gosecret.Item, searchErr error)
 }
 
 func withUnlockedSecretItems(items []*gosecret.Item, operation func() error) error {
+	return withSecretSearchItems(items, nil, operation)
+}
+
+func withSecretSearchItems(unlocked, locked []*gosecret.Item, operation func() error) error {
 	defer func() {
-		for _, item := range items {
-			if item != nil && item.Secret != nil {
+		for _, item := range uniqueSecretSearchItems(unlocked, locked) {
+			if item.Secret != nil {
 				clear(item.Secret.Value)
 			}
 		}
 	}()
 	return operation()
+}
+
+func uniqueSecretSearchItems(unlocked, locked []*gosecret.Item) []*gosecret.Item {
+	seen := make(map[*gosecret.Item]struct{}, len(unlocked)+len(locked))
+	items := make([]*gosecret.Item, 0, len(unlocked)+len(locked))
+	for _, results := range [][]*gosecret.Item{unlocked, locked} {
+		for _, item := range results {
+			if item == nil {
+				continue
+			}
+			if _, duplicate := seen[item]; duplicate {
+				continue
+			}
+			seen[item] = struct{}{}
+			items = append(items, item)
+		}
+	}
+	return items
 }

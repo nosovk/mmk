@@ -76,7 +76,7 @@ Expected: FAIL because onboarding still edits the general config document.
 
 **Step 3: Implement the registry transaction**
 
-Replace document-edit callbacks with registry load/save callbacks. Keep validation before the lock, then lock, reload, inspect any previous credential regardless of registry membership, write PAT, replace the registry, and release. Preserve conditional rollback and `ErrConcurrentCredentialChange` behavior for pre-commit failures. Once replacement commits, retain the PAT and return a committed durability error instead of rolling back.
+Replace document-edit callbacks with registry load/save callbacks. Keep validation before the lock, then lock, reload, inspect any previous credential regardless of registry membership, write PAT, replace the registry, and release. Preserve conditional rollback and `ErrConcurrentCredentialChange` behavior for pre-commit failures. Once replacement commits, retain the PAT and returned server; post-commit durability or unlock failures return a Mattermost-owned committed transaction marker instead of rolling back.
 
 **Step 4: Verify GREEN**
 

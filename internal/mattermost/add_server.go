@@ -11,6 +11,28 @@ import (
 
 var ErrSecretNotFound = errors.New("Mattermost credential not found")
 var ErrConcurrentCredentialChange = errors.New("Mattermost credential changed concurrently")
+var ErrOnboardingTransactionCommitted = errors.New("Mattermost onboarding transaction committed")
+
+// OnboardingTransactionError indicates that server metadata and credentials
+// were committed even though a later transaction step returned an error.
+type OnboardingTransactionError struct {
+	err error
+}
+
+func (e *OnboardingTransactionError) Error() string { return e.err.Error() }
+func (e *OnboardingTransactionError) Unwrap() error { return e.err }
+func (e *OnboardingTransactionError) Committed() bool {
+	return e != nil
+}
+
+func NewCommittedOnboardingTransactionError(cause error) error {
+	return &OnboardingTransactionError{err: errors.Join(ErrOnboardingTransactionCommitted, cause)}
+}
+
+func OnboardingTransactionCommitted(err error) bool {
+	var transactionErr *OnboardingTransactionError
+	return errors.As(err, &transactionErr) && transactionErr.Committed()
+}
 
 // SecretStore persists Mattermost PATs outside the config file.
 type SecretStore interface {
@@ -56,10 +78,16 @@ func AddServerTransaction(ctx context.Context, input AddServerInput, newValidato
 	if err != nil {
 		return config.MattermostServer{}, fmt.Errorf("lock Mattermost onboarding transaction: %w", err)
 	}
+	committed := false
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
+			unlockFailure := fmt.Errorf("unlock Mattermost onboarding transaction: %w", unlockErr)
+			if committed {
+				err = errors.Join(err, NewCommittedOnboardingTransactionError(unlockFailure))
+				return
+			}
 			server = config.MattermostServer{}
-			err = errors.Join(err, fmt.Errorf("unlock Mattermost onboarding transaction: %w", unlockErr))
+			err = errors.Join(err, unlockFailure)
 		}
 	}()
 
@@ -86,10 +114,12 @@ func AddServerTransaction(ctx context.Context, input AddServerInput, newValidato
 	}
 	if err := transaction.Save(ctx, updated); err != nil {
 		if config.RegistrySaveCommitted(err) {
-			return server, redactError("confirm Mattermost server registry durability", err, input.Token, previousToken)
+			committed = true
+			return server, NewCommittedOnboardingTransactionError(redactError("confirm Mattermost server registry durability", err, input.Token, previousToken))
 		}
 		return config.MattermostServer{}, rollbackServerCredential(ctx, err, server.ID, input.Token, previousToken, hadPreviousToken, secrets)
 	}
+	committed = true
 	return server, nil
 }
 

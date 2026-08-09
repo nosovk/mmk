@@ -151,6 +151,82 @@ func TestSecretFromUnlockedItemsClearsValuesOnSearchError(t *testing.T) {
 	assertZeroedSecretValue(t, value)
 }
 
+func TestSecretFromSearchItemsClearsLockedAndSharedResultsOnSearchError(t *testing.T) {
+	unlockedValue := gosecret.SecretValue("unlocked-secret")
+	lockedValue := gosecret.SecretValue("locked-secret")
+	sharedValue := gosecret.SecretValue("shared-secret")
+	shared := &gosecret.Item{Secret: &gosecret.Secret{Value: sharedValue}}
+	sentinel := errors.New("partial search failed")
+
+	_, err := secretFromUnlockedItems(
+		[]*gosecret.Item{{Secret: &gosecret.Secret{Value: unlockedValue}}, shared},
+		[]*gosecret.Item{{Secret: &gosecret.Secret{Value: lockedValue}}, shared},
+		sentinel,
+	)
+	if !errors.Is(err, ErrSecretStoreUnavailable) {
+		t.Fatalf("error = %v", err)
+	}
+	assertZeroedSecretValue(t, unlockedValue)
+	assertZeroedSecretValue(t, lockedValue)
+	assertZeroedSecretValue(t, sharedValue)
+}
+
+func TestUniqueSecretSearchItemsDeduplicatesPointerIdentity(t *testing.T) {
+	shared := &gosecret.Item{Secret: &gosecret.Secret{Value: gosecret.SecretValue("shared")}}
+	other := &gosecret.Item{Secret: &gosecret.Secret{Value: gosecret.SecretValue("other")}}
+
+	got := uniqueSecretSearchItems([]*gosecret.Item{shared, nil, shared}, []*gosecret.Item{shared, other, other})
+	if len(got) != 2 || got[0] != shared || got[1] != other {
+		t.Fatalf("unique items = %#v", got)
+	}
+}
+
+func TestSecretSearchCleanupClearsLockedAndUnlockedOnOperationError(t *testing.T) {
+	unlockedValue := gosecret.SecretValue("unlocked-secret")
+	lockedValue := gosecret.SecretValue("locked-secret")
+	sentinel := errors.New("operation failed")
+
+	err := withSecretSearchItems(
+		[]*gosecret.Item{{Secret: &gosecret.Secret{Value: unlockedValue}}},
+		[]*gosecret.Item{{Secret: &gosecret.Secret{Value: lockedValue}}},
+		func() error { return sentinel },
+	)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error = %v", err)
+	}
+	assertZeroedSecretValue(t, unlockedValue)
+	assertZeroedSecretValue(t, lockedValue)
+}
+
+func TestOSSecretStoreDeleteClearsLockedAndSharedResultsOnDeleteError(t *testing.T) {
+	unlockedValue := gosecret.SecretValue("unlocked-secret")
+	lockedValue := gosecret.SecretValue("locked-secret")
+	sharedValue := gosecret.SecretValue("shared-secret")
+	shared := &gosecret.Item{Secret: &gosecret.Secret{Value: sharedValue}}
+	sentinel := errors.New("delete failed")
+	service := &fakeLinuxSecretSearchService{
+		unlocked: []*gosecret.Item{{Secret: &gosecret.Secret{Value: unlockedValue}}, shared},
+		locked:   []*gosecret.Item{{Secret: &gosecret.Secret{Value: lockedValue}}, shared},
+	}
+	deleter := &fakeLinuxSecretItemDeleter{errAt: 1, err: sentinel}
+	originalServiceFactory := newLinuxSecretSearchService
+	originalDeleteItem := deleteLinuxSecretSearchItem
+	newLinuxSecretSearchService = func() (linuxSecretSearchService, error) { return service, nil }
+	deleteLinuxSecretSearchItem = deleter.delete
+	t.Cleanup(func() {
+		newLinuxSecretSearchService = originalServiceFactory
+		deleteLinuxSecretSearchItem = originalDeleteItem
+	})
+
+	err := NewOSSecretStore().Delete(context.Background(), "server-id")
+	if !errors.Is(err, ErrSecretStoreUnavailable) {
+		t.Fatalf("error = %v", err)
+	}
+	assertZeroedSecretValue(t, unlockedValue)
+	assertZeroedSecretValue(t, lockedValue)
+	assertZeroedSecretValue(t, sharedValue)
+}
+
 func assertZeroedSecretValue(t *testing.T, value gosecret.SecretValue) {
 	t.Helper()
 	for i, b := range value {
