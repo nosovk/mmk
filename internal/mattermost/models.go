@@ -27,6 +27,7 @@ type Team struct {
 	ServerID    string
 	Name        string
 	DisplayName string
+	UpdatedAt   int64
 }
 
 // User contains the identity fields needed by mmk's display-name policy.

@@ -608,6 +608,7 @@ type teamResponse struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
+	UpdatedAt   int64  `json:"update_at"`
 }
 
 func (t teamResponse) domain() Team {
@@ -615,6 +616,7 @@ func (t teamResponse) domain() Team {
 		ID:          t.ID,
 		Name:        t.Name,
 		DisplayName: t.DisplayName,
+		UpdatedAt:   t.UpdatedAt,
 	}
 }
 

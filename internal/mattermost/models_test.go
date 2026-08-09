@@ -18,6 +18,13 @@ func TestChannelRetainsTotalMessageCount(t *testing.T) {
 	}
 }
 
+func TestTeamRetainsUpdatedAt(t *testing.T) {
+	team := Team{UpdatedAt: 42}
+	if team.UpdatedAt != 42 {
+		t.Fatalf("UpdatedAt = %d, want 42", team.UpdatedAt)
+	}
+}
+
 func TestChannelKindDecodesOpenChannel(t *testing.T) {
 	kind, err := ParseChannelKind("O")
 	if err != nil {

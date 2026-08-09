@@ -342,8 +342,8 @@ func TestClient_TeamsForUserCallsDocumentedEndpointAndConvertsResponse(t *testin
 			t.Errorf("query = %q, want empty query", got)
 		}
 		_, _ = io.WriteString(w, `[
-			{"id":"team-2","name":"engineering","display_name":"Engineering","description":"ignored"},
-			{"id":"team-1","name":"support","display_name":"Support"}
+			{"id":"team-2","name":"engineering","display_name":"Engineering","update_at":42,"description":"ignored"},
+			{"id":"team-1","name":"support","display_name":"Support","update_at":17}
 		]`)
 	}))
 	defer server.Close()
@@ -357,8 +357,8 @@ func TestClient_TeamsForUserCallsDocumentedEndpointAndConvertsResponse(t *testin
 		t.Fatalf("TeamsForUser returned error: %v", err)
 	}
 	want := []Team{
-		{ID: "team-2", Name: "engineering", DisplayName: "Engineering"},
-		{ID: "team-1", Name: "support", DisplayName: "Support"},
+		{ID: "team-2", Name: "engineering", DisplayName: "Engineering", UpdatedAt: 42},
+		{ID: "team-1", Name: "support", DisplayName: "Support", UpdatedAt: 17},
 	}
 	if !reflect.DeepEqual(teams, want) {
 		t.Fatalf("teams = %#v, want %#v", teams, want)

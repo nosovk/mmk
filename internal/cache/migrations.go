@@ -8,24 +8,25 @@ import (
 	"time"
 )
 
-const mattermostSchemaVersion = 1
+const mattermostSchemaVersion = 2
 
 type mattermostMigration struct {
 	version    int
 	statements []string
 }
 
-var mattermostMigrations = []mattermostMigration{{
-	version: 1,
-	statements: []string{
-		`CREATE TABLE IF NOT EXISTS mattermost_servers (
+var mattermostMigrations = []mattermostMigration{
+	{
+		version: 1,
+		statements: []string{
+			`CREATE TABLE mattermost_servers (
 			id TEXT PRIMARY KEY CHECK (id <> ''),
 			name TEXT NOT NULL,
 			url TEXT NOT NULL CHECK (url <> ''),
 			current_user_id TEXT NOT NULL CHECK (current_user_id <> ''),
 			last_synced_at INTEGER NOT NULL CHECK (last_synced_at >= 0)
 		)`,
-		`CREATE TABLE IF NOT EXISTS mattermost_teams (
+			`CREATE TABLE mattermost_teams (
 			server_id TEXT NOT NULL CHECK (server_id <> ''),
 			id TEXT NOT NULL CHECK (id <> ''),
 			name TEXT NOT NULL,
@@ -33,7 +34,7 @@ var mattermostMigrations = []mattermostMigration{{
 			PRIMARY KEY (server_id, id),
 			FOREIGN KEY (server_id) REFERENCES mattermost_servers(id) ON DELETE CASCADE
 		)`,
-		`CREATE TABLE IF NOT EXISTS mattermost_users (
+			`CREATE TABLE mattermost_users (
 			server_id TEXT NOT NULL CHECK (server_id <> ''),
 			id TEXT NOT NULL CHECK (id <> ''),
 			username TEXT NOT NULL,
@@ -44,7 +45,7 @@ var mattermostMigrations = []mattermostMigration{{
 			PRIMARY KEY (server_id, id),
 			FOREIGN KEY (server_id) REFERENCES mattermost_servers(id) ON DELETE CASCADE
 		)`,
-		`CREATE TABLE IF NOT EXISTS mattermost_channels (
+			`CREATE TABLE mattermost_channels (
 			server_id TEXT NOT NULL CHECK (server_id <> ''),
 			id TEXT NOT NULL CHECK (id <> ''),
 			team_id TEXT,
@@ -59,7 +60,7 @@ var mattermostMigrations = []mattermostMigration{{
 			FOREIGN KEY (server_id, team_id) REFERENCES mattermost_teams(server_id, id) ON DELETE CASCADE,
 			CHECK (kind NOT IN ('public', 'private') OR team_id IS NOT NULL)
 		)`,
-		`CREATE TABLE IF NOT EXISTS mattermost_channel_memberships (
+			`CREATE TABLE mattermost_channel_memberships (
 			server_id TEXT NOT NULL CHECK (server_id <> ''),
 			channel_id TEXT NOT NULL CHECK (channel_id <> ''),
 			user_id TEXT NOT NULL CHECK (user_id <> ''),
@@ -70,14 +71,14 @@ var mattermostMigrations = []mattermostMigration{{
 			PRIMARY KEY (server_id, channel_id, user_id),
 			FOREIGN KEY (server_id, channel_id) REFERENCES mattermost_channels(server_id, id) ON DELETE CASCADE
 		)`,
-		`CREATE TABLE IF NOT EXISTS mattermost_channel_users (
+			`CREATE TABLE mattermost_channel_users (
 			server_id TEXT NOT NULL CHECK (server_id <> ''),
 			channel_id TEXT NOT NULL CHECK (channel_id <> ''),
 			user_id TEXT NOT NULL CHECK (user_id <> ''),
 			PRIMARY KEY (server_id, channel_id, user_id),
 			FOREIGN KEY (server_id, channel_id) REFERENCES mattermost_channels(server_id, id) ON DELETE CASCADE
 		)`,
-		`CREATE TABLE IF NOT EXISTS mattermost_posts (
+			`CREATE TABLE mattermost_posts (
 			server_id TEXT NOT NULL CHECK (server_id <> ''),
 			id TEXT NOT NULL CHECK (id <> ''),
 			channel_id TEXT NOT NULL CHECK (channel_id <> ''),
@@ -91,18 +92,27 @@ var mattermostMigrations = []mattermostMigration{{
 			PRIMARY KEY (server_id, id),
 			FOREIGN KEY (server_id, channel_id) REFERENCES mattermost_channels(server_id, id) ON DELETE CASCADE
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_teams_server ON mattermost_teams(server_id, display_name, name, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_users_server ON mattermost_users(server_id, username, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_channels_server ON mattermost_channels(server_id, kind, display_name, name, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_channels_team ON mattermost_channels(server_id, team_id, display_name, name, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_posts_channel_chronology ON mattermost_posts(server_id, channel_id, created_at, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_posts_thread ON mattermost_posts(server_id, channel_id, root_id, created_at, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_memberships_user ON mattermost_channel_memberships(server_id, user_id, channel_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_memberships_channel ON mattermost_channel_memberships(server_id, channel_id, user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_channel_users_user ON mattermost_channel_users(server_id, user_id, channel_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_mattermost_channel_users_channel ON mattermost_channel_users(server_id, channel_id, user_id)`,
+			`CREATE INDEX idx_mattermost_teams_server ON mattermost_teams(server_id, display_name, name, id)`,
+			`CREATE INDEX idx_mattermost_users_server ON mattermost_users(server_id, username, id)`,
+			`CREATE INDEX idx_mattermost_channels_server ON mattermost_channels(server_id, kind, display_name, name, id)`,
+			`CREATE INDEX idx_mattermost_channels_team ON mattermost_channels(server_id, team_id, display_name, name, id)`,
+			`CREATE INDEX idx_mattermost_posts_channel_chronology ON mattermost_posts(server_id, channel_id, root_id, created_at, id)`,
+			`CREATE INDEX idx_mattermost_posts_thread ON mattermost_posts(server_id, channel_id, root_id, created_at, id)`,
+			`CREATE INDEX idx_mattermost_memberships_user ON mattermost_channel_memberships(server_id, user_id, channel_id)`,
+			`CREATE INDEX idx_mattermost_memberships_channel ON mattermost_channel_memberships(server_id, channel_id, user_id)`,
+			`CREATE INDEX idx_mattermost_channel_users_user ON mattermost_channel_users(server_id, user_id, channel_id)`,
+			`CREATE INDEX idx_mattermost_channel_users_channel ON mattermost_channel_users(server_id, channel_id, user_id)`,
+		},
 	},
-}}
+	{
+		version: 2,
+		statements: []string{
+			`ALTER TABLE mattermost_teams ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0 CHECK (updated_at >= 0)`,
+			`DROP INDEX idx_mattermost_posts_channel_chronology`,
+			`CREATE INDEX idx_mattermost_posts_channel_chronology ON mattermost_posts(server_id, channel_id, created_at, id)`,
+		},
+	},
+}
 
 func (db *DB) migrateMattermost(migrations []mattermostMigration) error {
 	if err := validateMattermostMigrations(migrations); err != nil {
