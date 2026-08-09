@@ -27,8 +27,12 @@ type serverBlock struct {
 	id    string
 }
 
-// EditMattermostServer updates or appends one top-level Mattermost server
-// table while preserving all unrelated TOML bytes and unowned server fields.
+const mattermostServerShapeError = "mattermost_servers must use [[mattermost_servers]] array tables"
+
+// EditMattermostServer updates or appends one top-level [[mattermost_servers]]
+// array table while preserving all unrelated TOML bytes and unowned fields.
+// Other TOML representations of mattermost_servers are rejected rather than
+// mixed with array-table syntax.
 func EditMattermostServer(document []byte, server MattermostServer) ([]byte, error) {
 	if strings.TrimSpace(server.ID) == "" {
 		return nil, errors.New("Mattermost server ID must not be empty")
@@ -47,6 +51,9 @@ func EditMattermostServer(document []byte, server MattermostServer) ([]byte, err
 	blocks, err := mattermostServerBlocks(lines)
 	if err != nil {
 		return nil, err
+	}
+	if _, configured := parsed["mattermost_servers"]; configured && len(blocks) == 0 {
+		return nil, errors.New(mattermostServerShapeError)
 	}
 	target := -1
 	seen := make(map[string]struct{}, len(blocks))
@@ -97,7 +104,7 @@ func validateMattermostServerIDs(parsed map[string]any) error {
 	}
 	servers, ok := value.([]any)
 	if !ok {
-		return errors.New("mattermost_servers must be an array of tables")
+		return errors.New(mattermostServerShapeError)
 	}
 	seen := make(map[string]struct{}, len(servers))
 	for _, value := range servers {

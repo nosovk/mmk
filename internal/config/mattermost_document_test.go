@@ -93,3 +93,29 @@ func TestEditMattermostServerRejectsDuplicateIDsInUnsupportedRepresentation(t *t
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestEditMattermostServerRejectsInlineArrayUpdate(t *testing.T) {
+	input := []byte("mattermost_servers = [{ id = 'target', url = 'https://old.example' }]\n")
+	server := MattermostServer{ID: "target", URL: "https://new.example"}
+
+	got, err := EditMattermostServer(input, server)
+	if err == nil || !strings.Contains(err.Error(), "mattermost_servers must use [[mattermost_servers]] array tables") {
+		t.Fatalf("error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("edited bytes = %q, want nil", got)
+	}
+}
+
+func TestEditMattermostServerRejectsInlineArrayAppend(t *testing.T) {
+	input := []byte("mattermost_servers = [{ id = 'existing', url = 'https://existing.example' }]\n")
+	server := MattermostServer{ID: "new", URL: "https://new.example"}
+
+	got, err := EditMattermostServer(input, server)
+	if err == nil || !strings.Contains(err.Error(), "mattermost_servers must use [[mattermost_servers]] array tables") {
+		t.Fatalf("error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("edited bytes = %q, want nil", got)
+	}
+}

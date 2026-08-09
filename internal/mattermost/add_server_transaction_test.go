@@ -18,6 +18,7 @@ type fakeConfigTransaction struct {
 	loadErr   error
 	unlockErr error
 	unlocks   int
+	saveCalls int
 }
 
 func (f *fakeConfigTransaction) Lock(context.Context) (func() error, error) {
@@ -39,6 +40,7 @@ func (f *fakeConfigTransaction) Load(context.Context) (config.Config, []byte, er
 }
 
 func (f *fakeConfigTransaction) Save(_ context.Context, document []byte) error {
+	f.saveCalls++
 	f.document = append([]byte(nil), document...)
 	if f.saveHook != nil {
 		if err := f.saveHook(document); err != nil {
@@ -198,5 +200,55 @@ func TestAddServerTransactionReportsUnlockFailureOnEarlyReturn(t *testing.T) {
 	}
 	if tx.unlocks != 1 {
 		t.Fatalf("unlock calls = %d, want 1", tx.unlocks)
+	}
+}
+
+func TestAddServerTransactionRollsBackCredentialForUnsupportedInlineServers(t *testing.T) {
+	const token = "pat-super-secret"
+	existingRoot, _ := CanonicalServerRoot("https://existing.example")
+	existingID := ServerID(existingRoot)
+	document := []byte("mattermost_servers = [{ id = '" + existingID + "', url = '" + existingRoot + "' }]\n")
+
+	tests := []struct {
+		name      string
+		root      string
+		oldToken  string
+		wantToken string
+	}{
+		{name: "existing server restores prior token", root: existingRoot, oldToken: "old-token", wantToken: "old-token"},
+		{name: "new server removes newly written token", root: "https://new.example"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, err := CanonicalServerRoot(tt.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := ServerID(root)
+			secrets := &fakeSecrets{values: map[string]string{}}
+			if tt.oldToken != "" {
+				secrets.values[id] = tt.oldToken
+			}
+			tx := &fakeConfigTransaction{document: append([]byte(nil), document...)}
+			validator := &fakeValidator{user: &User{ID: "user-1"}}
+
+			_, err = AddServerTransaction(context.Background(), AddServerInput{URL: root, Token: token}, func(string, string) (ServerValidator, error) {
+				return validator, nil
+			}, secrets, tx)
+			if err == nil || !strings.Contains(err.Error(), "mattermost_servers must use [[mattermost_servers]] array tables") || strings.Contains(err.Error(), token) {
+				t.Fatalf("error = %v", err)
+			}
+			if tx.saveCalls != 0 || string(tx.document) != string(document) {
+				t.Fatalf("config changed: saves=%d document=%q", tx.saveCalls, tx.document)
+			}
+			got, ok := secrets.values[id]
+			if tt.wantToken == "" {
+				if ok {
+					t.Fatalf("new token remains installed: %q", got)
+				}
+			} else if !ok || got != tt.wantToken {
+				t.Fatalf("credential = %q, present=%v, want %q", got, ok, tt.wantToken)
+			}
+		})
 	}
 }
