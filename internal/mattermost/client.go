@@ -619,11 +619,12 @@ func (t teamResponse) domain() Team {
 }
 
 type channelResponse struct {
-	ID          string `json:"id"`
-	TeamID      string `json:"team_id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Type        string `json:"type"`
+	ID            string `json:"id"`
+	TeamID        string `json:"team_id"`
+	Name          string `json:"name"`
+	DisplayName   string `json:"display_name"`
+	Type          string `json:"type"`
+	TotalMsgCount int64  `json:"total_msg_count"`
 }
 
 func (c channelResponse) domain() (Channel, error) {
@@ -632,11 +633,12 @@ func (c channelResponse) domain() (Channel, error) {
 		return Channel{}, err
 	}
 	return Channel{
-		ID:          c.ID,
-		TeamID:      c.TeamID,
-		Name:        c.Name,
-		DisplayName: c.DisplayName,
-		Kind:        kind,
+		ID:            c.ID,
+		TeamID:        c.TeamID,
+		Name:          c.Name,
+		DisplayName:   c.DisplayName,
+		Kind:          kind,
+		TotalMsgCount: c.TotalMsgCount,
 	}, nil
 }
 

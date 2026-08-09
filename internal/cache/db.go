@@ -258,6 +258,9 @@ func (db *DB) migrate() error {
 		debuglog.Cache("migrateSearch failed, degrading to LIKE search: %v", err)
 		db.ftsDisabled = true
 	}
+	if err := db.migrateMattermost(mattermostMigrations); err != nil {
+		return err
+	}
 
 	return nil
 }

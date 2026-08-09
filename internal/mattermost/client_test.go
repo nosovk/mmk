@@ -501,10 +501,10 @@ func TestClient_ChannelsForUserConvertsAllChannelKindsInResponseOrder(t *testing
 		t.Fatalf("ChannelsForUser returned error: %v", err)
 	}
 	want := []Channel{
-		{ID: "private", TeamID: "team-2", Name: "private", DisplayName: "Private", Kind: ChannelKindPrivate},
-		{ID: "public", TeamID: "team-1", Name: "public", DisplayName: "Public", Kind: ChannelKindPublic},
-		{ID: "group", Name: "group", DisplayName: "Group", Kind: ChannelKindGroup},
-		{ID: "direct", Name: "direct", Kind: ChannelKindDirect},
+		{ID: "private", TeamID: "team-2", Name: "private", DisplayName: "Private", Kind: ChannelKindPrivate, TotalMsgCount: 2},
+		{ID: "public", TeamID: "team-1", Name: "public", DisplayName: "Public", Kind: ChannelKindPublic, TotalMsgCount: 1},
+		{ID: "group", Name: "group", DisplayName: "Group", Kind: ChannelKindGroup, TotalMsgCount: 4},
+		{ID: "direct", Name: "direct", Kind: ChannelKindDirect, TotalMsgCount: 3},
 	}
 	if !reflect.DeepEqual(channels, want) {
 		t.Fatalf("channels = %#v, want %#v", channels, want)

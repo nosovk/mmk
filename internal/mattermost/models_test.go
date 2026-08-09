@@ -11,6 +11,13 @@ func TestChannelDoesNotContainPerUserReadState(t *testing.T) {
 	}
 }
 
+func TestChannelRetainsTotalMessageCount(t *testing.T) {
+	channel := Channel{TotalMsgCount: 42}
+	if channel.TotalMsgCount != 42 {
+		t.Fatalf("TotalMsgCount = %d, want 42", channel.TotalMsgCount)
+	}
+}
+
 func TestChannelKindDecodesOpenChannel(t *testing.T) {
 	kind, err := ParseChannelKind("O")
 	if err != nil {
@@ -181,6 +188,13 @@ func TestMessageThreadRootReturnsRootIDForReply(t *testing.T) {
 
 	if got, want := message.ThreadRootID(), "root-post"; got != want {
 		t.Fatalf("ThreadRootID() = %q, want %q", got, want)
+	}
+}
+
+func TestMessageRetainsCacheConflictFields(t *testing.T) {
+	message := Message{ServerID: "server-1", DeletedAt: 30, ReplyCount: 4}
+	if message.ServerID != "server-1" || message.DeletedAt != 30 || message.ReplyCount != 4 {
+		t.Fatalf("message conflict fields = %#v", message)
 	}
 }
 
