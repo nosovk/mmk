@@ -175,7 +175,7 @@ Test URL normalization, server config persistence without tokens, credential-sto
 
 **Step 2: Verify RED**
 
-Run: `go test ./internal/mattermost ./internal/config ./cmd/mmk -run 'Test(Auth|ServerConfig|AddServer)' -v`
+Run: `go test ./internal/mattermost ./internal/config ./cmd/mmk -v`
 
 Expected: FAIL because the Mattermost onboarding path does not exist.
 
@@ -185,7 +185,7 @@ Create testable non-interactive onboarding logic taking a secret-store interface
 
 **Step 4: Verify GREEN**
 
-Run the focused command again and expect PASS.
+Run the complete Task 5 package command again and expect PASS.
 
 **Step 5: Commit**
 

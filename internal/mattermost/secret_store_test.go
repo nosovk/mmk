@@ -14,6 +14,9 @@ func TestMattermostCredentialNaming(t *testing.T) {
 	if got := SecretAccountName(serverID); got != "mattermost:"+serverID {
 		t.Errorf("account = %q", got)
 	}
+	if got := WindowsCredentialTargetName(serverID); got != "mmk/mattermost:"+serverID {
+		t.Errorf("Windows target name = %q", got)
+	}
 }
 
 func TestSecretStoreUnavailableErrorIsActionable(t *testing.T) {
