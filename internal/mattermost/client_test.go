@@ -675,6 +675,44 @@ func TestClient_UsersByIDsBatchesOneHundredIDs(t *testing.T) {
 	}
 }
 
+func TestClient_UsersByIDsFiltersResponsesToTheActiveBatch(t *testing.T) {
+	var requestNumber atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ids []string
+		if err := json.NewDecoder(r.Body).Decode(&ids); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch requestNumber.Add(1) {
+		case 1:
+			_ = json.NewEncoder(w).Encode([]userResponse{
+				{ID: "user-100", Username: "poison"},
+				{ID: ids[0], Username: "first"},
+			})
+		case 2:
+			_ = json.NewEncoder(w).Encode([]userResponse{{ID: "user-100", Username: "legitimate"}})
+		default:
+			t.Fatal("unexpected request")
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	ids := make([]string, 101)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("user-%03d", i)
+	}
+
+	users, err := client.UsersByIDs(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("UsersByIDs returned error: %v", err)
+	}
+	if got, want := users[len(users)-1], (User{ID: "user-100", Username: "legitimate"}); got != want {
+		t.Fatalf("last user = %#v, want %#v", got, want)
+	}
+}
+
 func TestClient_UsersByIDsValidatesAndHandlesEmptyInputWithoutRequest(t *testing.T) {
 	requests := &atomic.Int32{}
 	client := newCountingMattermostClient(t, requests)
@@ -691,6 +729,30 @@ func TestClient_UsersByIDsValidatesAndHandlesEmptyInputWithoutRequest(t *testing
 	}
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
+func TestClient_UsersByIDsRejectsUnsafeOversizedAndExcessiveInputWithoutRequest(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ids  []string
+	}{
+		{name: "slash", ids: []string{"user/1"}},
+		{name: "control", ids: []string{"user\n1"}},
+		{name: "non ASCII", ids: []string{"usér"}},
+		{name: "too long", ids: []string{strings.Repeat("a", 129)}},
+		{name: "too many", ids: makeBulkTestIDs(10001, "user")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := &atomic.Int32{}
+			client := newCountingMattermostClient(t, requests)
+			if _, err := client.UsersByIDs(context.Background(), tt.ids); err == nil {
+				t.Fatal("UsersByIDs accepted invalid bounded input")
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("requests = %d, want 0", got)
+			}
+		})
 	}
 }
 
@@ -740,6 +802,50 @@ func TestClient_UsersByGroupChannelIDsPostsBatchesAndIgnoresUnexpectedKeys(t *te
 	}
 }
 
+func TestClient_UsersByGroupChannelIDsFiltersResponsesToTheActiveBatch(t *testing.T) {
+	var requestNumber atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ids []string
+		if err := json.NewDecoder(r.Body).Decode(&ids); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		switch requestNumber.Add(1) {
+		case 1:
+			_ = json.NewEncoder(w).Encode(map[string][]userResponse{
+				"channel-100": {{ID: "poison"}},
+				ids[0]:        {{ID: "first"}},
+			})
+		case 2:
+			_ = json.NewEncoder(w).Encode(map[string][]userResponse{
+				"channel-000": {{ID: "late-poison"}},
+				"channel-100": {{ID: "legitimate"}},
+			})
+		default:
+			t.Fatal("unexpected request")
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	ids := make([]string, 101)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("channel-%03d", i)
+	}
+
+	users, err := client.UsersByGroupChannelIDs(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("UsersByGroupChannelIDs returned error: %v", err)
+	}
+	if got, want := users["channel-000"], []User{{ID: "first"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first batch result = %#v, want %#v", got, want)
+	}
+	if got, want := users["channel-100"], []User{{ID: "legitimate"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second batch result = %#v, want %#v", got, want)
+	}
+}
+
 func TestClient_UsersByGroupChannelIDsValidatesAndHandlesEmptyInputWithoutRequest(t *testing.T) {
 	requests := &atomic.Int32{}
 	client := newCountingMattermostClient(t, requests)
@@ -756,6 +862,49 @@ func TestClient_UsersByGroupChannelIDsValidatesAndHandlesEmptyInputWithoutReques
 	}
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
+func TestClient_UsersByGroupChannelIDsRejectsUnsafeOversizedAndExcessiveInputWithoutRequest(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ids  []string
+	}{
+		{name: "slash", ids: []string{"channel/1"}},
+		{name: "control", ids: []string{"channel\t1"}},
+		{name: "too long", ids: []string{strings.Repeat("c", 129)}},
+		{name: "too many", ids: makeBulkTestIDs(10001, "channel")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := &atomic.Int32{}
+			client := newCountingMattermostClient(t, requests)
+			if _, err := client.UsersByGroupChannelIDs(context.Background(), tt.ids); err == nil {
+				t.Fatal("UsersByGroupChannelIDs accepted invalid bounded input")
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestClient_UsersByGroupChannelIDsRejectsMoreThanEightParticipants(t *testing.T) {
+	participants := make([]userResponse, 9)
+	for i := range participants {
+		participants[i] = userResponse{ID: fmt.Sprintf("user-%d", i)}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string][]userResponse{"group-1": participants})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	_, err = client.UsersByGroupChannelIDs(context.Background(), []string{"group-1"})
+	if err == nil || !strings.Contains(err.Error(), "group-1") || !strings.Contains(err.Error(), "8") {
+		t.Fatalf("error = %v, want contextual participant limit error", err)
 	}
 }
 
@@ -776,6 +925,14 @@ func TestClient_BulkUserMethodsReturnContextualBatchErrors(t *testing.T) {
 	if _, err := client.UsersByGroupChannelIDs(context.Background(), []string{"channel-1"}); err == nil || !strings.Contains(err.Error(), "group channel users batch 1") {
 		t.Fatalf("UsersByGroupChannelIDs error = %v, want batch context", err)
 	}
+}
+
+func makeBulkTestIDs(count int, prefix string) []string {
+	ids := make([]string, count)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%s-%05d", prefix, i)
+	}
+	return ids
 }
 
 func TestClient_ChannelsForUserReportsMalformedJSON(t *testing.T) {

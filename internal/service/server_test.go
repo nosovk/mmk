@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nosovk/mmk/internal/mattermost"
 )
@@ -51,6 +54,32 @@ func TestServerBootstrapRejectsConfiguredIdentityMismatch(t *testing.T) {
 	_, err := BootstrapServer(context.Background(), client, server)
 	if err == nil || !strings.Contains(err.Error(), "server-1") || !strings.Contains(err.Error(), "configured-user") || !strings.Contains(err.Error(), "actual-user") {
 		t.Fatalf("error = %v, want contextual identity mismatch", err)
+	}
+}
+
+func TestServerBootstrapScopesCopiedSnapshotIdentity(t *testing.T) {
+	clientUser := &mattermost.User{ID: "user-1", ServerID: "client-server", Nickname: "Alice"}
+	inputServer := mattermost.Server{ID: "server-1", URL: "https://chat.example.com"}
+	client := &fakeServerBootstrapClient{
+		currentUser: clientUser,
+		memberships: map[string][]mattermost.ChannelMembership{},
+	}
+
+	snapshot, err := BootstrapServer(context.Background(), client, inputServer)
+	if err != nil {
+		t.Fatalf("BootstrapServer returned error: %v", err)
+	}
+	if got, want := snapshot.CurrentUser.ServerID, inputServer.ID; got != want {
+		t.Fatalf("snapshot current user ServerID = %q, want %q", got, want)
+	}
+	if got, want := snapshot.Server.UserID, clientUser.ID; got != want {
+		t.Fatalf("snapshot server UserID = %q, want %q", got, want)
+	}
+	if clientUser.ServerID != "client-server" {
+		t.Fatalf("client user mutated: %#v", clientUser)
+	}
+	if inputServer.UserID != "" {
+		t.Fatalf("input server mutated: %#v", inputServer)
 	}
 }
 
@@ -99,7 +128,9 @@ func TestServerBootstrapReturnsSortedSnapshotWithoutMutatingClientValues(t *test
 	if teams[0].ServerID != "" || channels[0].ServerID != "" {
 		t.Fatal("BootstrapServer mutated client-owned input slices")
 	}
-	if got, want := client.membershipTeamIDs, []string{"team-a", "team-b", "team-z"}; !reflect.DeepEqual(got, want) {
+	gotMembershipTeams := append([]string(nil), client.membershipTeamIDs...)
+	sort.Strings(gotMembershipTeams)
+	if got, want := gotMembershipTeams, []string{"team-a", "team-b", "team-z"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("membership team calls = %#v, want %#v", got, want)
 	}
 	if got := snapshot.Sections[0].Channels[0].Membership; got == nil || got.MentionCount != 2 {
@@ -184,6 +215,7 @@ func TestServerBootstrapCallsAreStatelessAndConcurrent(t *testing.T) {
 }
 
 type fakeServerBootstrapClient struct {
+	mu                sync.Mutex
 	currentUser       *mattermost.User
 	currentUserErr    error
 	teams             []mattermost.Team
@@ -202,36 +234,224 @@ type fakeServerBootstrapClient struct {
 	membershipTeamIDs []string
 	userIDRequests    [][]string
 	groupIDRequests   [][]string
+	membershipHook    func(context.Context, string) ([]mattermost.ChannelMembership, error)
 }
 
 func (f *fakeServerBootstrapClient) CurrentUser(context.Context) (*mattermost.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.currentUserCalls++
 	return f.currentUser, f.currentUserErr
 }
 
 func (f *fakeServerBootstrapClient) TeamsForUser(context.Context, string) ([]mattermost.Team, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.teamsCalls++
 	return f.teams, f.teamsErr
 }
 
 func (f *fakeServerBootstrapClient) ChannelsForUser(context.Context, string) ([]mattermost.Channel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.channelsCalls++
 	return f.channels, f.channelsErr
 }
 
-func (f *fakeServerBootstrapClient) ChannelMembershipsForUser(_ context.Context, _ string, teamID string) ([]mattermost.ChannelMembership, error) {
+func (f *fakeServerBootstrapClient) ChannelMembershipsForUser(ctx context.Context, _ string, teamID string) ([]mattermost.ChannelMembership, error) {
+	f.mu.Lock()
 	f.membershipTeamIDs = append(f.membershipTeamIDs, teamID)
+	hook := f.membershipHook
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(ctx, teamID)
+	}
 	return f.memberships[teamID], f.membershipErr[teamID]
 }
 
 func (f *fakeServerBootstrapClient) UsersByIDs(_ context.Context, ids []string) ([]mattermost.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.userIDRequests = append(f.userIDRequests, append([]string(nil), ids...))
 	return f.users, f.usersErr
 }
 
 func (f *fakeServerBootstrapClient) UsersByGroupChannelIDs(_ context.Context, ids []string) (map[string][]mattermost.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.groupIDRequests = append(f.groupIDRequests, append([]string(nil), ids...))
 	return f.groupUsers, f.groupUsersErr
+}
+
+func TestServerBootstrapFetchesMembershipsWithBoundedConcurrency(t *testing.T) {
+	const teamCount = 8
+	teams := make([]mattermost.Team, teamCount)
+	for i := range teams {
+		teams[i] = mattermost.Team{ID: fmt.Sprintf("team-%d", i), DisplayName: fmt.Sprintf("Team %d", i)}
+	}
+	started := make(chan struct{}, teamCount)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	active := 0
+	maximum := 0
+	client := &fakeServerBootstrapClient{
+		currentUser: &mattermost.User{ID: "user-1"},
+		teams:       teams,
+		memberships: map[string][]mattermost.ChannelMembership{},
+		membershipHook: func(ctx context.Context, _ string) ([]mattermost.ChannelMembership, error) {
+			mu.Lock()
+			active++
+			maximum = max(maximum, active)
+			mu.Unlock()
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			mu.Lock()
+			active--
+			mu.Unlock()
+			return nil, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := BootstrapServer(ctx, client, mattermost.Server{ID: "server-1", URL: "https://chat.example.com"})
+		done <- err
+	}()
+	for range 4 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			cancel()
+			close(release)
+			<-done
+			t.Fatal("fewer than four membership calls ran concurrently")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("membership concurrency exceeded four")
+	default:
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("BootstrapServer returned error: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maximum != 4 {
+		t.Fatalf("maximum membership concurrency = %d, want 4", maximum)
+	}
+	if active != 0 {
+		t.Fatalf("active membership calls after return = %d, want 0", active)
+	}
+}
+
+func TestServerBootstrapMembershipResultsAreDeterministicAcrossCompletionOrder(t *testing.T) {
+	teams := []mattermost.Team{{ID: "team-a"}, {ID: "team-b"}, {ID: "team-c"}, {ID: "team-d"}}
+	channels := make([]mattermost.Channel, len(teams))
+	gates := make(map[string]chan struct{}, len(teams))
+	started := make(chan string, len(teams))
+	for i, team := range teams {
+		channels[i] = mattermost.Channel{ID: "channel-" + team.ID, TeamID: team.ID, Kind: mattermost.ChannelKindPublic}
+		gates[team.ID] = make(chan struct{})
+	}
+	client := &fakeServerBootstrapClient{
+		currentUser: &mattermost.User{ID: "user-1"},
+		teams:       teams,
+		channels:    channels,
+		memberships: map[string][]mattermost.ChannelMembership{},
+		membershipHook: func(_ context.Context, teamID string) ([]mattermost.ChannelMembership, error) {
+			started <- teamID
+			<-gates[teamID]
+			return []mattermost.ChannelMembership{{ChannelID: "channel-" + teamID, MentionCount: int64(teamID[len(teamID)-1])}}, nil
+		},
+	}
+	result := make(chan struct {
+		snapshot ServerSnapshot
+		err      error
+	}, 1)
+	go func() {
+		snapshot, err := BootstrapServer(context.Background(), client, mattermost.Server{ID: "server-1", URL: "https://chat.example.com"})
+		result <- struct {
+			snapshot ServerSnapshot
+			err      error
+		}{snapshot: snapshot, err: err}
+	}()
+	for range teams {
+		<-started
+	}
+	for i := len(teams) - 1; i >= 0; i-- {
+		close(gates[teams[i].ID])
+	}
+	got := <-result
+	if got.err != nil {
+		t.Fatalf("BootstrapServer returned error: %v", got.err)
+	}
+	for _, section := range got.snapshot.Sections {
+		entry := section.Channels[0]
+		if entry.Membership == nil || entry.Membership.ChannelID != entry.Channel.ID {
+			t.Fatalf("section %q membership = %#v for channel %#v", section.ID, entry.Membership, entry.Channel)
+		}
+	}
+}
+
+func TestServerBootstrapCancelsMembershipWorkersOnFirstError(t *testing.T) {
+	teams := make([]mattermost.Team, 20)
+	for i := range teams {
+		teams[i] = mattermost.Team{ID: fmt.Sprintf("team-%02d", i), Name: fmt.Sprintf("name-%02d", i)}
+	}
+	started := make(chan string, len(teams))
+	fail := make(chan struct{})
+	var mu sync.Mutex
+	active := 0
+	client := &fakeServerBootstrapClient{
+		currentUser: &mattermost.User{ID: "user-1"},
+		teams:       teams,
+		memberships: map[string][]mattermost.ChannelMembership{},
+		membershipHook: func(ctx context.Context, teamID string) ([]mattermost.ChannelMembership, error) {
+			mu.Lock()
+			active++
+			mu.Unlock()
+			defer func() {
+				mu.Lock()
+				active--
+				mu.Unlock()
+			}()
+			started <- teamID
+			if teamID == "team-00" {
+				<-fail
+				return nil, errors.New("membership failure")
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := BootstrapServer(context.Background(), client, mattermost.Server{ID: "server-1", URL: "https://chat.example.com"})
+		done <- err
+	}()
+	for range 4 {
+		<-started
+	}
+	close(fail)
+	err := <-done
+	if err == nil || !strings.Contains(err.Error(), "team-00") || !strings.Contains(err.Error(), "name-00") {
+		t.Fatalf("error = %v, want first team context", err)
+	}
+	if got := len(started); got != 0 {
+		t.Fatalf("started %d additional membership calls after cancellation", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active membership calls after return = %d, want 0", active)
+	}
 }
 
 func teamIDs(teams []mattermost.Team) []string {

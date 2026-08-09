@@ -127,6 +127,27 @@ func TestServerBootstrapUsesDeterministicDirectMessageFallbacks(t *testing.T) {
 	}
 }
 
+func TestServerBootstrapDoesNotLookupUnsafeDirectMessagePeerIDs(t *testing.T) {
+	client := &fakeServerBootstrapClient{
+		currentUser: &mattermost.User{ID: "me"},
+		channels: []mattermost.Channel{
+			{ID: "slash", Name: "me__peer/id", DisplayName: "Slash Fallback", Kind: mattermost.ChannelKindDirect},
+			{ID: "long", Name: "me__" + strings.Repeat("a", 129), DisplayName: "Long Fallback", Kind: mattermost.ChannelKindDirect},
+		},
+		memberships: map[string][]mattermost.ChannelMembership{},
+	}
+	snapshot, err := BootstrapServer(context.Background(), client, mattermost.Server{ID: "server-1", URL: "https://chat.example.com"})
+	if err != nil {
+		t.Fatalf("BootstrapServer returned error: %v", err)
+	}
+	if len(client.userIDRequests) != 0 {
+		t.Fatalf("unsafe direct IDs were requested: %#v", client.userIDRequests)
+	}
+	if got, want := entryNames(snapshot.Sections[0]), []string{"Long Fallback", "Slash Fallback"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fallback names = %#v, want %#v", got, want)
+	}
+}
+
 func TestServerBootstrapUsesGroupFallbackWhenParticipantsDoNotYieldNames(t *testing.T) {
 	client := &fakeServerBootstrapClient{
 		currentUser: &mattermost.User{ID: "me"},

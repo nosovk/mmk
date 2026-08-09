@@ -7,9 +7,12 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nosovk/mmk/internal/mattermost"
 )
+
+const membershipConcurrency = 4
 
 type ServerBootstrapClient interface {
 	CurrentUser(context.Context) (*mattermost.User, error)
@@ -53,6 +56,10 @@ func BootstrapServer(ctx context.Context, client ServerBootstrapClient, server m
 	if server.UserID != "" && server.UserID != currentUser.ID {
 		return ServerSnapshot{}, fmt.Errorf("Mattermost server %q configured user %q does not match authenticated user %q", server.ID, server.UserID, currentUser.ID)
 	}
+	snapshotServer := server
+	snapshotServer.UserID = currentUser.ID
+	snapshotUser := *currentUser
+	snapshotUser.ServerID = server.ID
 
 	teams, err := client.TeamsForUser(ctx, currentUser.ID)
 	if err != nil {
@@ -74,32 +81,92 @@ func BootstrapServer(ctx context.Context, client ServerBootstrapClient, server m
 		) < 0
 	})
 
-	memberships := make(map[string]mattermost.ChannelMembership)
-	for _, team := range teams {
-		teamMemberships, err := client.ChannelMembershipsForUser(ctx, currentUser.ID, team.ID)
-		if err != nil {
-			return ServerSnapshot{}, fmt.Errorf("fetch channel memberships for Mattermost server %q team %q (%s): %w", server.ID, team.ID, teamLabel(team), err)
-		}
-		for _, membership := range teamMemberships {
-			memberships[membership.ChannelID] = membership
-		}
+	memberships, err := fetchTeamMemberships(ctx, client, server.ID, currentUser.ID, teams)
+	if err != nil {
+		return ServerSnapshot{}, err
 	}
 
 	channels = append([]mattermost.Channel(nil), channels...)
 	for i := range channels {
 		channels[i].ServerID = server.ID
 	}
-	sections, err := buildChannelSections(ctx, client, server.ID, *currentUser, teams, channels, memberships)
+	sections, err := buildChannelSections(ctx, client, server.ID, snapshotUser, teams, channels, memberships)
 	if err != nil {
 		return ServerSnapshot{}, err
 	}
 
 	return ServerSnapshot{
-		Server:      server,
-		CurrentUser: *currentUser,
+		Server:      snapshotServer,
+		CurrentUser: snapshotUser,
 		Teams:       teams,
 		Sections:    sections,
 	}, nil
+}
+
+func fetchTeamMemberships(ctx context.Context, client ServerBootstrapClient, serverID, userID string, teams []mattermost.Team) (map[string]mattermost.ChannelMembership, error) {
+	type result struct {
+		index       int
+		memberships []mattermost.ChannelMembership
+		err         error
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int)
+	results := make(chan result, min(len(teams), membershipConcurrency))
+	var workers sync.WaitGroup
+	var firstErr error
+	var firstErrOnce sync.Once
+	for range min(len(teams), membershipConcurrency) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				team := teams[index]
+				memberships, err := client.ChannelMembershipsForUser(workerCtx, userID, team.ID)
+				if err != nil {
+					err = fmt.Errorf("fetch channel memberships for Mattermost server %q team %q (%s): %w", serverID, team.ID, teamLabel(team), err)
+					firstErrOnce.Do(func() { firstErr = err })
+					cancel()
+				}
+				results <- result{index: index, memberships: memberships, err: err}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for index := range teams {
+			select {
+			case jobs <- index:
+			case <-workerCtx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	byTeam := make([][]mattermost.ChannelMembership, len(teams))
+	for result := range results {
+		if result.err != nil {
+			continue
+		}
+		byTeam[result.index] = result.memberships
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	memberships := make(map[string]mattermost.ChannelMembership)
+	for _, teamMemberships := range byTeam {
+		for _, membership := range teamMemberships {
+			memberships[membership.ChannelID] = membership
+		}
+	}
+	return memberships, nil
 }
 
 func isNilInterface(value any) bool {

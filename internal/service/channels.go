@@ -148,6 +148,9 @@ func directPeerID(name, currentUserID string) (string, bool) {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", false
 	}
+	if !safeLookupID(parts[0]) || !safeLookupID(parts[1]) {
+		return "", false
+	}
 	if parts[0] == currentUserID {
 		return parts[1], true
 	}
@@ -155,6 +158,19 @@ func directPeerID(name, currentUserID string) (string, bool) {
 		return parts[0], true
 	}
 	return "", false
+}
+
+func safeLookupID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for _, char := range []byte(id) {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func directDisplayName(channel mattermost.Channel, peerID string, usersByID map[string]mattermost.User) string {

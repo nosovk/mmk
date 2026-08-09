@@ -25,6 +25,9 @@ const (
 	maxChannelBodyBytes = 64 << 20
 	maxErrorBodyBytes   = 1 << 20
 	bulkLookupBatchSize = 100
+	maxBulkLookupIDs    = 10000
+	maxBulkIDBytes      = 128 // Mattermost uses 26-byte lowercase IDs; allow bounded fixture/legacy IDs.
+	maxGroupUsers       = 8
 )
 
 type Client struct {
@@ -245,11 +248,8 @@ func (c *Client) UsersByIDs(ctx context.Context, ids []string) ([]User, error) {
 	}
 
 	usersByID := make(map[string]User, len(unique))
-	requested := make(map[string]struct{}, len(unique))
-	for _, id := range unique {
-		requested[id] = struct{}{}
-	}
 	for batchIndex, batch := range batches(unique, bulkLookupBatchSize) {
+		requested := idSet(batch)
 		var wire []userResponse
 		if err := c.doJSON(ctx, http.MethodPost, "users/ids", batch, &wire); err != nil {
 			return nil, fmt.Errorf("fetch Mattermost users by IDs batch %d: %w", batchIndex+1, err)
@@ -286,11 +286,8 @@ func (c *Client) UsersByGroupChannelIDs(ctx context.Context, channelIDs []string
 		return result, nil
 	}
 
-	requested := make(map[string]struct{}, len(unique))
-	for _, id := range unique {
-		requested[id] = struct{}{}
-	}
 	for batchIndex, batch := range batches(unique, bulkLookupBatchSize) {
+		requested := idSet(batch)
 		var wire map[string][]userResponse
 		if err := c.doJSON(ctx, http.MethodPost, "users/group_channels", batch, &wire); err != nil {
 			return nil, fmt.Errorf("fetch Mattermost group channel users batch %d: %w", batchIndex+1, err)
@@ -298,6 +295,9 @@ func (c *Client) UsersByGroupChannelIDs(ctx context.Context, channelIDs []string
 		for channelID, items := range wire {
 			if _, ok := requested[channelID]; !ok {
 				continue
+			}
+			if len(items) > maxGroupUsers {
+				return nil, fmt.Errorf("Mattermost group channel %q returned %d participants, maximum is %d", channelID, len(items), maxGroupUsers)
 			}
 			seen := make(map[string]struct{}, len(items))
 			users := make([]User, 0, len(items))
@@ -314,12 +314,23 @@ func (c *Client) UsersByGroupChannelIDs(ctx context.Context, channelIDs []string
 	return result, nil
 }
 
+func idSet(ids []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
 func uniqueNonBlankIDs(ids []string, label string) ([]string, error) {
+	if len(ids) > maxBulkLookupIDs {
+		return nil, fmt.Errorf("%s request contains %d IDs, maximum is %d", label, len(ids), maxBulkLookupIDs)
+	}
 	unique := make([]string, 0, len(ids))
 	seen := make(map[string]struct{}, len(ids))
 	for index, id := range ids {
-		if strings.TrimSpace(id) == "" {
-			return nil, fmt.Errorf("%s at index %d must not be empty", label, index)
+		if err := validateBulkID(id); err != nil {
+			return nil, fmt.Errorf("%s at index %d: %w", label, index, err)
 		}
 		if _, ok := seen[id]; ok {
 			continue
@@ -328,6 +339,22 @@ func uniqueNonBlankIDs(ids []string, label string) ([]string, error) {
 		unique = append(unique, id)
 	}
 	return unique, nil
+}
+
+func validateBulkID(id string) error {
+	if id == "" {
+		return errors.New("must not be empty")
+	}
+	if len(id) > maxBulkIDBytes {
+		return fmt.Errorf("exceeds %d bytes", maxBulkIDBytes)
+	}
+	for _, char := range []byte(id) {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' || char == '-' {
+			continue
+		}
+		return errors.New("must contain only ASCII letters, digits, underscore, or hyphen")
+	}
+	return nil
 }
 
 func batches[T any](values []T, size int) [][]T {
