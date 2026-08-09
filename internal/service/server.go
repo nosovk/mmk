@@ -121,6 +121,9 @@ func fetchTeamMemberships(ctx context.Context, client ServerBootstrapClient, ser
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
+				if workerCtx.Err() != nil {
+					return
+				}
 				team := teams[index]
 				memberships, err := client.ChannelMembershipsForUser(workerCtx, userID, team.ID)
 				if err != nil {
