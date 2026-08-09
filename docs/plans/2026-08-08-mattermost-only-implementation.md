@@ -249,7 +249,7 @@ Expected: FAIL because the schema still assumes Slack workspaces/messages.
 
 **Step 3: Implement minimal schema transition**
 
-Since this is a new application identity with a new config/cache directory, prefer a clean Mattermost schema over compatibility migration from `slk` databases. Retain reusable SQLite setup and transaction helpers.
+Use the existing `cache.db` and add parallel `mattermost_*` tables with separately versioned transactional migrations. Preserve all Slack tables, APIs, and runtime behavior until Task 15; do not rename, drop, or repurpose legacy cache data. The v1 Mattermost bootstrap snapshot is atomic and upsert-only, so omitted rows are not pruned until authoritative retirement semantics exist.
 
 **Step 4: Verify GREEN**
 
