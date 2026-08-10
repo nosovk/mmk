@@ -33,8 +33,8 @@ func TestMattermostMigrationCreatesVersionedSchemaWithoutChangingLegacyRows(t *t
 	if err := db.conn.QueryRow(`SELECT version FROM cache_schema_versions WHERE component = 'mattermost'`).Scan(&version); err != nil {
 		t.Fatalf("Mattermost schema version: %v", err)
 	}
-	if version != 3 {
-		t.Fatalf("Mattermost schema version = %d, want 3", version)
+	if version != 4 {
+		t.Fatalf("Mattermost schema version = %d, want 4", version)
 	}
 
 	for _, table := range []string{
@@ -166,7 +166,7 @@ func TestMattermostMigrationRollsBackDDLAndVersionOnFailure(t *testing.T) {
 				`THIS IS NOT SQL`,
 			},
 		},
-		{version: 2}, {version: 3},
+		{version: 2}, {version: 3}, {version: 4},
 	})
 	if err == nil {
 		t.Fatal("migrateMattermost returned nil error")
@@ -192,12 +192,12 @@ func TestMattermostMigrationRejectsMalformedSequences(t *testing.T) {
 		migrations []mattermostMigration
 		want       string
 	}{
-		{"empty", nil, "must end at version 3"},
+		{"empty", nil, "must end at version 4"},
 		{"starts above one", []mattermostMigration{{version: 2}}, "start at version 1"},
 		{"gap", []mattermostMigration{{version: 1}, {version: 3}}, "contiguous"},
 		{"duplicate", []mattermostMigration{{version: 1}, {version: 1}}, "contiguous"},
-		{"missing terminal", []mattermostMigration{{version: 1}}, "must end at version 3"},
-		{"beyond current", []mattermostMigration{{version: 1}, {version: 2}, {version: 3}, {version: 4}}, "newer than supported"},
+		{"missing terminal", []mattermostMigration{{version: 1}}, "must end at version 4"},
+		{"beyond current", []mattermostMigration{{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}}, "newer than supported"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -247,7 +247,7 @@ func TestMattermostMigrationUpgradesV2WithActiveFlags(t *testing.T) {
 	if err := db.conn.QueryRow(`SELECT is_active FROM mattermost_channels WHERE id='c1'`).Scan(&channelActive); err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 || teamActive != 1 || channelActive != 1 {
+	if version != 4 || teamActive != 1 || channelActive != 1 {
 		t.Fatalf("version=%d team=%d channel=%d", version, teamActive, channelActive)
 	}
 }
@@ -285,7 +285,7 @@ func TestMattermostMigrationUpgradesExactPriorV1Schema(t *testing.T) {
 	if err := db.conn.QueryRow(`SELECT name, updated_at FROM mattermost_teams WHERE server_id = 's1' AND id = 't1'`).Scan(&name, &updatedAt); err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 || name != "team" || updatedAt != 0 {
+	if version != 4 || name != "team" || updatedAt != 0 {
 		t.Fatalf("upgraded data: version=%d name=%q updated_at=%d", version, name, updatedAt)
 	}
 	columns := indexColumns(t, db, "idx_mattermost_posts_channel_chronology")

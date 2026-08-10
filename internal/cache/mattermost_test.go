@@ -780,6 +780,23 @@ func TestMattermostNewerPostReplyCountCanCorrectDownward(t *testing.T) {
 	}
 }
 
+func TestMattermostPostCachePreservesEditedAt(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1", CreatedAt: 10, UpdatedAt: 20, EditedAt: 19}); err != nil {
+		t.Fatal(err)
+	}
+	post, err := db.GetMattermostPost("s1", "p1")
+	if err != nil || post.EditedAt != 19 {
+		t.Fatalf("post=%#v err=%v", post, err)
+	}
+}
+
 func TestMattermostMarkDeletedWinsAtEqualRevision(t *testing.T) {
 	db := setupMattermostDB(t)
 	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {

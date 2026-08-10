@@ -112,7 +112,7 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 	presented := make([]MattermostHistoryMessage, 0, len(page.Messages))
 	for i := len(page.Messages) - 1; i >= 0; i-- {
 		message := page.Messages[i]
-		if message.DeletedAt != 0 {
+		if message.DeletedAt != 0 || beforeID != "" && message.ID == beforeID {
 			continue
 		}
 		name := names[message.UserID]
@@ -125,7 +125,7 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 }
 
 func cachePost(m mattermost.Message) cache.MattermostPost {
-	return cache.MattermostPost{ID: m.ID, ChannelID: m.ChannelID, UserID: m.UserID, RootID: m.RootID, Text: m.Text, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt, DeletedAt: m.DeletedAt, ReplyCount: m.ReplyCount}
+	return cache.MattermostPost{ID: m.ID, ChannelID: m.ChannelID, UserID: m.UserID, RootID: m.RootID, Text: m.Text, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt, EditedAt: m.EditedAt, DeletedAt: m.DeletedAt, ReplyCount: m.ReplyCount}
 }
 
 func cacheUserRecord(u mattermost.User) cache.MattermostUser {
@@ -143,7 +143,7 @@ func presentCachedMattermostPosts(posts []cache.MattermostPost, names map[string
 		if name == "" {
 			name = post.UserID
 		}
-		out = append(out, MattermostHistoryMessage{Message: mattermost.Message{ID: post.ID, ChannelID: post.ChannelID, UserID: post.UserID, RootID: post.RootID, Text: post.Text, CreatedAt: post.CreatedAt, UpdatedAt: post.UpdatedAt, DeletedAt: post.DeletedAt, ReplyCount: post.ReplyCount}, UserName: name})
+		out = append(out, MattermostHistoryMessage{Message: mattermost.Message{ID: post.ID, ChannelID: post.ChannelID, UserID: post.UserID, RootID: post.RootID, Text: post.Text, CreatedAt: post.CreatedAt, UpdatedAt: post.UpdatedAt, EditedAt: post.EditedAt, DeletedAt: post.DeletedAt, ReplyCount: post.ReplyCount}, UserName: name})
 	}
 	return out
 }

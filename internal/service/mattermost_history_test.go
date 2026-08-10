@@ -93,6 +93,25 @@ func TestMattermostHistoryOlderUsesBeforeAndShortPageExhausts(t *testing.T) {
 	}
 }
 
+func TestMattermostHistoryOlderDedupesIncludedAnchor(t *testing.T) {
+	db := setupMattermostHistoryDB(t)
+	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{Messages: []mattermost.Message{
+		{ID: "anchor", ChannelID: "c1", CreatedAt: 2},
+		{ID: "older", ChannelID: "c1", CreatedAt: 1},
+	}}}
+	svc := NewMattermostHistoryService("s1", client, db, 2)
+	page, err := svc.FetchOlder(context.Background(), "c1", "anchor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := historyIDs(page.Messages), []string{"older"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids=%v want %v", got, want)
+	}
+	if !page.HasMore {
+		t.Fatal("HasMore must use unique ordered response count before anchor filtering")
+	}
+}
+
 func TestMattermostHistoryFetchFailureIsDistinctAndDoesNotEraseCache(t *testing.T) {
 	db := setupMattermostHistoryDB(t)
 	_ = db.UpsertMattermostPost("s1", cache.MattermostPost{ID: "cached", ChannelID: "c1", CreatedAt: 1})

@@ -62,6 +62,7 @@ type MattermostPost struct {
 	Text       string
 	CreatedAt  int64
 	UpdatedAt  int64
+	EditedAt   int64
 	DeletedAt  int64
 	ReplyCount int64
 }
@@ -686,8 +687,8 @@ func upsertMattermostPost(exec mattermostExecer, serverID string, post Mattermos
 	// on the row. Newer revisions update supplied fields; equal revisions merge
 	// commutatively, with max timestamps/counters and deletion dominance.
 	_, err := exec.Exec(`INSERT INTO mattermost_posts
-		(server_id, id, channel_id, user_id, root_id, text, created_at, updated_at, deleted_at, reply_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(server_id, id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(server_id, id) DO UPDATE SET
 		channel_id=CASE
 			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)
@@ -707,6 +708,7 @@ func upsertMattermostPost(exec mattermostExecer, serverID string, post Mattermos
 			ELSE max(mattermost_posts.text, excluded.text) END,
 		created_at=max(mattermost_posts.created_at, excluded.created_at),
 		updated_at=max(mattermost_posts.updated_at, excluded.updated_at),
+		edited_at=max(mattermost_posts.edited_at, excluded.edited_at),
 		deleted_at=max(mattermost_posts.deleted_at, excluded.deleted_at),
 		reply_count=CASE
 			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at) THEN excluded.reply_count
@@ -714,7 +716,7 @@ func upsertMattermostPost(exec mattermostExecer, serverID string, post Mattermos
 		WHERE max(excluded.created_at, excluded.updated_at, excluded.deleted_at) >=
 		      max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)`,
 		serverID, post.ID, post.ChannelID, post.UserID, post.RootID, post.Text,
-		post.CreatedAt, post.UpdatedAt, post.DeletedAt, post.ReplyCount)
+		post.CreatedAt, post.UpdatedAt, post.EditedAt, post.DeletedAt, post.ReplyCount)
 	return wrapMattermostError("upserting post", err)
 }
 
@@ -749,10 +751,10 @@ func (db *DB) UpsertMattermostHistory(serverID string, posts []MattermostPost, u
 
 func (db *DB) GetMattermostPost(serverID, postID string) (MattermostPost, error) {
 	var post MattermostPost
-	err := db.conn.QueryRow(`SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, deleted_at, reply_count
+	err := db.conn.QueryRow(`SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count
 		FROM mattermost_posts WHERE server_id = ? AND id = ?`, serverID, postID).
 		Scan(&post.ID, &post.ChannelID, &post.UserID, &post.RootID, &post.Text,
-			&post.CreatedAt, &post.UpdatedAt, &post.DeletedAt, &post.ReplyCount)
+			&post.CreatedAt, &post.UpdatedAt, &post.EditedAt, &post.DeletedAt, &post.ReplyCount)
 	return post, wrapMattermostError("getting post", err)
 }
 
@@ -763,7 +765,7 @@ func (db *DB) ListMattermostChannelPosts(serverID, channelID string, limit int, 
 	if limit <= 0 {
 		return nil, errors.New("Mattermost post limit must be positive")
 	}
-	inner := `SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, deleted_at, reply_count
+	inner := `SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count
 		FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND root_id = '' AND deleted_at = 0`
 	args := []any{serverID, channelID}
 	if beforePostID != "" {
@@ -792,7 +794,7 @@ func (db *DB) ListMattermostChannelTimeline(serverID, channelID string, limit in
 	if limit <= 0 {
 		return nil, errors.New("Mattermost post limit must be positive")
 	}
-	inner := `SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, deleted_at, reply_count
+	inner := `SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count
 		FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND deleted_at = 0`
 	args := []any{serverID, channelID}
 	if beforePostID != "" {
@@ -813,7 +815,7 @@ func (db *DB) ListMattermostThreadPosts(serverID, channelID, rootPostID string) 
 	if err := requireMattermostIDs(serverID, channelID, rootPostID); err != nil {
 		return nil, err
 	}
-	return db.queryMattermostPosts(`SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, deleted_at, reply_count
+	return db.queryMattermostPosts(`SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count
 		FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND deleted_at = 0 AND (id = ? OR root_id = ?)
 		ORDER BY created_at, id`, serverID, channelID, rootPostID, rootPostID)
 }
@@ -856,7 +858,7 @@ func (db *DB) queryMattermostPosts(query string, args ...any) ([]MattermostPost,
 	for rows.Next() {
 		var post MattermostPost
 		if err := rows.Scan(&post.ID, &post.ChannelID, &post.UserID, &post.RootID, &post.Text,
-			&post.CreatedAt, &post.UpdatedAt, &post.DeletedAt, &post.ReplyCount); err != nil {
+			&post.CreatedAt, &post.UpdatedAt, &post.EditedAt, &post.DeletedAt, &post.ReplyCount); err != nil {
 			return nil, fmt.Errorf("scanning Mattermost post: %w", err)
 		}
 		posts = append(posts, post)
@@ -900,7 +902,7 @@ func validateMattermostPost(serverID string, post MattermostPost) error {
 	if err := requireMattermostIDs(serverID, post.ID, post.ChannelID); err != nil {
 		return err
 	}
-	if min(post.CreatedAt, post.UpdatedAt, post.DeletedAt, post.ReplyCount) < 0 {
+	if min(post.CreatedAt, post.UpdatedAt, post.EditedAt, post.DeletedAt, post.ReplyCount) < 0 {
 		return errors.New("Mattermost post counts and timestamps must not be negative")
 	}
 	return nil
