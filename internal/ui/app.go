@@ -1781,6 +1781,10 @@ func (a *App) SetLoadingWorkspaces(names []string) {
 	a.bootstrap.SetWorkspaces(names)
 }
 
+func (a *App) SetLoadingServers(servers []LoadingServer) {
+	a.bootstrap.SetServers(servers)
+}
+
 // spinnerGlyph returns the current spinner character for both the
 // bootstrap overlay and the messages-pane in-channel spinner. Sourced
 // from styles.SpinnerChars indexed by the shared spinnerFrame counter.

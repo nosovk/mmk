@@ -84,6 +84,125 @@ func TestMattermostStartupHydratesCacheBeforeBlockedLiveAndIsolatesFailure(t *te
 	}
 }
 
+func TestMattermostStartupClaimsFirstUsableCachedServerInRegistryOrder(t *testing.T) {
+	registry := config.NewServerRegistry()
+	registry.Servers = []config.MattermostServer{
+		{ID: "s1", URL: "https://one.example", UserID: "u1"},
+		{ID: "s2", URL: "https://two.example", UserID: "u2"},
+		{ID: "s3", URL: "https://three.example", UserID: "u3"},
+	}
+	messages := make(chan tea.Msg, 16)
+	blocked := make(chan struct{})
+	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
+		Registry: registry,
+		Secrets:  blockingMattermostSecrets{release: blocked},
+		NewClient: func(mattermost.Server, string) (service.ServerBootstrapClient, error) {
+			return nil, errors.New("unused")
+		},
+		Cache: &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{
+			"s2": cachedMattermostSnapshot("s2", "u2", "second"),
+			"s3": cachedMattermostSnapshot("s3", "u3", "third"),
+		}},
+		Send: func(msg tea.Msg) { messages <- msg },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(blocked); startup.Cancel(); startup.Wait() }()
+	<-messages
+	var ready []ui.ServerReadyMsg
+	for len(ready) < 2 {
+		if msg, ok := (<-messages).(ui.ServerReadyMsg); ok {
+			ready = append(ready, msg)
+		}
+	}
+	if !ready[0].Server.InitialActive || ready[0].Server.ServerID != "s2" {
+		t.Fatalf("first usable cache = %#v", ready[0].Server)
+	}
+	if ready[1].Server.InitialActive {
+		t.Fatalf("later cache stole activation: %#v", ready[1].Server)
+	}
+}
+
+func TestMattermostStartupLiveClaimIsExactlyOnceAndLatePreferredServerDoesNotSteal(t *testing.T) {
+	registry := config.NewServerRegistry()
+	registry.Servers = []config.MattermostServer{
+		{ID: "s1", URL: "https://one.example", UserID: "u1"},
+		{ID: "s2", URL: "https://two.example", UserID: "u2"},
+	}
+	gates := map[string]chan struct{}{"s1": make(chan struct{}), "s2": make(chan struct{})}
+	messages := make(chan tea.Msg, 32)
+	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
+		Registry: registry, Secrets: fakeMattermostSecrets{tokens: map[string]string{"s1": "one", "s2": "two"}},
+		NewClient: func(server mattermost.Server, _ string) (service.ServerBootstrapClient, error) {
+			return fixedBlockingBootstrapClient{release: gates[server.ID], userID: server.UserID}, nil
+		},
+		Cache: &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{}},
+		Send:  func(msg tea.Msg) { messages <- msg },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { startup.Cancel(); startup.Wait() }()
+	<-messages
+	close(gates["s2"])
+	first := nextServerReady(t, messages)
+	if first.Server.ServerID != "s2" || !first.Server.InitialActive {
+		t.Fatalf("first live ready = %#v", first.Server)
+	}
+	close(gates["s1"])
+	second := nextServerReady(t, messages)
+	if second.Server.ServerID != "s1" || second.Server.InitialActive {
+		t.Fatalf("late preferred server = %#v", second.Server)
+	}
+}
+
+func TestMattermostStartupSwitchAndShutdownAreBoundedForUnusableServer(t *testing.T) {
+	release := make(chan struct{})
+	messages := make(chan tea.Msg, 8)
+	registry := config.NewServerRegistry()
+	registry.Servers = []config.MattermostServer{{ID: "s1", URL: "https://one.example", UserID: "u1"}}
+	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
+		Registry: registry, Secrets: blockingMattermostSecrets{release: release},
+		NewClient: func(mattermost.Server, string) (service.ServerBootstrapClient, error) {
+			return nil, errors.New("unused")
+		},
+		Cache: &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{}},
+		Send:  func(msg tea.Msg) { messages <- msg },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg := startup.switchMsg("s1"); msg != nil {
+		t.Fatalf("unusable switch emitted %#v", msg)
+	}
+	startup.Cancel()
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := startup.WaitContext(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitContext error = %v", err)
+	}
+	close(release)
+	if err := startup.WaitContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func nextServerReady(t *testing.T, messages <-chan tea.Msg) ui.ServerReadyMsg {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case msg := <-messages:
+			if ready, ok := msg.(ui.ServerReadyMsg); ok {
+				return ready
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for ServerReadyMsg")
+		}
+	}
+}
+
 type fakeMattermostSnapshotStore struct {
 	mu    sync.Mutex
 	loads map[string]cache.MattermostBootstrapSnapshot
@@ -116,6 +235,42 @@ func (f fakeMattermostSecrets) Get(_ context.Context, id string) (string, error)
 type blockingBootstrapClient struct {
 	barrier  <-chan struct{}
 	serverID string
+}
+
+type fixedBlockingBootstrapClient struct {
+	release <-chan struct{}
+	userID  string
+}
+
+func (b fixedBlockingBootstrapClient) CurrentUser(ctx context.Context) (*mattermost.User, error) {
+	select {
+	case <-b.release:
+		return &mattermost.User{ID: b.userID}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+func (fixedBlockingBootstrapClient) TeamsForUser(context.Context, string) ([]mattermost.Team, error) {
+	return nil, nil
+}
+func (fixedBlockingBootstrapClient) ChannelsForUser(context.Context, string) ([]mattermost.Channel, error) {
+	return nil, nil
+}
+func (fixedBlockingBootstrapClient) ChannelMembershipsForUser(context.Context, string, string) ([]mattermost.ChannelMembership, error) {
+	return nil, nil
+}
+func (fixedBlockingBootstrapClient) UsersByIDs(context.Context, []string) ([]mattermost.User, error) {
+	return nil, nil
+}
+func (fixedBlockingBootstrapClient) UsersByGroupChannelIDs(context.Context, []string) (map[string][]mattermost.User, error) {
+	return nil, nil
+}
+
+type blockingMattermostSecrets struct{ release <-chan struct{} }
+
+func (b blockingMattermostSecrets) Get(context.Context, string) (string, error) {
+	<-b.release
+	return "token", nil
 }
 
 func (b blockingBootstrapClient) CurrentUser(ctx context.Context) (*mattermost.User, error) {

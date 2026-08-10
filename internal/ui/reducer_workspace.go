@@ -62,6 +62,7 @@ import (
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/styles"
+	"github.com/nosovk/mmk/internal/ui/workspace"
 )
 
 var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -77,6 +78,9 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case ServerStateMsg:
 		a.workspaceRail.SetState(string(m.ServerID), m.State, m.Err)
+		if m.State == workspace.ItemStateError {
+			a.bootstrap.MarkServerFailed(string(m.ServerID))
+		}
 		return nil, true
 
 	case WorkspaceReadyMsg:
@@ -170,7 +174,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 }
 
 func reduceServerReady(a *App, state ServerViewState) tea.Cmd {
-	a.bootstrap.MarkReady(state.ServerName)
+	a.bootstrap.MarkServerReady(string(state.ServerID))
 	if !state.InitialActive || !a.bootstrap.ClaimInitialActive() {
 		return nil
 	}

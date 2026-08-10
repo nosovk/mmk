@@ -57,14 +57,16 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	}
 	defer func() {
 		startup.Cancel()
-		startup.Wait()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = startup.WaitContext(ctx)
 	}()
 
 	pendingMu.Lock()
 	for _, msg := range pending {
 		switch value := msg.(type) {
 		case mattermostRailMsg:
-			app.SetLoadingWorkspaces(serverNames(value.Items))
+			app.SetLoadingServers(loadingServers(value.Items))
 			app.SetWorkspaces(value.Items)
 		case ui.ServerReadyMsg, ui.ServerRefreshedMsg, ui.ServerStateMsg:
 			_, _ = app.Update(msg)
@@ -75,18 +77,18 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	pendingMu.Unlock()
 
 	app.SetWorkspaceSwitcher(func(serverID string) tea.Msg {
-		return ui.ServerSwitchedMsg{Server: startup.viewState(ids.ServerID(serverID))}
+		return startup.switchMsg(serverID)
 	})
 	_, err = program.Run()
 	return err
 }
 
-func serverNames(items []workspace.WorkspaceItem) []string {
-	names := make([]string, len(items))
+func loadingServers(items []workspace.WorkspaceItem) []ui.LoadingServer {
+	servers := make([]ui.LoadingServer, len(items))
 	for i := range items {
-		names[i] = items[i].Name
+		servers[i] = ui.LoadingServer{ID: items[i].ID, Name: items[i].Name}
 	}
-	return names
+	return servers
 }
 
 type startupModeKind uint8
@@ -137,10 +139,21 @@ type mattermostStartup struct {
 	mu       sync.RWMutex
 	contexts map[ids.ServerID]mattermostServerContext
 	initial  ids.ServerID
+	claimed  bool
 }
 
 func (s *mattermostStartup) Cancel() { s.cancel() }
 func (s *mattermostStartup) Wait()   { s.wg.Wait() }
+func (s *mattermostStartup) WaitContext(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { s.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 func startMattermost(parent context.Context, deps mattermostStartupDeps) (*mattermostStartup, error) {
 	if deps.Secrets == nil || deps.NewClient == nil || deps.Cache == nil || deps.Send == nil {
@@ -163,7 +176,7 @@ func startMattermost(parent context.Context, deps mattermostStartupDeps) (*matte
 	}
 	deps.Send(mattermostRailMsg{Items: items})
 
-	for index, configured := range deps.Registry.Servers {
+	for _, configured := range deps.Registry.Servers {
 		serverID := ids.ServerID(configured.ID)
 		raw, err := deps.Cache.LoadMattermostBootstrapSnapshot(configured.ID)
 		if err != nil {
@@ -177,8 +190,8 @@ func startMattermost(parent context.Context, deps mattermostStartupDeps) (*matte
 			deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateError, Err: fmt.Errorf("hydrate cached server: %w", err)})
 			continue
 		}
-		startup.setSnapshot(serverID, snapshot)
-		deps.Send(ui.ServerReadyMsg{Server: mattermostServerViewState(snapshot, index == 0)})
+		initial := startup.setSnapshotAndClaim(serverID, snapshot)
+		deps.Send(ui.ServerReadyMsg{Server: mattermostServerViewState(snapshot, initial)})
 		deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateReady})
 	}
 
@@ -220,11 +233,11 @@ func (s *mattermostStartup) refreshServer(ctx context.Context, deps mattermostSt
 		return
 	}
 	wasUsable := s.usable(serverID)
-	s.setSnapshot(serverID, snapshot)
+	initial := s.setSnapshotAndClaim(serverID, snapshot)
 	if wasUsable {
 		deps.Send(ui.ServerRefreshedMsg{Server: mattermostServerViewState(snapshot, false)})
 	} else {
-		deps.Send(ui.ServerReadyMsg{Server: mattermostServerViewState(snapshot, serverID == s.initial)})
+		deps.Send(ui.ServerReadyMsg{Server: mattermostServerViewState(snapshot, initial)})
 	}
 	deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateReady})
 }
@@ -246,6 +259,30 @@ func (s *mattermostStartup) setSnapshot(serverID ids.ServerID, snapshot service.
 	context.snapshot = snapshot
 	context.usable = true
 	s.contexts[serverID] = context
+}
+
+func (s *mattermostStartup) setSnapshotAndClaim(serverID ids.ServerID, snapshot service.ServerSnapshot) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	serverContext := s.contexts[serverID]
+	serverContext.snapshot = snapshot
+	serverContext.usable = true
+	s.contexts[serverID] = serverContext
+	if s.claimed {
+		return false
+	}
+	s.claimed = true
+	return true
+}
+
+func (s *mattermostStartup) switchMsg(serverID string) tea.Msg {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	serverContext := s.contexts[ids.ServerID(serverID)]
+	if !serverContext.usable {
+		return nil
+	}
+	return ui.ServerSwitchedMsg{Server: mattermostServerViewState(serverContext.snapshot, false)}
 }
 
 func (s *mattermostStartup) usable(serverID ids.ServerID) bool {

@@ -34,8 +34,14 @@ import (
 
 // loadingEntry is one workspace's row in the startup overlay.
 type loadingEntry struct {
+	ID       string
 	TeamName string
 	Status   string // "connecting", "ready", "failed"
+}
+
+type LoadingServer struct {
+	ID   string
+	Name string
 }
 
 // workspaceBootstrap owns the startup-overlay state machine.
@@ -59,39 +65,49 @@ func (b *workspaceBootstrap) IsLoading() bool {
 // workspace name and turns the overlay on. Called at program start
 // from cmd/mmk/main.go before any Slack connection is attempted.
 func (b *workspaceBootstrap) SetWorkspaces(names []string) {
+	servers := make([]LoadingServer, len(names))
+	for i, name := range names {
+		servers[i] = LoadingServer{ID: name, Name: name}
+	}
+	b.SetServers(servers)
+}
+
+func (b *workspaceBootstrap) SetServers(servers []LoadingServer) {
 	b.loading = true
 	b.states = nil
-	for _, name := range names {
+	for _, server := range servers {
 		b.states = append(b.states, loadingEntry{
-			TeamName: name,
+			ID:       server.ID,
+			TeamName: server.Name,
 			Status:   "connecting",
 		})
 	}
+}
+
+func (b *workspaceBootstrap) MarkServerReady(serverID string)  { b.mark(serverID, "ready") }
+func (b *workspaceBootstrap) MarkServerFailed(serverID string) { b.mark(serverID, "failed") }
+
+func (b *workspaceBootstrap) mark(serverID, status string) {
+	for i := range b.states {
+		if b.states[i].ID == serverID {
+			b.states[i].Status = status
+			break
+		}
+	}
+	b.checkDone()
 }
 
 // MarkReady flips the named workspace's status to "ready". Unknown
 // names are a no-op (defensive: race-free re-entry from late
 // WorkspaceReadyMsg paths). Triggers checkDone.
 func (b *workspaceBootstrap) MarkReady(teamName string) {
-	for i := range b.states {
-		if b.states[i].TeamName == teamName {
-			b.states[i].Status = "ready"
-			break
-		}
-	}
-	b.checkDone()
+	b.mark(teamName, "ready")
 }
 
 // MarkFailed flips the named workspace's status to "failed". Unknown
 // names are a no-op. Triggers checkDone.
 func (b *workspaceBootstrap) MarkFailed(teamName string) {
-	for i := range b.states {
-		if b.states[i].TeamName == teamName {
-			b.states[i].Status = "failed"
-			break
-		}
-	}
-	b.checkDone()
+	b.mark(teamName, "failed")
 }
 
 // TimeoutPendingAsFailed flips any still-"connecting" entries to
