@@ -253,9 +253,9 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	}
 	a.sidebar.SelectByID(target.ID)
 	a.activeChannelID = target.ID
-	a.messagepane.SetLoading(false)
+	a.messagepane.SetLoading(true)
 	a.messagepane.SetMessages(nil)
-	return nil
+	return func() tea.Msg { return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type} }
 }
 
 // reduceWorkspaceReady handles WorkspaceReadyMsg. Extracted from

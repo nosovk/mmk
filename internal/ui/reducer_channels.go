@@ -54,6 +54,7 @@
 package ui
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -61,11 +62,39 @@ import (
 
 	"github.com/nosovk/mmk/internal/debuglog"
 	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/sidebar"
 )
 
 var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
+	case MattermostMessagesLoadedMsg:
+		if m.Request != a.activeHistoryRequest {
+			return nil, true
+		}
+		a.messagepane.SetLoading(false)
+		a.statusbar.SetSyncing(false)
+		if m.Err == nil {
+			a.messagepane.SetMessages(m.Messages)
+			a.mattermostHistoryExhausted[m.Request] = !m.HasMore
+		}
+		return nil, true
+
+	case MattermostOlderMessagesLoadedMsg:
+		delete(a.mattermostFetchingOlder, m.Request)
+		if m.Request != a.activeHistoryRequest {
+			return nil, true
+		}
+		a.messagepane.SetLoading(false)
+		if m.Err != nil || m.AnchorID != a.messagepane.OldestID() {
+			return nil, true
+		}
+		a.messagepane.PrependMessages(m.Messages)
+		if !m.HasMore {
+			a.mattermostHistoryExhausted[m.Request] = true
+		}
+		return nil, true
+
 	case ChannelSelectedMsg:
 		cmd, fetchFired := reduceChannelSelected(a, m)
 		// Permalink completion. !fetchFired means no MessagesLoadedMsg
@@ -331,11 +360,32 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		a.threadCompose.SetActiveChannel(m.ID)
 		a.statusbar.SetChannel(m.Name)
 		a.statusbar.SetChannelType(m.Type)
-		a.statusbar.SetSyncing(false)
-		a.messagepane.SetLoading(false)
-		a.messagepane.SetMessages(nil)
+		a.historyGeneration++
+		request := HistoryRequest{ServerID: ids.ServerID(a.activeServerID), ChannelID: m.ID, Generation: a.historyGeneration}
+		a.activeHistoryRequest = request
+		delete(a.mattermostHistoryExhausted, request)
+		var cached []messages.MessageItem
+		if a.mattermostHistory != nil {
+			cached, _ = a.mattermostHistory.ReadCached(request, "")
+		}
+		if len(cached) > 0 {
+			a.messagepane.SetLoading(false)
+			a.messagepane.SetMessages(cached)
+			a.statusbar.SetSyncing(true)
+		} else {
+			a.messagepane.SetLoading(true)
+			a.messagepane.SetMessages(nil)
+			a.statusbar.SetSyncing(false)
+		}
 		a.setFocusedWindowChannel(m.ID, m.Name, m.Type)
-		return nil, false
+		if a.mattermostHistory == nil {
+			a.messagepane.SetLoading(false)
+			return nil, false
+		}
+		service := a.mattermostHistory
+		return tea.Batch(spinnerTickCmd(), func() tea.Msg {
+			return service.FetchRecent(context.Background(), request)
+		}), true
 	}
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		return a.uploadToastCmd("Upload in progress", 2*time.Second), false

@@ -41,7 +41,7 @@ func TestMattermostStartupHydratesCacheBeforeBlockedLiveAndIsolatesFailure(t *te
 	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
 		Registry: registry,
 		Secrets:  fakeMattermostSecrets{tokens: map[string]string{"s1": "pat-one"}, errs: map[string]error{"s2": errors.New("secret pat-two denied")}},
-		NewClient: func(server mattermost.Server, token string) (service.ServerBootstrapClient, error) {
+		NewClient: func(server mattermost.Server, token string) (mattermostStartupClient, error) {
 			if token != "pat-one" {
 				t.Fatalf("unexpected token %q", token)
 			}
@@ -96,7 +96,7 @@ func TestMattermostStartupClaimsFirstUsableCachedServerInRegistryOrder(t *testin
 	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
 		Registry: registry,
 		Secrets:  blockingMattermostSecrets{release: blocked},
-		NewClient: func(mattermost.Server, string) (service.ServerBootstrapClient, error) {
+		NewClient: func(mattermost.Server, string) (mattermostStartupClient, error) {
 			return nil, errors.New("unused")
 		},
 		Cache: &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{
@@ -134,7 +134,7 @@ func TestMattermostStartupLiveClaimIsExactlyOnceAndLatePreferredServerDoesNotSte
 	messages := make(chan tea.Msg, 32)
 	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
 		Registry: registry, Secrets: fakeMattermostSecrets{tokens: map[string]string{"s1": "one", "s2": "two"}},
-		NewClient: func(server mattermost.Server, _ string) (service.ServerBootstrapClient, error) {
+		NewClient: func(server mattermost.Server, _ string) (mattermostStartupClient, error) {
 			return fixedBlockingBootstrapClient{release: gates[server.ID], userID: server.UserID}, nil
 		},
 		Cache: &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{}},
@@ -157,6 +157,32 @@ func TestMattermostStartupLiveClaimIsExactlyOnceAndLatePreferredServerDoesNotSte
 	}
 }
 
+func TestMattermostStartupRetainsHistoryCapableClientPerServer(t *testing.T) {
+	registry := config.NewServerRegistry()
+	registry.Servers = []config.MattermostServer{{ID: "s1", URL: "https://one.example", UserID: "u1"}}
+	client := fixedBlockingBootstrapClient{release: closedChannel(), userID: "u1"}
+	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
+		Registry:  registry,
+		Secrets:   fakeMattermostSecrets{tokens: map[string]string{"s1": "secret"}},
+		NewClient: func(mattermost.Server, string) (mattermostStartupClient, error) { return client, nil },
+		Cache:     &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{}},
+		Send:      func(tea.Msg) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startup.Wait()
+	defer startup.Cancel()
+	startup.mu.RLock()
+	retained := startup.contexts["s1"].client
+	startup.mu.RUnlock()
+	if retained == nil {
+		t.Fatal("history-capable client was not retained")
+	}
+}
+
+func closedChannel() chan struct{} { ch := make(chan struct{}); close(ch); return ch }
+
 func TestMattermostStartupSwitchAndShutdownAreBoundedForUnusableServer(t *testing.T) {
 	release := make(chan struct{})
 	messages := make(chan tea.Msg, 8)
@@ -164,7 +190,7 @@ func TestMattermostStartupSwitchAndShutdownAreBoundedForUnusableServer(t *testin
 	registry.Servers = []config.MattermostServer{{ID: "s1", URL: "https://one.example", UserID: "u1"}}
 	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
 		Registry: registry, Secrets: blockingMattermostSecrets{release: release},
-		NewClient: func(mattermost.Server, string) (service.ServerBootstrapClient, error) {
+		NewClient: func(mattermost.Server, string) (mattermostStartupClient, error) {
 			return nil, errors.New("unused")
 		},
 		Cache: &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{}},
@@ -196,7 +222,7 @@ func TestMattermostStartupDoesNotSendAfterCancellationReleasesBlockedSecretStore
 	registry.Servers = []config.MattermostServer{{ID: "s1", URL: "https://one.example", UserID: "u1"}}
 	startup, err := startMattermost(ctx, mattermostStartupDeps{
 		Registry: registry, Secrets: blockingMattermostSecrets{release: release},
-		NewClient: func(mattermost.Server, string) (service.ServerBootstrapClient, error) {
+		NewClient: func(mattermost.Server, string) (mattermostStartupClient, error) {
 			return nil, errors.New("must not initialize after cancellation")
 		},
 		Cache: &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{}},
@@ -303,6 +329,14 @@ type blockingBootstrapClient struct {
 type fixedBlockingBootstrapClient struct {
 	release <-chan struct{}
 	userID  string
+}
+
+func (blockingBootstrapClient) ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error) {
+	return mattermost.MessagePage{}, errors.New("unused history")
+}
+
+func (fixedBlockingBootstrapClient) ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error) {
+	return mattermost.MessagePage{}, errors.New("unused history")
 }
 
 func (b fixedBlockingBootstrapClient) CurrentUser(ctx context.Context) (*mattermost.User, error) {

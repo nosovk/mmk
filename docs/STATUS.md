@@ -1,6 +1,14 @@
 # mmk Implementation Status
 
-Last updated: 2026-05-03
+Last updated: 2026-08-11
+
+## Mattermost Migration
+
+- [x] Task 8: server rail, team-grouped sidebar, server switching, unread presentation, and capability gates
+- [x] Task 9: cache-first read-only Mattermost channel timeline, exact REST page ordering, opaque post IDs, author resolution, and older-history pagination
+- [ ] Mattermost compose/send remains disabled until Task 10
+
+Mattermost history always renders cached roots and replies immediately when available, then verifies the channel against the live server. Failed verification preserves cached content; authoritative empty responses clear it. Requests are scoped by server, channel, and selection generation so late results cannot overwrite a newer selection. Older-page exhaustion suppresses repeated terminal requests.
 
 ## What's Working
 

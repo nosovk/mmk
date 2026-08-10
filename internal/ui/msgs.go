@@ -48,6 +48,24 @@ type emojiInvalidateMsg struct{}
 
 // Messages sent between components
 type (
+	HistoryRequest struct {
+		ServerID   ids.ServerID
+		ChannelID  string
+		Generation uint64
+	}
+	MattermostMessagesLoadedMsg struct {
+		Request  HistoryRequest
+		Messages []messages.MessageItem
+		HasMore  bool
+		Err      error
+	}
+	MattermostOlderMessagesLoadedMsg struct {
+		Request  HistoryRequest
+		AnchorID string
+		Messages []messages.MessageItem
+		HasMore  bool
+		Err      error
+	}
 	ChannelSelectedMsg struct {
 		ID   string
 		Name string

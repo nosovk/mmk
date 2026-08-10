@@ -170,6 +170,12 @@ type App struct {
 	// internal/ui/services.go. Defaulted to a no-op adapter in
 	// NewApp so call sites can dispatch without nil-checks.
 	channels ChannelService
+	// mattermostHistory owns provider-neutral cache/network history callbacks.
+	mattermostHistory          MattermostHistoryService
+	historyGeneration          uint64
+	activeHistoryRequest       HistoryRequest
+	mattermostFetchingOlder    map[HistoryRequest]bool
+	mattermostHistoryExhausted map[HistoryRequest]bool
 	// messages is the App's MessageService collaborator (send / edit /
 	// delete / mark-unread / permalink). See internal/ui/services.go.
 	// Defaulted to a no-op adapter in NewApp so call sites can dispatch
@@ -463,57 +469,59 @@ func NewApp() *App {
 	// first ChannelSelectedMsg apply records the channel on it.
 	wins, rootWin := wintree.New(wintree.Channel{})
 	app := &App{
-		workspaceRail:         workspace.New(nil, 0),
-		features:              SlackFeatures(),
-		sidebar:               sidebar.New(nil),
-		compose:               compose.New(""),
-		statusbar:             statusbar.New(),
-		channelFinder:         channelfinder.New(),
-		searchResults:         searchresults.New(),
-		newMessagePicker:      newmessagepicker.New(),
-		workspaceFinder:       workspacefinder.New(),
-		themeSwitcher:         themeswitcher.New(),
-		presenceMenu:          presencemenu.New(),
-		help:                  help.New(),
-		threadPanel:           thread.New(),
-		threadCompose:         compose.New("thread"),
-		threadsView:           threadsview.New(nil, ""),
-		linkPicker:            linkpicker.New(),
-		reactionPicker:        reactionpicker.New(),
-		reactionsView:         reactionsview.New(),
-		confirmPrompt:         confirmprompt.New(),
-		mode:                  ModeNormal,
-		focusedPanel:          PanelSidebar,
-		wins:                  wins,
-		focusedWin:            rootWin,
-		sidebarVisible:        true,
-		view:                  ViewChannels,
-		keys:                  DefaultKeyMap(),
-		selfSend:              newSelfSendDedup(),
-		bootstrap:             newWorkspaceBootstrap(),
-		windowTitle:           "mmk",
-		threadsDirtyDebounce:  150 * time.Millisecond,
-		channelSearchDebounce: channelSearchDebounceDelay,
-		fetchingOlder:         map[string]bool{},
-		mouseWheelLines:       3,
-		userNames:             map[string]string{},
-		externalUsers:         map[string]bool{},
-		presence:              newPresenceController(),
-		renderCache:           newPanelRenderCache(),
-		drag:                  newDragState(),
-		preview:               newImagePreviewController(),
-		layout:                newPanelLayout(),
-		reactions:             noopReactionService,
-		threads:               noopThreadService,
-		messageSvc:            noopMessageService,
-		channels:              noopChannelService,
-		searchSvc:             noopSearchService,
-		lastChannelByTeam:     map[string]string{},
-		workspaceDomains:      map[string]string{},
-		browserOpener:         openURLCmd,
-		navHistory:            newNavHistoryStore(),
-		clipboardRead:         defaultClipboardReader,
-		clipboardWrite:        defaultClipboardWriter,
+		workspaceRail:              workspace.New(nil, 0),
+		features:                   SlackFeatures(),
+		sidebar:                    sidebar.New(nil),
+		compose:                    compose.New(""),
+		statusbar:                  statusbar.New(),
+		channelFinder:              channelfinder.New(),
+		searchResults:              searchresults.New(),
+		newMessagePicker:           newmessagepicker.New(),
+		workspaceFinder:            workspacefinder.New(),
+		themeSwitcher:              themeswitcher.New(),
+		presenceMenu:               presencemenu.New(),
+		help:                       help.New(),
+		threadPanel:                thread.New(),
+		threadCompose:              compose.New("thread"),
+		threadsView:                threadsview.New(nil, ""),
+		linkPicker:                 linkpicker.New(),
+		reactionPicker:             reactionpicker.New(),
+		reactionsView:              reactionsview.New(),
+		confirmPrompt:              confirmprompt.New(),
+		mode:                       ModeNormal,
+		focusedPanel:               PanelSidebar,
+		wins:                       wins,
+		focusedWin:                 rootWin,
+		sidebarVisible:             true,
+		view:                       ViewChannels,
+		keys:                       DefaultKeyMap(),
+		selfSend:                   newSelfSendDedup(),
+		bootstrap:                  newWorkspaceBootstrap(),
+		windowTitle:                "mmk",
+		threadsDirtyDebounce:       150 * time.Millisecond,
+		channelSearchDebounce:      channelSearchDebounceDelay,
+		fetchingOlder:              map[string]bool{},
+		mattermostFetchingOlder:    map[HistoryRequest]bool{},
+		mattermostHistoryExhausted: map[HistoryRequest]bool{},
+		mouseWheelLines:            3,
+		userNames:                  map[string]string{},
+		externalUsers:              map[string]bool{},
+		presence:                   newPresenceController(),
+		renderCache:                newPanelRenderCache(),
+		drag:                       newDragState(),
+		preview:                    newImagePreviewController(),
+		layout:                     newPanelLayout(),
+		reactions:                  noopReactionService,
+		threads:                    noopThreadService,
+		messageSvc:                 noopMessageService,
+		channels:                   noopChannelService,
+		searchSvc:                  noopSearchService,
+		lastChannelByTeam:          map[string]string{},
+		workspaceDomains:           map[string]string{},
+		browserOpener:              openURLCmd,
+		navHistory:                 newNavHistoryStore(),
+		clipboardRead:              defaultClipboardReader,
+		clipboardWrite:             defaultClipboardWriter,
 	}
 	// Root model deliberately bypasses newWindowModel: the config
 	// retention fields (avatarFn, userNames, emojiCtx, ...) are still
@@ -546,6 +554,10 @@ func NewApp() *App {
 	// stays accurate if the binding is ever changed.
 	app.statusbar.SetHelpHint(app.defaultHelpHint())
 	return app
+}
+
+func (a *App) SetMattermostHistoryService(service MattermostHistoryService) {
+	a.mattermostHistory = service
 }
 
 // defaultHelpHint is the resting statusbar hint ("? for keybindings").
@@ -1389,6 +1401,20 @@ func (a *App) scrollFocusedPanel(delta int) tea.Cmd {
 // Returns nil otherwise. Centralizes the spinner-tick + fetch-cmd batching
 // previously duplicated across handleUp / the mouse-wheel handler / page-up.
 func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
+	if a.features.kind == ContextMattermost {
+		request := a.activeHistoryRequest
+		if !atTop || a.mattermostHistory == nil || request.ChannelID == "" || a.mattermostFetchingOlder[request] || a.mattermostHistoryExhausted[request] {
+			return nil
+		}
+		anchor := a.messagepane.OldestID()
+		if anchor == "" {
+			return nil
+		}
+		a.mattermostFetchingOlder[request] = true
+		a.messagepane.SetLoading(true)
+		service := a.mattermostHistory
+		return tea.Batch(spinnerTickCmd(), func() tea.Msg { return service.FetchOlder(context.Background(), request, anchor) })
+	}
 	// Backfill is triggered by focused-window scrolling, so the
 	// gate/set are keyed by the focused channel.
 	if !atTop || a.fetchingOlder[a.activeChannelID] {

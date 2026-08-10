@@ -51,7 +51,7 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	startup, err := startMattermost(runCtx, mattermostStartupDeps{
 		Registry: registry,
 		Secrets:  mattermost.NewOSSecretStore(),
-		NewClient: func(server mattermost.Server, token string) (service.ServerBootstrapClient, error) {
+		NewClient: func(server mattermost.Server, token string) (mattermostStartupClient, error) {
 			return mattermost.NewClient(server.URL, token)
 		},
 		Cache: db,
@@ -61,6 +61,7 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	if err != nil {
 		return err
 	}
+	app.SetMattermostHistoryService(mattermostUIHistoryService{ctx: runCtx, startup: startup, cache: db})
 	defer func() {
 		stopRun()
 		startup.Cancel()
@@ -125,7 +126,7 @@ type mattermostSecretReader interface {
 type mattermostStartupDeps struct {
 	Registry  config.ServerRegistry
 	Secrets   mattermostSecretReader
-	NewClient func(mattermost.Server, string) (service.ServerBootstrapClient, error)
+	NewClient func(mattermost.Server, string) (mattermostStartupClient, error)
 	Cache     mattermostSnapshotStore
 	Send      func(tea.Msg)
 	Clock     func() time.Time
@@ -138,7 +139,13 @@ type mattermostRailMsg struct {
 type mattermostServerContext struct {
 	server   mattermost.Server
 	snapshot service.ServerSnapshot
+	client   mattermostStartupClient
 	usable   bool
+}
+
+type mattermostStartupClient interface {
+	service.ServerBootstrapClient
+	ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error)
 }
 
 type mattermostStartup struct {
@@ -235,6 +242,7 @@ func (s *mattermostStartup) refreshServer(ctx context.Context, deps mattermostSt
 		deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateError, Err: errors.New("Mattermost bootstrap failed")})
 		return
 	}
+	s.setClient(serverID, client)
 	observedAt := deps.Clock()
 	if err := deps.Cache.ReplaceMattermostBootstrapSnapshot(mattermostCacheSnapshot(snapshot, observedAt)); err != nil {
 		deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateError, Err: fmt.Errorf("persist Mattermost bootstrap: %w", err)})
@@ -248,6 +256,14 @@ func (s *mattermostStartup) refreshServer(ctx context.Context, deps mattermostSt
 		deps.Send(ui.ServerReadyMsg{Server: mattermostServerViewState(snapshot, initial)})
 	}
 	deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateReady})
+}
+
+func (s *mattermostStartup) setClient(serverID ids.ServerID, client mattermostStartupClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	serverContext := s.contexts[serverID]
+	serverContext.client = client
+	s.contexts[serverID] = serverContext
 }
 
 func (s *mattermostStartup) viewState(serverID ids.ServerID) ui.ServerViewState {

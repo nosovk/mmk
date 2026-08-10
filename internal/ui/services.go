@@ -437,6 +437,14 @@ type ChannelService interface {
 	SearchRemote(query string) []channelfinder.Item
 }
 
+// MattermostHistoryService is intentionally separate from ChannelService so
+// opaque post IDs never cross Slack's ids.MessageTS boundary.
+type MattermostHistoryService interface {
+	ReadCached(HistoryRequest, string) ([]messages.MessageItem, error)
+	FetchRecent(context.Context, HistoryRequest) MattermostMessagesLoadedMsg
+	FetchOlder(context.Context, HistoryRequest, string) MattermostOlderMessagesLoadedMsg
+}
+
 // ChannelServiceFuncs is the closure bundle accepted by
 // NewChannelService. Any field may be nil; the resulting service
 // no-ops that operation.
