@@ -838,6 +838,10 @@ func run() error {
 	configDir := xdgConfig()
 	dataDir := xdgData()
 	cacheDir := xdgCache()
+	registry, err := config.LoadServerRegistry(filepath.Join(configDir, "servers.toml"))
+	if err != nil {
+		return fmt.Errorf("loading Mattermost server registry: %w", err)
+	}
 
 	// Load config
 	configPath := filepath.Join(configDir, "config.toml")
@@ -892,6 +896,9 @@ func run() error {
 		return fmt.Errorf("opening cache: %w", err)
 	}
 	defer db.Close()
+	if startupMode(registry) == startupMattermost {
+		return runMattermost(registry, cfg, db)
+	}
 
 	// Ensure image cache dir exists
 	imgCacheDir := filepath.Join(cacheDir, "images")
