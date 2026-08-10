@@ -188,6 +188,41 @@ func TestMattermostStartupSwitchAndShutdownAreBoundedForUnusableServer(t *testin
 	}
 }
 
+func TestMattermostStartupDoesNotSendAfterCancellationReleasesBlockedSecretStore(t *testing.T) {
+	release := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	messages := make(chan tea.Msg, 8)
+	registry := config.NewServerRegistry()
+	registry.Servers = []config.MattermostServer{{ID: "s1", URL: "https://one.example", UserID: "u1"}}
+	startup, err := startMattermost(ctx, mattermostStartupDeps{
+		Registry: registry, Secrets: blockingMattermostSecrets{release: release},
+		NewClient: func(mattermost.Server, string) (service.ServerBootstrapClient, error) {
+			return nil, errors.New("must not initialize after cancellation")
+		},
+		Cache: &fakeMattermostSnapshotStore{loads: map[string]cache.MattermostBootstrapSnapshot{}},
+		Send: func(msg tea.Msg) {
+			if ctx.Err() == nil {
+				messages <- msg
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-messages
+	cancel()
+	startup.Cancel()
+	close(release)
+	if err := startup.WaitContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case msg := <-messages:
+		t.Fatalf("late UI message after cancellation: %#v", msg)
+	default:
+	}
+}
+
 func nextServerReady(t *testing.T, messages <-chan tea.Msg) ui.ServerReadyMsg {
 	t.Helper()
 	deadline := time.After(time.Second)

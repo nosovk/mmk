@@ -21,6 +21,8 @@ import (
 )
 
 func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.DB) error {
+	runCtx, stopRun := context.WithCancel(context.Background())
+	defer stopRun()
 	app := ui.NewApp()
 	app.SetHelpFooter("Mattermost")
 	app.SetTypingEnabled(false)
@@ -34,6 +36,10 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	var pendingMu sync.Mutex
 	send := func(msg tea.Msg) {
 		pendingMu.Lock()
+		if runCtx.Err() != nil {
+			pendingMu.Unlock()
+			return
+		}
 		if program == nil {
 			pending = append(pending, msg)
 			pendingMu.Unlock()
@@ -42,7 +48,7 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 		pendingMu.Unlock()
 		program.Send(msg)
 	}
-	startup, err := startMattermost(context.Background(), mattermostStartupDeps{
+	startup, err := startMattermost(runCtx, mattermostStartupDeps{
 		Registry: registry,
 		Secrets:  mattermost.NewOSSecretStore(),
 		NewClient: func(server mattermost.Server, token string) (service.ServerBootstrapClient, error) {
@@ -56,6 +62,7 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 		return err
 	}
 	defer func() {
+		stopRun()
 		startup.Cancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
