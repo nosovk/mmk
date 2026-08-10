@@ -36,7 +36,7 @@ func handlePresenceCustomSnoozeMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			a.statusbar.SetToast("Invalid snooze duration")
 			return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return statusbar.CopiedClearMsg{} })
 		}
-		st := a.presence.Apply(a.activeTeamID, presencemenu.ActionSnooze, mins)
+		st := a.presence.Apply(a.activeServerID, presencemenu.ActionSnooze, mins)
 		a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
 		if a.setStatusFn != nil {
 			a.setStatusFn(presencemenu.ActionSnooze, mins)

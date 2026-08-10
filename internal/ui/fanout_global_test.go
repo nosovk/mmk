@@ -29,7 +29,7 @@ func TestGlobalFanout_UserNamesReachAllWindows(t *testing.T) {
 
 func TestGlobalFanout_PatchUserNameReachesAllWindows(t *testing.T) {
 	a, w1, w2 := twoWindowApp(t)
-	// UserResolvedMsg gates on TeamID == a.activeTeamID; both are ""
+	// UserResolvedMsg gates on TeamID == a.activeServerID; both are ""
 	// in the test app, so the patch applies.
 	_, _ = a.Update(UserResolvedMsg{UserID: "U9", DisplayName: "zed"})
 	if got := a.winModels[w1].ResolveUserName("U9"); got != "zed" {

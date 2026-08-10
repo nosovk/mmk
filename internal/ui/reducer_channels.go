@@ -5,35 +5,35 @@
 // Owns the nine Update arms that drive the channel-selection
 // lifecycle and channel-list mutations:
 //
-//   ChannelSelectedMsg            - user picked a channel: reset
-//                                   view state, mark visit,
-//                                   dispatch by cache freshness
-//                                   tier (fresh / verify-in-bg /
-//                                   spinner).
-//   MessagesLoadedMsg             - initial messages fetch landed:
-//                                   replace pane contents (nil =
-//                                   network failure, keep cache).
-//   OlderMessagesLoadedMsg        - history backfill landed:
-//                                   prepend (anchor-validated: dropped
-//                                   if the buffer was replaced
-//                                   mid-flight).
-//   ChannelMarkedRemoteMsg        - WS echo of a remote mark:
-//                                   apply locally.
-//   ChannelMarkedReadMsg          - optimistic mark-read echo:
-//                                   refresh sidebar read state.
-//   ChannelMembershipMsg          - membership fetch landed:
-//                                   push to the cache used by
-//                                   mention picker / DM resolution.
-//   ChannelJoinedMsg              - finder-driven join succeeded:
-//                                   add to sidebar + open it.
-//   ChannelJoinFailedMsg          - finder-driven join failed:
-//                                   log warning (toast TBD).
-//   channelSearchDebounceMsg      - finder typing paused: issue one
-//                                   channels/search for the query
-//                                   the user stopped on.
-//   RemoteChannelsFoundMsg        - that search answered: merge the
-//                                   non-joined matches into the
-//                                   finder, unless superseded.
+//	ChannelSelectedMsg            - user picked a channel: reset
+//	                                view state, mark visit,
+//	                                dispatch by cache freshness
+//	                                tier (fresh / verify-in-bg /
+//	                                spinner).
+//	MessagesLoadedMsg             - initial messages fetch landed:
+//	                                replace pane contents (nil =
+//	                                network failure, keep cache).
+//	OlderMessagesLoadedMsg        - history backfill landed:
+//	                                prepend (anchor-validated: dropped
+//	                                if the buffer was replaced
+//	                                mid-flight).
+//	ChannelMarkedRemoteMsg        - WS echo of a remote mark:
+//	                                apply locally.
+//	ChannelMarkedReadMsg          - optimistic mark-read echo:
+//	                                refresh sidebar read state.
+//	ChannelMembershipMsg          - membership fetch landed:
+//	                                push to the cache used by
+//	                                mention picker / DM resolution.
+//	ChannelJoinedMsg              - finder-driven join succeeded:
+//	                                add to sidebar + open it.
+//	ChannelJoinFailedMsg          - finder-driven join failed:
+//	                                log warning (toast TBD).
+//	channelSearchDebounceMsg      - finder typing paused: issue one
+//	                                channels/search for the query
+//	                                the user stopped on.
+//	RemoteChannelsFoundMsg        - that search answered: merge the
+//	                                non-joined matches into the
+//	                                finder, unless superseded.
 //
 // Free reducer (not controller-absorbed): these arms cooperate on
 // the sidebar, messagepane, statusbar, channelFinder, navHistory,
@@ -239,7 +239,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		channels := a.channels
-		team, gen, query := a.activeTeamID, m.gen, m.query
+		team, gen, query := a.activeServerID, m.gen, m.query
 		return func() tea.Msg {
 			return RemoteChannelsFoundMsg{
 				TeamID: team,
@@ -254,7 +254,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// user has since switched away from: SetBrowseable replaces
 		// the whole non-joined set, so a late arrival would visibly
 		// overwrite the list under the cursor.
-		if m.TeamID != a.activeTeamID || m.Gen != a.pendingChannelSearchGen {
+		if m.TeamID != a.activeServerID || m.Gen != a.pendingChannelSearchGen {
 			return nil, true
 		}
 		a.channelFinder.SetBrowseable(m.Items)
@@ -354,7 +354,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	// asynchronously via main.go's recorder closure.
 	a.channels.RecordVisit(ids.ChannelID(m.ID))
 	if !m.FromHistory {
-		a.navHistory.Push(a.activeTeamID, m.ID)
+		a.navHistory.Push(a.activeServerID, m.ID)
 	}
 	// Tell the sidebar which channel is active so the staleness
 	// filter never hides it out from under the user.

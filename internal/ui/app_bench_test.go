@@ -39,7 +39,7 @@ func makeBenchApp() *App {
 	}
 	a.messagepane.SetMessages(msgs)
 	a.activeChannelID = "C1"
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 
 	a.SetMode(ModeInsert)
 	a.focusedPanel = PanelMessages
@@ -108,7 +108,7 @@ func makeWideScrollApp() *App {
 	}
 	a.messagepane.SetMessages(msgs)
 	a.activeChannelID = "C1"
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	a.focusedPanel = PanelMessages
 	a.SetMode(ModeNormal)
 

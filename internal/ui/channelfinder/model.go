@@ -5,11 +5,11 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/muesli/reflow/truncate"
 	"github.com/nosovk/mmk/internal/text"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/overlay"
 	"github.com/nosovk/mmk/internal/ui/styles"
-	"github.com/muesli/reflow/truncate"
 )
 
 // nonJoinedColor is a hard-coded dim grey used for channels the user is not a

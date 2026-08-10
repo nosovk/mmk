@@ -19,10 +19,12 @@ import (
 
 	"github.com/nosovk/mmk/internal/cache"
 	emojiutil "github.com/nosovk/mmk/internal/emoji"
+	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/channelfinder"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/searchresults"
 	"github.com/nosovk/mmk/internal/ui/sidebar"
+	"github.com/nosovk/mmk/internal/ui/workspace"
 )
 
 // EmojiImageReadyMsg re-exports emoji.EmojiImageReadyMsg so reducers
@@ -254,6 +256,36 @@ type (
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
 		SectionsProvider sidebar.SectionsProvider
+	}
+	// ServerViewState is the canonical provider-neutral state installed for a
+	// Mattermost server. Workspace lifecycle messages remain compatibility
+	// adapters until the Slack runtime is removed in Task 15.
+	ServerViewState struct {
+		ServerID         ids.ServerID
+		ServerName       string
+		Theme            string
+		SidebarWidth     int
+		Channels         []sidebar.ChannelItem
+		FinderItems      []channelfinder.Item
+		UserNames        map[string]string
+		UserID           string
+		SectionsProvider sidebar.SectionsProvider
+		InitialActive    bool
+		LastChannelID    string
+	}
+	ServerReadyMsg struct {
+		Server ServerViewState
+	}
+	ServerRefreshedMsg struct {
+		Server ServerViewState
+	}
+	ServerSwitchedMsg struct {
+		Server ServerViewState
+	}
+	ServerStateMsg struct {
+		ServerID ids.ServerID
+		State    workspace.ItemState
+		Err      error
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.

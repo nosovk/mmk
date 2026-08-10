@@ -30,18 +30,18 @@ func TestFormatTitle(t *testing.T) {
 }
 
 // TestComputeWindowTitle covers the full pipeline from raw inputs to
-// rendered title. The pre-bootstrap branch (empty activeTeamID) MUST
+// rendered title. The pre-bootstrap branch (empty activeServerID) MUST
 // produce a stable "mmk" regardless of stray non-zero counts -- a
 // brief window during startup where the readers may already return
 // data but the active workspace isn't yet selected.
 func TestComputeWindowTitle(t *testing.T) {
 	tests := []struct {
-		name          string
-		activeTeamID  string
-		workspaceName string
-		activeUnreads int
-		otherUnreads  int
-		want          string
+		name           string
+		activeServerID string
+		workspaceName  string
+		activeUnreads  int
+		otherUnreads   int
+		want           string
 	}{
 		{"pre-bootstrap (no active workspace)", "", "", 0, 0, "mmk"},
 		{"pre-bootstrap ignores stray inputs", "", "Ignored", 99, 99, "mmk"},
@@ -55,10 +55,10 @@ func TestComputeWindowTitle(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := computeWindowTitle(tt.activeTeamID, tt.workspaceName, tt.activeUnreads, tt.otherUnreads)
+			got := computeWindowTitle(tt.activeServerID, tt.workspaceName, tt.activeUnreads, tt.otherUnreads)
 			if got != tt.want {
 				t.Errorf("computeWindowTitle(%q, %q, %d, %d) = %q want %q",
-					tt.activeTeamID, tt.workspaceName, tt.activeUnreads, tt.otherUnreads, got, tt.want)
+					tt.activeServerID, tt.workspaceName, tt.activeUnreads, tt.otherUnreads, got, tt.want)
 			}
 		})
 	}

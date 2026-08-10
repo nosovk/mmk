@@ -155,7 +155,7 @@ func (p *presenceController) ClearSnoozeBuf() { p.customBuf = "" }
 // All three arms previously lived in the monolithic Update switch
 // (app.go lines ~1879-1920 pre-Phase-4). State and behavior are now
 // co-located on this controller — App still owns the sidebar /
-// statusbar / activeTeamID references that the reducer needs, so
+// statusbar / activeServerID references that the reducer needs, so
 // those are passed via `a`.
 func (p *presenceController) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
@@ -166,7 +166,7 @@ func (p *presenceController) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case StatusChangeMsg:
 		st := p.Set(m.TeamID, m.Presence, m.DNDEnabled, m.DNDEndTS)
-		if m.TeamID != a.activeTeamID {
+		if m.TeamID != a.activeServerID {
 			// Non-active workspace: cache only. The status bar
 			// will pick up `st` from the cache on workspace switch.
 			return nil, true
@@ -185,7 +185,7 @@ func (p *presenceController) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}), true
 
 	case statusbar.DNDTickMsg:
-		pres, dndEnabled, dndEnd, ok := p.Status(a.activeTeamID)
+		pres, dndEnabled, dndEnd, ok := p.Status(a.activeServerID)
 		if !ok {
 			// Active workspace has no cached entry (e.g. switched
 			// away before a tick fired). Stop the chain.
@@ -196,7 +196,7 @@ func (p *presenceController) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			// DND expired locally — flip the cached flag so the
 			// statusbar segment falls back to presence, and stop
 			// the chain.
-			st := p.ClearDNDFor(a.activeTeamID)
+			st := p.ClearDNDFor(a.activeServerID)
 			a.statusbar.SetStatus(st.Presence, false, time.Time{})
 			p.ClearTicker()
 			return nil, true

@@ -65,6 +65,19 @@ import (
 
 var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
+	case ServerReadyMsg:
+		return reduceServerReady(a, m.Server), true
+
+	case ServerRefreshedMsg:
+		return reduceServerRefreshed(a, m.Server), true
+
+	case ServerSwitchedMsg:
+		return reduceServerSwitched(a, m.Server), true
+
+	case ServerStateMsg:
+		a.workspaceRail.SetState(string(m.ServerID), m.State, m.Err)
+		return nil, true
+
 	case WorkspaceReadyMsg:
 		return reduceWorkspaceReady(a, m), true
 
@@ -72,7 +85,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return reduceWorkspaceSwitched(a, m), true
 
 	case ConversationOpenedMsg:
-		if m.TeamID == a.activeTeamID {
+		if m.TeamID == a.activeServerID {
 			a.sidebar.UpsertItem(m.Item)
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
@@ -81,7 +94,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case SectionsRefreshedMsg:
-		if m.TeamID == a.activeTeamID {
+		if m.TeamID == a.activeServerID {
 			a.SetChannels(m.Channels)
 		}
 		// Inactive-workspace events have already updated the
@@ -105,7 +118,7 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case UserResolvedMsg:
-		if m.TeamID != a.activeTeamID {
+		if m.TeamID != a.activeServerID {
 			return nil, true
 		}
 		for _, mp := range a.allWinModels() {
@@ -141,18 +154,99 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case CustomEmojisLoadedMsg:
-		if m.TeamID == a.activeTeamID {
+		if m.TeamID == a.activeServerID {
 			a.SetCustomEmoji(m.CustomEmoji)
 		}
 		return nil, true
 
 	case UserGroupsLoadedMsg:
-		if m.TeamID == a.activeTeamID {
+		if m.TeamID == a.activeServerID {
 			a.SetUserGroups(m.UserGroups)
 		}
 		return nil, true
 	}
 	return nil, false
+}
+
+func reduceServerReady(a *App, state ServerViewState) tea.Cmd {
+	a.bootstrap.MarkReady(state.ServerName)
+	if !state.InitialActive || !a.bootstrap.ClaimInitialActive() {
+		return nil
+	}
+	return activateServer(a, state, false)
+}
+
+func reduceServerRefreshed(a *App, state ServerViewState) tea.Cmd {
+	if string(state.ServerID) != a.activeServerID {
+		return nil
+	}
+	return activateServer(a, state, true)
+}
+
+func reduceServerSwitched(a *App, state ServerViewState) tea.Cmd {
+	return activateServer(a, state, false)
+}
+
+func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.Cmd {
+	previousChannelID := ""
+	if preserveSelection {
+		previousChannelID = a.activeChannelID
+	}
+	a.view = ViewChannels
+	a.sidebar.SetThreadsActive(false)
+	a.sidebar.SetThreadsEnabled(false)
+	a.threadsView.SetSummaries(nil)
+	a.sidebar.SetThreadsUnreadCount(0)
+	a.CloseThread()
+	a.clearSelections()
+	a.resetWindowTree()
+	a.compose.Reset()
+	a.SetMode(ModeNormal)
+	a.compose.Blur()
+	a.sidebar.SetSectionsProvider(state.SectionsProvider)
+	a.sidebar.ResetPresence()
+	a.SetChannels(state.Channels)
+	a.channelFinder.SetItems(state.FinderItems)
+	a.SetExternalUsers(nil)
+	a.SetUserNames(state.UserNames)
+	a.SetCustomEmoji(nil)
+	a.SetUserGroups(nil)
+	a.SetCurrentUserID(state.UserID)
+	a.activeServerID = string(state.ServerID)
+	a.workspaceRail.SelectByID(a.activeServerID)
+	if state.Theme != "" {
+		styles.Apply(state.Theme, a.themeOverrides)
+		a.invalidateAllWinModelCaches()
+		a.threadPanel.InvalidateCache()
+		a.sidebar.InvalidateCache()
+		a.compose.RefreshStyles()
+		a.threadCompose.RefreshStyles()
+	}
+	if state.SidebarWidth != 0 {
+		a.sidebar.SetWidth(state.SidebarWidth)
+	}
+	if len(state.Channels) == 0 {
+		a.messagepane.SetLoading(false)
+		a.messagepane.SetMessages(nil)
+		return nil
+	}
+	target := state.Channels[0]
+	for _, candidateID := range []string{previousChannelID, state.LastChannelID} {
+		for _, channel := range state.Channels {
+			if candidateID != "" && channel.ID == candidateID {
+				target = channel
+				break
+			}
+		}
+		if target.ID == candidateID {
+			break
+		}
+	}
+	a.sidebar.SelectByID(target.ID)
+	a.activeChannelID = target.ID
+	a.messagepane.SetLoading(false)
+	a.messagepane.SetMessages(nil)
+	return nil
 }
 
 // reduceWorkspaceReady handles WorkspaceReadyMsg. Extracted from
@@ -206,8 +300,8 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		// the current user — production never calls SetCurrentUserID
 		// otherwise, which would leave live self-reactions unstyled.
 		a.SetCurrentUserID(m.UserID)
-		a.activeTeamID = m.TeamID
-		pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeTeamID)
+		a.activeServerID = m.TeamID
+		pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeServerID)
 		a.statusbar.SetStatus(pres, dndEnabled, dndEnd)
 		a.workspaceRail.SelectByID(m.TeamID)
 		if len(m.Channels) > 0 {
@@ -234,7 +328,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 	}
 	// Initial threads-list fetch fires for every workspace as it
 	// becomes ready; the result is gated by ThreadsListLoadedMsg's
-	// TeamID == activeTeamID check, so background fetches are
+	// TeamID == activeServerID check, so background fetches are
 	// dropped without affecting the active sidebar.
 	threads := a.threads
 	team := ids.TeamID(m.TeamID)
@@ -257,8 +351,8 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// leaving so that switching back lands the user on the same
 	// channel rather than always snapping to the sidebar's first
 	// entry.
-	if a.activeTeamID != "" && a.activeChannelID != "" && a.activeTeamID != m.TeamID {
-		a.lastChannelByTeam[a.activeTeamID] = a.activeChannelID
+	if a.activeServerID != "" && a.activeChannelID != "" && a.activeServerID != m.TeamID {
+		a.lastChannelByTeam[a.activeServerID] = a.activeChannelID
 	}
 	a.cancelEdit()
 	// Always land in ViewChannels and drop any per-workspace
@@ -305,8 +399,8 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	// Route through the setter so messagepane/threadPanel also learn the
 	// current user (see WorkspaceReadyMsg above).
 	a.SetCurrentUserID(m.UserID)
-	a.activeTeamID = m.TeamID
-	pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeTeamID)
+	a.activeServerID = m.TeamID
+	pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeServerID)
 	a.statusbar.SetStatus(pres, dndEnabled, dndEnd)
 	// Apply per-workspace theme. Must run on Update goroutine so
 	// the component cache invalidations and compose-style refreshes

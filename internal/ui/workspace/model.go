@@ -13,7 +13,17 @@ type WorkspaceItem struct {
 	Name      string
 	Initials  string
 	HasUnread bool
+	State     ItemState
+	Error     string
 }
+
+type ItemState uint8
+
+const (
+	ItemStateLoading ItemState = iota
+	ItemStateReady
+	ItemStateError
+)
 
 type Model struct {
 	items    []WorkspaceItem
@@ -88,6 +98,28 @@ func (m *Model) SetItems(items []WorkspaceItem) {
 		m.selected = 0
 	}
 	m.dirty()
+}
+
+func (m *Model) Items() []WorkspaceItem {
+	return append([]WorkspaceItem(nil), m.items...)
+}
+
+func (m *Model) SetState(id string, state ItemState, err error) {
+	for i := range m.items {
+		if m.items[i].ID != id {
+			continue
+		}
+		errorText := ""
+		if err != nil {
+			errorText = err.Error()
+		}
+		if m.items[i].State != state || m.items[i].Error != errorText {
+			m.items[i].State = state
+			m.items[i].Error = errorText
+			m.dirty()
+		}
+		return
+	}
 }
 
 func (m *Model) SelectByID(teamID string) {

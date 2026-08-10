@@ -45,7 +45,7 @@ func handlePresenceMenuMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModeNormal)
 		// Optimistic UI: update local state + status bar before the API
 		// call returns. The WS echo will reaffirm it.
-		st := a.presence.Apply(a.activeTeamID, result.Action, result.SnoozeMinutes)
+		st := a.presence.Apply(a.activeServerID, result.Action, result.SnoozeMinutes)
 		a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
 		if a.setStatusFn != nil {
 			a.setStatusFn(result.Action, result.SnoozeMinutes)

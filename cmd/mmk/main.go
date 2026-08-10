@@ -98,7 +98,7 @@ func (a sectionsProviderAdapter) Ready() bool {
 	return a.store != nil && a.store.Ready()
 }
 
-func (a sectionsProviderAdapter) OrderedSlackSections() []sidebar.SectionMeta {
+func (a sectionsProviderAdapter) OrderedSections() []sidebar.SectionMeta {
 	if a.store == nil {
 		return nil
 	}

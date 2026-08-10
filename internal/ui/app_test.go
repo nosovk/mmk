@@ -642,7 +642,7 @@ func TestCopyPermalink_ShiftYTriggersCopy(t *testing.T) {
 func TestApp_ThreadsViewActivation(t *testing.T) {
 	app := NewApp()
 	app.SetCurrentUserID("USELF")
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.SetUserNames(map[string]string{"U1": "alice"})
 
 	// Default: ViewChannels.
@@ -665,7 +665,7 @@ func TestApp_ThreadsViewActivation(t *testing.T) {
 
 func TestApp_ThreadsListLoadedUpdatesUnreadBadge(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	summaries := []cache.ThreadSummary{
 		{ChannelID: "C1", ThreadTS: "1.0", Unread: true},
 		{ChannelID: "C2", ThreadTS: "2.0", Unread: false},
@@ -678,7 +678,7 @@ func TestApp_ThreadsListLoadedUpdatesUnreadBadge(t *testing.T) {
 
 func TestApp_ThreadsListLoadedIgnoredForOtherWorkspace(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	summaries := []cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "1.0", Unread: true}}
 	_, _ = app.Update(ThreadsListLoadedMsg{TeamID: "T2", Summaries: summaries})
 	if app.sidebar.ThreadsUnreadCount() != 0 {
@@ -688,7 +688,7 @@ func TestApp_ThreadsListLoadedIgnoredForOtherWorkspace(t *testing.T) {
 
 func TestApp_HandleEnterOnThreadsRowActivatesView(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	// Sidebar default-selects the Threads row.
 	if !app.sidebar.IsThreadsSelected() {
 		t.Fatalf("precondition: sidebar should default-select Threads row")
@@ -711,7 +711,7 @@ func TestApp_HandleEnterOnThreadsRowActivatesView(t *testing.T) {
 // to click the Threads sidebar entry.
 func TestApp_ChannelFinderThreadsRowActivatesThreadsView(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	// Open the finder the same way the ctrl+t / ctrl+p binding does.
 	app.channelFinder.Open()
 	app.SetMode(ModeChannelFinder)
@@ -748,7 +748,7 @@ func TestApp_ClickOnThreadInThreadsViewOpensIt(t *testing.T) {
 	a := NewApp()
 	a.width = 160
 	a.height = 30
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	// Force layout to populate layoutSidebarEnd / layoutMsgEnd.
 	_ = a.View()
 	if a.layout.msgEnd <= a.layout.sidebarEnd {
@@ -815,7 +815,7 @@ func TestApp_ClickOnThreadInThreadsViewOpensIt(t *testing.T) {
 // whatever was selected in the underlying channel.
 func TestApp_HandleEnterInThreadsViewOpensSelectedThread(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.activeChannelID = "C_CHANNEL"
 
 	fetchedCh := ""
@@ -882,7 +882,7 @@ func TestApp_HandleEnterInThreadsViewOpensSelectedThread(t *testing.T) {
 
 func TestApp_OpenSelectedThreadDedups(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	fetched := 0
 	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
 		fetched++
@@ -928,7 +928,7 @@ func TestApp_OpenSelectedThreadDedups(t *testing.T) {
 func TestApp_WorkspaceSwitchResetsView(t *testing.T) {
 	app := NewApp()
 	app.view = ViewThreads
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	// Stash some summaries to confirm they're cleared.
 	app.threadsView.SetSummaries([]cache.ThreadSummary{{ChannelID: "C1", ThreadTS: "1.0", Unread: true}})
 	app.sidebar.SetThreadsUnreadCount(1)
@@ -949,7 +949,7 @@ func TestApp_WorkspaceSwitchResetsView(t *testing.T) {
 func TestApp_NewThreadReplyTriggersDirtyMsg(t *testing.T) {
 	app := NewApp()
 	app.SetCurrentUserID("USELF")
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	// Tiny debounce so the test runs fast.
 	app.threadsDirtyDebounce = 5 * time.Millisecond
 
@@ -1017,7 +1017,7 @@ func TestApp_NewThreadReplyTriggersDirtyMsg(t *testing.T) {
 
 func TestApp_NewMessageWithoutThreadTSDoesNotTriggerDirty(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.threadsDirtyDebounce = 5 * time.Millisecond
 
 	fetched := make(chan struct{}, 4)
@@ -1091,7 +1091,7 @@ func TestApp_WorkspaceReadyTriggersThreadsListFetch(t *testing.T) {
 // browsing the threads list would silently no-op.
 func TestApp_InsertInThreadsViewFocusesThreadCompose(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	// Simulate having activated the threads view with one summary, so
 	// the right thread panel is open.
 	app.threadsView.SetSummaries([]cache.ThreadSummary{
@@ -1125,7 +1125,7 @@ func TestApp_BackgroundWorkspaceReadyDoesNotClobberActiveState(t *testing.T) {
 		Channels:      []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
 		InitialActive: true,
 	})
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.activeChannelID = "C1"
 
 	// Simulate user state in the active workspace.
@@ -1152,8 +1152,32 @@ func TestApp_BackgroundWorkspaceReadyDoesNotClobberActiveState(t *testing.T) {
 	if app.sidebar.ThreadsUnreadCount() != 1 {
 		t.Errorf("background ready clobbered sidebar badge: got %d, want 1", app.sidebar.ThreadsUnreadCount())
 	}
-	if app.activeTeamID != "T1" {
-		t.Errorf("background ready clobbered activeTeamID: got %q, want T1", app.activeTeamID)
+	if app.activeServerID != "T1" {
+		t.Errorf("background ready clobbered activeServerID: got %q, want T1", app.activeServerID)
+	}
+}
+
+func TestServerReadyUsesServerIDAndSkipsSlackThreadsFetch(t *testing.T) {
+	app := NewApp()
+	app.SetWorkspaces([]workspace.WorkspaceItem{{ID: "server-1", Name: "Mattermost"}})
+	threadFetches := 0
+	app.setThreadsListFetcherForTest(func(ids.TeamID) tea.Msg {
+		threadFetches++
+		return nil
+	})
+
+	app.Update(ServerReadyMsg{Server: ServerViewState{
+		ServerID:      ids.ServerID("server-1"),
+		ServerName:    "Mattermost",
+		Channels:      []sidebar.ChannelItem{{ID: "channel-1", Name: "Town Square", Kind: sidebar.ChannelKindPublic}},
+		InitialActive: true,
+	}})
+
+	if app.activeServerID != "server-1" {
+		t.Fatalf("active server = %q", app.activeServerID)
+	}
+	if threadFetches != 0 {
+		t.Fatalf("Slack thread fetches = %d, want 0", threadFetches)
 	}
 }
 
@@ -2977,7 +3001,7 @@ func TestThreadMarkedRemoteMsg_ReadClearsRow(t *testing.T) {
 
 func TestConversationOpenedMsg_SidebarReceivesItemAndUnread(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.sidebar.SetItems([]sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
 
 	// Simulate Slack pushing an mpim_open for a previously-unknown mpdm.
@@ -3022,7 +3046,7 @@ func TestConversationOpenedMsg_SidebarReceivesItemAndUnread(t *testing.T) {
 
 func TestConversationOpenedMsg_InactiveWorkspaceIgnored(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.sidebar.SetItems([]sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}})
 
 	// Event for a different workspace must NOT mutate the active sidebar.
@@ -3463,7 +3487,7 @@ func TestWorkspaceReadyFirstChannelSetsLoading(t *testing.T) {
 
 func TestChannelSelectedInvokesVisitRecorder(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	var recorded []string
 	app.setChannelVisitRecorderForTest(func(channelID ids.ChannelID) {
@@ -3480,7 +3504,7 @@ func TestChannelSelectedInvokesVisitRecorder(t *testing.T) {
 
 func TestChannelSelectedFromHistoryStillRecordsVisit(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	var recorded []string
 	app.setChannelVisitRecorderForTest(func(channelID ids.ChannelID) {
@@ -3498,7 +3522,7 @@ func TestChannelSelectedFromHistoryStillRecordsVisit(t *testing.T) {
 
 func TestNavStackPushOnChannelSelected(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C1", Name: "a", Type: "channel"})
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C2", Name: "b", Type: "channel"})
@@ -3519,7 +3543,7 @@ func TestNavStackPushOnChannelSelected(t *testing.T) {
 
 func TestNavStackDedupesConsecutive(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C1", Name: "a", Type: "channel"})
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C1", Name: "a", Type: "channel"}) // re-select same
@@ -3537,7 +3561,7 @@ func TestNavStackDedupesConsecutive(t *testing.T) {
 
 func TestNavStackForwardTruncationOnNewVisit(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	// Build A, B, C; back to B (simulated by directly manipulating cursor);
 	// then visit D — C should be dropped.
@@ -3562,7 +3586,7 @@ func TestNavStackForwardTruncationOnNewVisit(t *testing.T) {
 
 func TestNavStackCapAt50EvictsOldest(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	for i := 0; i < 60; i++ {
 		_, _ = app.Update(ChannelSelectedMsg{ID: fmt.Sprintf("C%d", i), Name: "x", Type: "channel"})
@@ -3584,10 +3608,10 @@ func TestNavStackCapAt50EvictsOldest(t *testing.T) {
 
 func TestNavStackPerWorkspaceIsolation(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C1", Name: "a", Type: "channel"})
 
-	app.activeTeamID = "T2"
+	app.activeServerID = "T2"
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C2", Name: "b", Type: "channel"})
 
 	t1 := app.navHistory.Stack("T1")
@@ -3605,7 +3629,7 @@ func TestNavStackPerWorkspaceIsolation(t *testing.T) {
 
 func TestNavStackFromHistoryDoesNotPush(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C1", Name: "a", Type: "channel"})
 	_, _ = app.Update(ChannelSelectedMsg{ID: "C2", Name: "b", Type: "channel"})
@@ -3624,7 +3648,7 @@ func TestNavStackFromHistoryDoesNotPush(t *testing.T) {
 
 func TestNavigateBackEmitsChannelSelectedMsg(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
 		return string(channelID) + "-name", "channel", true
 	})
@@ -3654,7 +3678,7 @@ func TestNavigateBackEmitsChannelSelectedMsg(t *testing.T) {
 
 func TestNavigateForwardEmitsChannelSelectedMsg(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
 		return string(channelID) + "-name", "channel", true
 	})
@@ -3685,7 +3709,7 @@ func TestNavigateForwardEmitsChannelSelectedMsg(t *testing.T) {
 
 func TestNavigateBackAtStartIsNoop(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
 		return string(channelID), "channel", true
 	})
@@ -3700,7 +3724,7 @@ func TestNavigateBackAtStartIsNoop(t *testing.T) {
 
 func TestNavigateForwardAtEndIsNoop(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
 		return string(channelID), "channel", true
 	})
@@ -3716,7 +3740,7 @@ func TestNavigateForwardAtEndIsNoop(t *testing.T) {
 
 func TestNavigateBackSkipsStaleAndDropsThem(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	// Lookup says "C2 is gone, others valid".
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
 		if channelID == ids.ChannelID("C2") {
@@ -3753,7 +3777,7 @@ func TestNavigateBackSkipsStaleAndDropsThem(t *testing.T) {
 
 func TestCtrlHTriggersNavBack(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
 		return string(channelID), "channel", true
 	})
@@ -3777,7 +3801,7 @@ func TestCtrlHTriggersNavBack(t *testing.T) {
 
 func TestCtrlKTriggersNavForward(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.setChannelLookupFuncForTest(func(channelID ids.ChannelID) (string, string, bool) {
 		return string(channelID), "channel", true
 	})
@@ -3804,7 +3828,7 @@ func TestWorkspaceReady_OnlyInitialActiveClaimsChannel(t *testing.T) {
 	app := NewApp()
 
 	// First WorkspaceReady arrives WITHOUT InitialActive — should not
-	// set activeTeamID and should not queue a ChannelSelectedMsg.
+	// set activeServerID and should not queue a ChannelSelectedMsg.
 	app.Update(WorkspaceReadyMsg{
 		TeamID:        "T-other",
 		TeamName:      "Other",
@@ -3812,8 +3836,8 @@ func TestWorkspaceReady_OnlyInitialActiveClaimsChannel(t *testing.T) {
 		InitialActive: false,
 	})
 
-	if app.activeTeamID != "" {
-		t.Errorf("non-initial WorkspaceReady should not set activeTeamID; got %q", app.activeTeamID)
+	if app.activeServerID != "" {
+		t.Errorf("non-initial WorkspaceReady should not set activeServerID; got %q", app.activeServerID)
 	}
 
 	// Second WorkspaceReady with InitialActive=true claims active.
@@ -3824,8 +3848,8 @@ func TestWorkspaceReady_OnlyInitialActiveClaimsChannel(t *testing.T) {
 		InitialActive: true,
 	})
 
-	if app.activeTeamID != "T-default" {
-		t.Errorf("activeTeamID = %q, want T-default", app.activeTeamID)
+	if app.activeServerID != "T-default" {
+		t.Errorf("activeServerID = %q, want T-default", app.activeServerID)
 	}
 }
 
@@ -3838,7 +3862,7 @@ func TestWorkspaceReady_BootstrapClaimIsOneShot(t *testing.T) {
 		Channels:      []sidebar.ChannelItem{{ID: "C1", Name: "general", Type: "channel"}},
 		InitialActive: true,
 	})
-	first := app.activeTeamID
+	first := app.activeServerID
 
 	// A second InitialActive=true (defensive — shouldn't happen) is a no-op.
 	app.Update(WorkspaceReadyMsg{
@@ -3848,14 +3872,14 @@ func TestWorkspaceReady_BootstrapClaimIsOneShot(t *testing.T) {
 		InitialActive: true,
 	})
 
-	if app.activeTeamID != first {
-		t.Errorf("activeTeamID changed after second InitialActive; got %q, want %q", app.activeTeamID, first)
+	if app.activeServerID != first {
+		t.Errorf("activeServerID changed after second InitialActive; got %q, want %q", app.activeServerID, first)
 	}
 }
 
 func TestUserResolvedMsg_PatchesActiveWorkspace(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.messagepane.SetMessages([]messages.MessageItem{
 		{TS: "1.0", UserID: "U1", UserName: "U1", Text: "hi"},
 	})
@@ -3877,7 +3901,7 @@ func TestUserResolvedMsg_PatchesActiveWorkspace(t *testing.T) {
 
 func TestUserResolvedMsg_DropsForOtherWorkspace(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.messagepane.SetMessages([]messages.MessageItem{
 		{TS: "1.0", UserID: "U1", UserName: "U1", Text: "hi"},
 	})
@@ -3896,7 +3920,7 @@ func TestUserResolvedMsg_DropsForOtherWorkspace(t *testing.T) {
 
 func TestUserGroupsLoadedMsgPatchesActiveWorkspace(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.messagepane.SetMessages([]messages.MessageItem{
 		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "ping <!subteam^S0TESTGRP01>"},
 	})
@@ -3927,7 +3951,7 @@ func TestUserGroupsLoadedMsgPatchesActiveWorkspace(t *testing.T) {
 
 func TestUserGroupsLoadedMsgDropsOtherWorkspace(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	app.Update(UserGroupsLoadedMsg{
 		TeamID:     "T-other",
@@ -3943,7 +3967,7 @@ func TestUserGroupsLoadedMsgDropsOtherWorkspace(t *testing.T) {
 
 func TestUserExternalMsgFlagsPickerEntry(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.activeChannelID = "C1"
 	app.compose.SetActiveChannel("C1")
 	app.threadCompose.SetActiveChannel("C1")
@@ -4086,7 +4110,7 @@ func TestChannelSelected_UnknownFreshnessWithCache_FallsToTier2(t *testing.T) {
 
 func TestSetChannelMembershipForwardsToCompose(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.activeChannelID = "C1"
 	app.compose.SetActiveChannel("C1")
 	app.threadCompose.SetActiveChannel("C1")
@@ -4109,7 +4133,7 @@ func TestSetChannelMembershipForwardsToCompose(t *testing.T) {
 
 func TestSetExternalUsersPropagates(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.SetExternalUsers(map[string]bool{"U_EXT": true})
 	app.SetUserNames(map[string]string{"U_EXT": "ext.user", "U1": "alice"})
 	app.activeChannelID = "C1"
@@ -4133,7 +4157,7 @@ func TestSetExternalUsersPropagates(t *testing.T) {
 
 func TestChannelMembershipMsgUpdatesPicker(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.activeChannelID = "C1"
 	app.compose.SetActiveChannel("C1")
 	app.threadCompose.SetActiveChannel("C1")
@@ -4160,7 +4184,7 @@ func TestChannelMembershipMsgUpdatesPicker(t *testing.T) {
 
 func TestChannelSelectedInvokesMembershipFetcher(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	// The App invokes the fetcher on a goroutine (see ChannelSelectedMsg
 	// handler in app.go), so use a thread-safe record + a done signal.
 	var mu sync.Mutex
@@ -4250,7 +4274,7 @@ func TestNotifyReadStateChanged_PopulatesWindowTitle(t *testing.T) {
 		},
 		[]string{"T1", "T2"}, // T1 active, T2 contributes to +1
 	)
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	app.notifyReadStateChanged()
 
@@ -4261,7 +4285,7 @@ func TestNotifyReadStateChanged_PopulatesWindowTitle(t *testing.T) {
 
 func TestNotifyReadStateChanged_PreBootstrap(t *testing.T) {
 	app := NewApp()
-	// activeTeamID intentionally left blank
+	// activeServerID intentionally left blank
 	app.notifyReadStateChanged()
 	if got, want := app.windowTitle, "mmk"; got != want {
 		t.Errorf("pre-bootstrap windowTitle = %q want %q", got, want)
@@ -4275,7 +4299,7 @@ func TestNotifyReadStateChanged_NoUnreads(t *testing.T) {
 		map[string]cache.ReadState{"C1": {HasUnread: false}},
 		nil,
 	)
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 
 	app.notifyReadStateChanged()
 
@@ -4311,7 +4335,7 @@ func TestView_PropagatesWindowTitle(t *testing.T) {
 
 func TestChannelSelectedReturnsPromptlyEvenIfFetcherBlocks(t *testing.T) {
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	release := make(chan struct{})
 	app.setChannelMembershipFetcherForTest(func(channelID ids.ChannelID) {
 		// Simulate a slow fetcher (e.g., blocked on a network call

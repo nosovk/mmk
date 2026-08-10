@@ -14,7 +14,7 @@ import (
 func linkTestApp(t *testing.T) (*App, *string) {
 	t.Helper()
 	app := NewApp()
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	app.workspaceDomains["T1"] = "myteam"
 	var opened string
 	app.browserOpener = func(url string) tea.Cmd {

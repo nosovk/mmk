@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/muesli/reflow/truncate"
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/styles"
 	"github.com/nosovk/mmk/internal/usergroups"
-	"github.com/muesli/reflow/truncate"
 )
 
 // cardStride is the number of lines a single rendered thread card occupies

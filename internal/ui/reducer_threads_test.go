@@ -38,7 +38,7 @@ func TestApp_OnlyThreadsViewActivationEnsuresSubscriptions(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	app.activeTeamID = "T1"
+	app.activeServerID = "T1"
 	_, cmd = app.Update(ThreadsViewActivatedMsg{})
 	for _, m := range drainBatch(cmd) {
 		_ = m

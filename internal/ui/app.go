@@ -155,7 +155,7 @@ type App struct {
 
 	// Current context
 	activeChannelID string
-	activeTeamID    string // workspace whose data is currently loaded into the side panels
+	activeServerID  string // workspace whose data is currently loaded into the side panels
 
 	// windowTitle is the cached terminal-window-title string, recomputed
 	// by notifyReadStateChanged on every read-state mutation and read by
@@ -721,7 +721,7 @@ func (a *App) navigateForward() tea.Cmd {
 // pure result into the ChannelSelectedMsg{FromHistory: true} tea.Cmd
 // the App emits. step must be -1 or +1.
 func (a *App) walkNavCmd(step int) tea.Cmd {
-	id, name, ctype, ok := a.navHistory.Walk(a.activeTeamID, step, a.channels.Lookup)
+	id, name, ctype, ok := a.navHistory.Walk(a.activeServerID, step, a.channels.Lookup)
 	if !ok {
 		return nil
 	}
@@ -1743,13 +1743,13 @@ func (a *App) applyThreadUnreadBoundary(channelID string) {
 // after the configured debounce interval. Used to coalesce bursts of thread
 // replies (each delivered as its own NewMessageMsg) into a single re-query
 // of the involved-threads list. Returns nil when no workspace is active —
-// without an activeTeamID the dirty handler would just drop the message
+// without an activeServerID the dirty handler would just drop the message
 // anyway.
 func (a *App) scheduleThreadsDirty() tea.Cmd {
-	if a.activeTeamID == "" {
+	if a.activeServerID == "" {
 		return nil
 	}
-	team := a.activeTeamID
+	team := a.activeServerID
 	d := a.threadsDirtyDebounce
 	if d == 0 {
 		d = 150 * time.Millisecond
@@ -2435,15 +2435,15 @@ func (a *App) SetThemeItems(names []string) {
 // theme picker header.
 func (a *App) activeTeamName() string {
 	for _, w := range a.workspaceItems {
-		if w.ID == a.activeTeamID {
+		if w.ID == a.activeServerID {
 			if w.Name != "" {
 				return w.Name
 			}
 			return w.ID
 		}
 	}
-	if a.activeTeamID != "" {
-		return a.activeTeamID
+	if a.activeServerID != "" {
+		return a.activeServerID
 	}
 	return "this workspace"
 }
@@ -2452,14 +2452,14 @@ func (a *App) activeTeamName() string {
 // workspace, or "" when unknown (link router then falls back to the
 // browser for all slack.com permalinks).
 func (a *App) activeWorkspaceDomain() string {
-	return a.workspaceDomains[a.activeTeamID]
+	return a.workspaceDomains[a.activeServerID]
 }
 
 // workspaceNameForActive returns the display name of the active workspace
 // (empty string if none). Used as the presence menu header.
 func (a *App) workspaceNameForActive() string {
 	for _, ws := range a.workspaceItems {
-		if ws.ID == a.activeTeamID {
+		if ws.ID == a.activeServerID {
 			return ws.Name
 		}
 	}
@@ -2921,9 +2921,9 @@ func (a *App) notifyReadStateChanged() {
 	a.sidebar.Invalidate()
 	a.workspaceRail.RefreshUnreads()
 	active := a.sidebar.UnreadChannelCount()
-	other := a.workspaceRail.OtherUnreadCount(a.activeTeamID)
-	name := a.workspaceRail.NameByID(a.activeTeamID)
-	a.windowTitle = computeWindowTitle(a.activeTeamID, name, active, other)
+	other := a.workspaceRail.OtherUnreadCount(a.activeServerID)
+	name := a.workspaceRail.NameByID(a.activeServerID)
+	a.windowTitle = computeWindowTitle(a.activeServerID, name, active, other)
 	if a.statusReport != nil {
 		a.statusReport(active, other, name, a.windowTitle)
 	}

@@ -5,29 +5,29 @@
 // Owns the nine Update arms that drive the thread panel, the
 // threads-list view, and the thread-reply send path:
 //
-//   ThreadMarkedRemoteMsg       - apply a remote subscriptions.thread.mark
-//                                 echo to the local read state.
-//   threadFetchDebounceMsg      - debounced j/k stop: fire the actual
-//                                 thread fetch (drops stale generations
-//                                 and post-navigation ticks).
-//   ThreadRepliesLoadedMsg      - replies fetch returned: refresh the
-//                                 panel, mark the thread as read, and
-//                                 refresh the sidebar badge.
-//   ThreadsViewActivatedMsg     - user opened the threads-list view:
-//                                 switch view + focus, kick a list
-//                                 fetch, open the highlighted thread.
-//   ThreadsListLoadedMsg        - threads-list fetch returned: push
-//                                 summaries + refresh badge, re-open
-//                                 the highlighted thread if visible.
-//   ThreadsListDirtyMsg         - a debounced "list might be stale"
-//                                 trigger: kick a refresh fetch.
-//   SendThreadReplyMsg          - user sent a reply: optimistic
-//                                 placeholder + chat.postMessage call.
-//   ThreadReplySentMsg          - reply landed: swap placeholder for
-//                                 authoritative message, bump parent
-//                                 reply count, mark threads list dirty.
-//   ThreadReplySendFailedMsg    - reply failed: roll back the
-//                                 placeholder + fire SendFailed toast.
+//	ThreadMarkedRemoteMsg       - apply a remote subscriptions.thread.mark
+//	                              echo to the local read state.
+//	threadFetchDebounceMsg      - debounced j/k stop: fire the actual
+//	                              thread fetch (drops stale generations
+//	                              and post-navigation ticks).
+//	ThreadRepliesLoadedMsg      - replies fetch returned: refresh the
+//	                              panel, mark the thread as read, and
+//	                              refresh the sidebar badge.
+//	ThreadsViewActivatedMsg     - user opened the threads-list view:
+//	                              switch view + focus, kick a list
+//	                              fetch, open the highlighted thread.
+//	ThreadsListLoadedMsg        - threads-list fetch returned: push
+//	                              summaries + refresh badge, re-open
+//	                              the highlighted thread if visible.
+//	ThreadsListDirtyMsg         - a debounced "list might be stale"
+//	                              trigger: kick a refresh fetch.
+//	SendThreadReplyMsg          - user sent a reply: optimistic
+//	                              placeholder + chat.postMessage call.
+//	ThreadReplySentMsg          - reply landed: swap placeholder for
+//	                              authoritative message, bump parent
+//	                              reply count, mark threads list dirty.
+//	ThreadReplySendFailedMsg    - reply failed: roll back the
+//	                              placeholder + fire SendFailed toast.
 //
 // Free reducer (not controller-absorbed): these arms cooperate on
 // the thread panel, the threads-list view, the sidebar's threads
@@ -142,9 +142,9 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.sidebar.SetThreadsActive(true)
 		a.focusedPanel = PanelMessages
 		var batch []tea.Cmd
-		if a.activeTeamID != "" {
+		if a.activeServerID != "" {
 			threads := a.threads
-			team := ids.TeamID(a.activeTeamID)
+			team := ids.TeamID(a.activeServerID)
 			// Opening the view is what pays for the subscription
 			// fetch. It returns immediately and refreshes the list via
 			// ThreadsListDirtyMsg when it lands, so the ListFetch
@@ -166,7 +166,7 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return tea.Batch(batch...), true
 
 	case ThreadsListLoadedMsg:
-		if m.TeamID != a.activeTeamID {
+		if m.TeamID != a.activeServerID {
 			return nil, true
 		}
 		a.threadsView.SetSummaries(m.Summaries)
@@ -183,11 +183,11 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case ThreadsListDirtyMsg:
-		if m.TeamID != a.activeTeamID {
+		if m.TeamID != a.activeServerID {
 			return nil, true
 		}
 		threads := a.threads
-		team := ids.TeamID(a.activeTeamID)
+		team := ids.TeamID(a.activeServerID)
 		return func() tea.Msg { return threads.ListFetch(team) }, true
 
 	case SendThreadReplyMsg:

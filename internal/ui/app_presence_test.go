@@ -16,7 +16,7 @@ import (
 
 func TestApplyOptimisticStatusSetActive(t *testing.T) {
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	// Seed: was previously away with DND on, just to be sure we don't
 	// stomp DND fields with this action.
 	a.presence.byTeam["T1"] = workspaceStatus{
@@ -25,7 +25,7 @@ func TestApplyOptimisticStatusSetActive(t *testing.T) {
 		DNDEndTS:   time.Now().Add(5 * time.Minute),
 	}
 
-	a.presence.Apply(a.activeTeamID, presencemenu.ActionSetActive, 0)
+	a.presence.Apply(a.activeServerID, presencemenu.ActionSetActive, 0)
 
 	got := a.presence.byTeam["T1"]
 	if got.Presence != "active" {
@@ -41,10 +41,10 @@ func TestApplyOptimisticStatusSetActive(t *testing.T) {
 
 func TestApplyOptimisticStatusSetAway(t *testing.T) {
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	a.presence.byTeam["T1"] = workspaceStatus{Presence: "active"}
 
-	a.presence.Apply(a.activeTeamID, presencemenu.ActionSetAway, 0)
+	a.presence.Apply(a.activeServerID, presencemenu.ActionSetAway, 0)
 
 	if got := a.presence.byTeam["T1"].Presence; got != "away" {
 		t.Errorf("Presence: want %q, got %q", "away", got)
@@ -53,11 +53,11 @@ func TestApplyOptimisticStatusSetAway(t *testing.T) {
 
 func TestApplyOptimisticStatusSnoozeSetsDND(t *testing.T) {
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	a.presence.byTeam["T1"] = workspaceStatus{Presence: "active"}
 
 	before := time.Now()
-	a.presence.Apply(a.activeTeamID, presencemenu.ActionSnooze, 30)
+	a.presence.Apply(a.activeServerID, presencemenu.ActionSnooze, 30)
 	after := time.Now()
 
 	got := a.presence.byTeam["T1"]
@@ -79,14 +79,14 @@ func TestApplyOptimisticStatusSnoozeSetsDND(t *testing.T) {
 
 func TestApplyOptimisticStatusEndDNDClearsDND(t *testing.T) {
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	a.presence.byTeam["T1"] = workspaceStatus{
 		Presence:   "active",
 		DNDEnabled: true,
 		DNDEndTS:   time.Now().Add(10 * time.Minute),
 	}
 
-	a.presence.Apply(a.activeTeamID, presencemenu.ActionEndDND, 0)
+	a.presence.Apply(a.activeServerID, presencemenu.ActionEndDND, 0)
 
 	got := a.presence.byTeam["T1"]
 	if got.DNDEnabled {
@@ -103,10 +103,10 @@ func TestApplyOptimisticStatusEndDNDClearsDND(t *testing.T) {
 
 func TestApplyOptimisticStatusInitializesMissingTeamEntry(t *testing.T) {
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	// statusByTeam["T1"] does not exist yet.
 
-	a.presence.Apply(a.activeTeamID, presencemenu.ActionSetAway, 0)
+	a.presence.Apply(a.activeServerID, presencemenu.ActionSetAway, 0)
 
 	got, ok := a.presence.byTeam["T1"]
 	if !ok {
@@ -119,7 +119,7 @@ func TestApplyOptimisticStatusInitializesMissingTeamEntry(t *testing.T) {
 
 func TestStatusChangeMsgUpdatesPerTeamCache(t *testing.T) {
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	dndEnd := time.Now().Add(1 * time.Hour)
 
 	// Status arrives for a DIFFERENT workspace: must update the cache
@@ -146,7 +146,7 @@ func TestStatusChangeMsgUpdatesPerTeamCache(t *testing.T) {
 
 func TestStatusChangeMsgForActiveTeamStartsDNDTickerOnce(t *testing.T) {
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	dndEnd := time.Now().Add(1 * time.Hour)
 
 	// First StatusChangeMsg for the active team with DND enabled in the
@@ -179,7 +179,7 @@ func TestStatusChangeMsgForActiveTeamStartsDNDTickerOnce(t *testing.T) {
 
 func TestStatusChangeMsgExpiredDNDDoesNotStartTicker(t *testing.T) {
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	// DNDEndTS already in the past → no tick should be scheduled even
 	// though DNDEnabled is true (the renderer falls back to presence).
 	_, cmd := a.Update(StatusChangeMsg{

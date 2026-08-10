@@ -481,8 +481,29 @@ type fakeProvider struct {
 	sections []SectionMeta
 }
 
-func (f *fakeProvider) Ready() bool                         { return f.ready }
-func (f *fakeProvider) OrderedSlackSections() []SectionMeta { return f.sections }
+func (f *fakeProvider) Ready() bool                    { return f.ready }
+func (f *fakeProvider) OrderedSections() []SectionMeta { return f.sections }
+
+func TestOrderedSectionsUsesKindsAndStableSectionIDs(t *testing.T) {
+	provider := &fakeProvider{ready: true, sections: []SectionMeta{
+		{ID: "server:s1:direct", Name: "Direct Messages", Kind: SectionKindDirect},
+		{ID: "team:t1", Name: "Engineering", Kind: SectionKindTeam},
+	}}
+	m := New([]ChannelItem{
+		{ID: "dm", Name: "Alice", Kind: ChannelKindDirect, SectionID: "server:s1:direct"},
+		{ID: "town", Name: "Town Square", Kind: ChannelKindPublic, SectionID: "team:t1"},
+	})
+	m.SetSectionsProvider(provider)
+
+	got := m.modelOrderedSections(m.filtered)
+	want := []string{"server:s1:direct", "team:t1"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ordered sections = %v, want %v", got, want)
+	}
+	if got := m.sectionFor(m.items[0]); got != "server:s1:direct" {
+		t.Fatalf("direct section = %q", got)
+	}
+}
 
 func TestOrderedSections_SlackMode_HonorsLinkedListOrder(t *testing.T) {
 	items := []ChannelItem{
@@ -660,8 +681,8 @@ func TestCollapseByID_IndependentFromConfigMode(t *testing.T) {
 	}
 	m := New(items)
 	m.SetSectionsProvider(p)
-	m.ToggleCollapse("A")        // collapse via ID
-	m.SetSectionsProvider(nil)   // back to config mode
+	m.ToggleCollapse("A")      // collapse via ID
+	m.SetSectionsProvider(nil) // back to config mode
 	// Now "A" is just a string in config mode; whether it's collapsed
 	// depends on the name-keyed `collapsed` map (which is the default
 	// state set in New). The ID-mode collapse must NOT bleed into

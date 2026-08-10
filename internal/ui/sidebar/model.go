@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/muesli/reflow/truncate"
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/debuglog"
 	emojiutil "github.com/nosovk/mmk/internal/emoji"
 	"github.com/nosovk/mmk/internal/text"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/styles"
-	"github.com/muesli/reflow/truncate"
 )
 
 // Default section names used when an item has no custom Section assigned.
@@ -30,6 +30,8 @@ const (
 type ChannelItem struct {
 	ID           string
 	Name         string
+	Kind         ChannelKind
+	SectionID    string
 	Type         string // channel, dm, group_dm, private, app
 	Section      string // section name for grouping (e.g. "Engineering", "Starred")
 	SectionOrder int    // sort order from config; lower = higher in sidebar (custom sections only)
@@ -49,6 +51,35 @@ type ChannelItem struct {
 	// section headers. Sourced from service.MuteStore in
 	// buildChannelItem.
 	IsMuted bool
+}
+
+type ChannelKind uint8
+
+const (
+	ChannelKindUnknown ChannelKind = iota
+	ChannelKindPublic
+	ChannelKindPrivate
+	ChannelKindDirect
+	ChannelKindGroup
+	ChannelKindApp
+)
+
+func (item ChannelItem) EffectiveKind() ChannelKind {
+	if item.Kind != ChannelKindUnknown {
+		return item.Kind
+	}
+	switch item.Type {
+	case "private":
+		return ChannelKindPrivate
+	case "dm":
+		return ChannelKindDirect
+	case "group_dm":
+		return ChannelKindGroup
+	case "app":
+		return ChannelKindApp
+	default:
+		return ChannelKindPublic
+	}
 }
 
 // IsVisiblyUnread reports whether this channel should render as having
@@ -272,7 +303,8 @@ type Model struct {
 	// selectable via j/k like a channel, but it is NOT a channel — when
 	// the cursor sits on it, SelectedItem/SelectedID return zero / empty
 	// and the App layer activates the threads view instead.
-	threadsUnread int
+	threadsUnread  int
+	threadsEnabled bool
 
 	// focused tracks whether this panel currently has user focus. When
 	// false, the cursor "▌" glyph dims from Accent to TextMuted (via
@@ -343,34 +375,37 @@ func (m *Model) useSlackSections() bool {
 // type (direct_messages / recent_apps / channels). In config mode,
 // the existing string constants apply.
 func (m *Model) sectionFor(item ChannelItem) string {
+	if item.SectionID != "" {
+		return item.SectionID
+	}
 	if item.Section != "" {
 		return item.Section
 	}
 	if m.useSlackSections() {
 		// Find the appropriate default-type section in the provider.
 		var dmID, appsID, channelsID string
-		for _, meta := range m.sectionsProvider.OrderedSlackSections() {
-			switch meta.Type {
-			case "direct_messages":
+		for _, meta := range m.sectionsProvider.OrderedSections() {
+			switch meta.EffectiveKind() {
+			case SectionKindDirect:
 				if dmID == "" {
 					dmID = meta.ID
 				}
-			case "recent_apps":
+			case SectionKindApps:
 				if appsID == "" {
 					appsID = meta.ID
 				}
-			case "channels":
+			case SectionKindChannels:
 				if channelsID == "" {
 					channelsID = meta.ID
 				}
 			}
 		}
-		switch item.Type {
-		case "app":
+		switch item.EffectiveKind() {
+		case ChannelKindApp:
 			if appsID != "" {
 				return appsID
 			}
-		case "dm", "group_dm":
+		case ChannelKindDirect, ChannelKindGroup:
 			if dmID != "" {
 				return dmID
 			}
@@ -388,14 +423,14 @@ func (m *Model) modelOrderedSections(filtered []int) []string {
 	if !m.useSlackSections() {
 		return orderedSectionsLegacy(m.items, filtered)
 	}
-	metas := m.sectionsProvider.OrderedSlackSections()
+	metas := m.sectionsProvider.OrderedSections()
 	hasItem := map[string]bool{}
 	for _, idx := range filtered {
 		hasItem[m.sectionFor(m.items[idx])] = true
 	}
 	out := make([]string, 0, len(metas))
 	for _, meta := range metas {
-		if meta.Type == "standard" || hasItem[meta.ID] {
+		if meta.EffectiveKind() == SectionKindStandard || meta.EffectiveKind() == SectionKindTeam || hasItem[meta.ID] {
 			out = append(out, meta.ID)
 		}
 	}
@@ -493,7 +528,7 @@ func (m *Model) Version() int64 { return m.version }
 func (m *Model) dirty() { m.version++ }
 
 func New(items []ChannelItem) Model {
-	m := Model{items: items}
+	m := Model{items: items, threadsEnabled: true}
 	// Default collapse state: the firehose "Channels" section and the
 	// "Apps" section start collapsed so the sidebar opens on a tidy
 	// view of pinned sections + human DMs. Custom sections and DMs
@@ -508,6 +543,16 @@ func New(items []ChannelItem) Model {
 	// Default selection is the synthetic Threads row at the top.
 	m.cursor = 0
 	return m
+}
+
+func (m *Model) SetThreadsEnabled(enabled bool) {
+	if m.threadsEnabled == enabled {
+		return
+	}
+	m.threadsEnabled = enabled
+	m.rebuildNavPreserveCursor()
+	m.cacheValid = false
+	m.dirty()
 }
 
 // IsThreadsSelected reports whether the synthetic "Threads" row is the
@@ -1003,7 +1048,9 @@ func (m *Model) rebuildNav() {
 	}
 
 	nav := make([]navItem, 0, 1+len(sectionOrder))
-	nav = append(nav, navItem{kind: navThreads})
+	if m.threadsEnabled {
+		nav = append(nav, navItem{kind: navThreads})
+	}
 	for _, name := range sectionOrder {
 		nav = append(nav, navItem{kind: navHeader, header: name})
 		if m.IsCollapsed(name) {
@@ -1444,7 +1491,7 @@ func (m *Model) buildCache(width int) {
 // (no emoji available).
 func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 	if m.useSlackSections() {
-		for _, meta := range m.sectionsProvider.OrderedSlackSections() {
+		for _, meta := range m.sectionsProvider.OrderedSections() {
 			if meta.ID == sectionKey {
 				name = meta.Name
 				if name == "" {

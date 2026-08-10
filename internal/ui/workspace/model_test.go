@@ -1,9 +1,31 @@
 package workspace
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestServerRailPreservesOrderDuplicateNamesAndStateByID(t *testing.T) {
+	m := New([]WorkspaceItem{
+		{ID: "server-b", Name: "Chat", Initials: "CH", State: ItemStateLoading},
+		{ID: "server-a", Name: "Chat", Initials: "CH", State: ItemStateLoading},
+	}, 0)
+
+	m.SetState("server-a", ItemStateReady, nil)
+	m.SetState("server-b", ItemStateError, errors.New("offline"))
+
+	items := m.Items()
+	if items[0].ID != "server-b" || items[1].ID != "server-a" {
+		t.Fatalf("rail order = [%s %s]", items[0].ID, items[1].ID)
+	}
+	if items[0].State != ItemStateError || items[0].Error == "" {
+		t.Fatalf("server-b state = %#v, want error with message", items[0])
+	}
+	if items[1].State != ItemStateReady || items[1].Error != "" {
+		t.Fatalf("server-a state = %#v, want ready without error", items[1])
+	}
+}
 
 func TestWorkspaceRailView(t *testing.T) {
 	m := New([]WorkspaceItem{

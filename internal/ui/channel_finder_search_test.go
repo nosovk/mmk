@@ -12,7 +12,7 @@ import (
 func newFinderApp(t *testing.T, searched *[]string, results []channelfinder.Item) *App {
 	t.Helper()
 	a := NewApp()
-	a.activeTeamID = "T1"
+	a.activeServerID = "T1"
 	a.SetChannelService(NewChannelService(ChannelServiceFuncs{
 		SearchRemote: func(query string) []channelfinder.Item {
 			*searched = append(*searched, query)

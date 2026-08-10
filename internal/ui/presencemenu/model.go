@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/muesli/reflow/truncate"
 	"github.com/nosovk/mmk/internal/text"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/overlay"
 	"github.com/nosovk/mmk/internal/ui/styles"
-	"github.com/muesli/reflow/truncate"
 )
 
 // Action is the high-level operation the user picked.

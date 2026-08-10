@@ -13,16 +13,16 @@ import (
 // The caller (App.notifyReadStateChanged) sources each input from the
 // collaborator that already owns it:
 //
-//   - activeTeamID:   App.activeTeamID
-//   - workspaceName:  App.workspaceRail.NameByID(activeTeamID)
+//   - activeServerID:   App.activeServerID
+//   - workspaceName:  App.workspaceRail.NameByID(activeServerID)
 //   - activeUnreads:  App.sidebar.UnreadChannelCount() (mute-filtered)
-//   - otherUnreads:   App.workspaceRail.OtherUnreadCount(activeTeamID)
+//   - otherUnreads:   App.workspaceRail.OtherUnreadCount(activeServerID)
 //
-// Pre-bootstrap, activeTeamID is "" and the function returns a bare
+// Pre-bootstrap, activeServerID is "" and the function returns a bare
 // "mmk" regardless of any stray non-zero counts. See
 // docs/superpowers/specs/2026-05-21-tab-title-unread-indicator-design.md.
-func computeWindowTitle(activeTeamID, workspaceName string, activeUnreads, otherUnreads int) string {
-	if activeTeamID == "" {
+func computeWindowTitle(activeServerID, workspaceName string, activeUnreads, otherUnreads int) string {
+	if activeServerID == "" {
 		return "mmk"
 	}
 	return formatTitle(workspace.WorkspaceInitials(workspaceName), activeUnreads, otherUnreads)

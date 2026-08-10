@@ -32,6 +32,10 @@
 // plain string is reachable via `string(id)`.
 package ids
 
+// ServerID identifies a configured Mattermost server. It is deliberately
+// distinct from TeamID because a Mattermost server can contain many teams.
+type ServerID string
+
 // ChannelID is a Slack channel identifier (e.g. "C0123ABCD" for
 // public/private channels, "D0123ABCD" for DMs, "G0123ABCD" for
 // MPIMs). Used everywhere a channel is referenced by ID rather
