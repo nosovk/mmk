@@ -174,3 +174,5 @@ mmk/
 7. **muesli/reflow** -- ANSI-aware text wrapping, padding, and truncation for correct rendering with styled text
 8. **Green left-border selection** -- consistent `▌` indicator across messages, threads, channels, and channel finder
 9. **Thick left-border compose** -- compose boxes use `▌` border with dark background, matching opencode's input style
+10. **Mattermost cache snapshots** -- `ApplyMattermostBootstrapSnapshot` is intentionally upsert-only for partial/test data. A successful complete live bootstrap uses `ReplaceMattermostBootstrapSnapshot`, which atomically retires absent teams/channels, replaces current-user memberships and channel participants, and preserves cached post history for inactive channels.
+11. **Mattermost startup** -- registry order defines the rail and cache hydration order. Cache hydration completes before live workers start; the first usable cached or live snapshot atomically claims initial activation. Shutdown cancels startup and waits for workers for up to two seconds because the OS secret-store API is not cancellable.

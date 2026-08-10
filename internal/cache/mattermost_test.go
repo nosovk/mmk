@@ -262,6 +262,39 @@ func TestReplaceMattermostBootstrapSnapshotRetiresAbsentRowsAndPreservesPosts(t 
 	}
 }
 
+func TestReplaceMattermostBootstrapSnapshotClearsOmittedActiveChannelParticipants(t *testing.T) {
+	db := setupMattermostDB(t)
+	base := MattermostBootstrapSnapshot{Server: MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}, CurrentUser: MattermostUser{ID: "u1"}, Teams: []MattermostTeam{{ID: "t1"}}, Channels: []MattermostChannel{{ID: "c1", TeamID: "t1", Kind: "public"}}, Memberships: []MattermostChannelMembership{{ChannelID: "c1", UserID: "u1"}}, ChannelUsers: map[string][]string{"c1": {"u1", "peer"}}}
+	if err := db.ReplaceMattermostBootstrapSnapshot(base); err != nil {
+		t.Fatal(err)
+	}
+	base.ChannelUsers = nil
+	if err := db.ReplaceMattermostBootstrapSnapshot(base); err != nil {
+		t.Fatal(err)
+	}
+	participants, err := db.ListMattermostChannelUserIDs("s1", "c1")
+	if err != nil || len(participants) != 0 {
+		t.Fatalf("participants=%v err=%v", participants, err)
+	}
+}
+
+func TestLoadMattermostBootstrapSnapshotFiltersMembershipsForInactiveChannels(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.ApplyMattermostBootstrapSnapshot(MattermostBootstrapSnapshot{Server: MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}, CurrentUser: MattermostUser{ID: "u1"}, Teams: []MattermostTeam{{ID: "t1"}}, Channels: []MattermostChannel{{ID: "c1", TeamID: "t1", Kind: "public"}}, Memberships: []MattermostChannelMembership{{ChannelID: "c1", UserID: "u1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(`UPDATE mattermost_channels SET is_active=0 WHERE server_id='s1' AND id='c1'`); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Memberships) != 0 {
+		t.Fatalf("inactive memberships=%#v", loaded.Memberships)
+	}
+}
+
 func TestMattermostRevisionAwareUpsertsRejectDelayedSnapshotRows(t *testing.T) {
 	db := setupMattermostDB(t)
 	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {

@@ -545,6 +545,14 @@ func (db *DB) applyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnaps
 		}
 	}
 	if replace {
+		for _, channel := range snapshot.Channels {
+			if _, ok := snapshot.ChannelUsers[channel.ID]; ok {
+				continue
+			}
+			if err := replaceMattermostChannelUserIDs(tx, serverID, channel.ID, nil); err != nil {
+				return fail(err)
+			}
+		}
 		if _, err := tx.Exec(`UPDATE mattermost_teams SET is_active = CASE WHEN id IN (`+placeholders(len(snapshot.Teams))+`) THEN 1 ELSE 0 END WHERE server_id = ?`, append(teamIDArgs(snapshot.Teams), serverID)...); err != nil {
 			return fail(err)
 		}
@@ -586,7 +594,7 @@ func (db *DB) LoadMattermostBootstrapSnapshot(serverID string) (MattermostBootst
 	if err != nil {
 		return MattermostBootstrapSnapshot{}, err
 	}
-	memberships, err := db.ListMattermostChannelMemberships(serverID, server.CurrentUserID)
+	memberships, err := db.listActiveMattermostChannelMemberships(serverID, server.CurrentUserID)
 	if err != nil {
 		return MattermostBootstrapSnapshot{}, err
 	}
@@ -598,6 +606,23 @@ func (db *DB) LoadMattermostBootstrapSnapshot(serverID string) (MattermostBootst
 		Server: server, CurrentUser: currentUser, Users: users, Teams: teams,
 		Channels: channels, Memberships: memberships, ChannelUsers: channelUsers,
 	}, nil
+}
+
+func (db *DB) listActiveMattermostChannelMemberships(serverID, userID string) ([]MattermostChannelMembership, error) {
+	rows, err := db.conn.Query(`SELECT m.channel_id, m.user_id, m.msg_count, m.mention_count, m.last_viewed_at, m.updated_at FROM mattermost_channel_memberships m JOIN mattermost_channels c ON c.server_id=m.server_id AND c.id=m.channel_id WHERE m.server_id=? AND m.user_id=? AND c.is_active=1 AND c.deleted_at=0 ORDER BY m.channel_id`, serverID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MattermostChannelMembership
+	for rows.Next() {
+		var m MattermostChannelMembership
+		if err := rows.Scan(&m.ChannelID, &m.UserID, &m.MsgCount, &m.MentionCount, &m.LastViewedAt, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 func (db *DB) listMattermostServerChannelUserIDs(serverID string) (map[string][]string, error) {
