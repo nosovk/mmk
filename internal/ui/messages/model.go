@@ -719,6 +719,72 @@ func (m *Model) SetMessages(msgs []MessageItem) {
 	m.selected = len(msgs) - 1
 }
 
+// ReplaceMessagesPreservingPosition replaces an authoritative page while
+// retaining a reader's selected message and visual row when that message still
+// exists. A reader following the newest message keeps normal bottom-follow.
+func (m *Model) ReplaceMessagesPreservingPosition(msgs []MessageItem) {
+	if len(m.messages) == 0 || m.selected >= len(m.messages)-1 {
+		m.SetMessages(msgs)
+		return
+	}
+	selectedID := m.messages[m.selected].MessageID()
+	visualY := 0
+	anchorReady := m.cache != nil
+	if anchorReady {
+		for i, entry := range m.cache {
+			if entry.msgIdx == m.selected {
+				visualY = m.entryOffsets[i] - m.yOffset
+				break
+			}
+		}
+	}
+	present := make(map[string]int, len(msgs))
+	for i, item := range msgs {
+		present[item.MessageID()] = i
+	}
+	if m.hasSelection {
+		_, startOK := present[m.selRange.Start.MessageID]
+		_, endOK := present[m.selRange.End.MessageID]
+		if !startOK || !endOK {
+			m.ClearSelection()
+		}
+	}
+	m.messages = msgs
+	m.cache = nil
+	m.hasSnapped = false
+	if index, ok := present[selectedID]; ok {
+		m.selected = index
+	} else if len(msgs) > 0 {
+		m.selected = min(m.selected, len(msgs)-1)
+	} else {
+		m.selected = 0
+	}
+	if anchorReady && len(msgs) > 0 && m.cacheWidth > 0 {
+		m.buildCache(m.cacheWidth)
+		if entryIndex, ok := m.messageIDToEntryIdx[selectedID]; ok {
+			m.yOffset = m.entryOffsets[entryIndex] - visualY
+			if m.yOffset < 0 {
+				m.yOffset = 0
+			}
+			m.snappedSelection = m.selected
+			m.hasSnapped = true
+		}
+	}
+	m.dirty()
+}
+
+func (m *Model) ContainsMessageID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, item := range m.messages {
+		if item.MessageID() == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) AppendMessage(msg MessageItem) {
 	// Idempotent on TS. Self-sent messages take an optimistic path
 	// (MessageSentMsg from the chat.postMessage HTTP response) AND

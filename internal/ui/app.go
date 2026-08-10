@@ -1422,6 +1422,10 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 		if anchor == "" {
 			return nil
 		}
+		cached, _ := a.mattermostHistory.ReadCached(request, anchor)
+		if len(cached) > 0 {
+			a.messagepane.PrependMessages(cached)
+		}
 		a.mattermostFetchingOlder[request] = true
 		a.messagepane.SetLoading(true)
 		service := a.mattermostHistory

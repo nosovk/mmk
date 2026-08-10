@@ -75,7 +75,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.messagepane.SetLoading(false)
 		a.statusbar.SetSyncing(false)
 		if m.Err == nil {
-			a.messagepane.SetMessages(m.Messages)
+			a.messagepane.ReplaceMessagesPreservingPosition(m.Messages)
 			a.mattermostHistoryExhausted[m.Request] = !m.HasMore
 		}
 		return nil, true
@@ -86,7 +86,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		a.messagepane.SetLoading(false)
-		if m.Err != nil || m.AnchorID != a.messagepane.OldestID() {
+		if m.Err != nil || !a.messagepane.ContainsMessageID(m.AnchorID) {
 			return nil, true
 		}
 		a.messagepane.PrependMessages(m.Messages)

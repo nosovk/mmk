@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -122,6 +123,57 @@ func TestMattermostOlderHistoryUsesOpaqueAnchorAndStopsAfterTerminalPage(t *test
 	_, _ = a.Update(MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: "opaque-old", Messages: []messages.MessageItem{}, HasMore: false})
 	if next := a.maybeFetchOlderHistory(true); next != nil {
 		t.Fatal("terminal page fetched repeatedly")
+	}
+}
+
+func TestMattermostOlderHistoryPrependsMultipleCachedPagesOfflineAndAdvancesAnchor(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{
+		"s1:c1:":   {{ID: "p5"}, {ID: "p6"}},
+		"s1:c1:p5": {{ID: "p3"}, {ID: "p4"}},
+		"s1:c1:p3": {{ID: "p1"}, {ID: "p2"}},
+	}}
+	a.SetMattermostHistoryService(h)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	cmd := a.maybeFetchOlderHistory(true)
+	if cmd == nil {
+		t.Fatal("first older nil")
+	}
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"p3", "p4", "p5", "p6"}) {
+		t.Fatalf("first cache=%v", got)
+	}
+	runHistoryCmd(cmd)
+	request := a.activeHistoryRequest
+	_, _ = a.Update(MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: "p5", Err: errors.New("offline")})
+	cmd = a.maybeFetchOlderHistory(true)
+	if cmd == nil {
+		t.Fatal("second older nil")
+	}
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"p1", "p2", "p3", "p4", "p5", "p6"}) {
+		t.Fatalf("second cache=%v", got)
+	}
+	runHistoryCmd(cmd)
+	if got := []string{h.older[0].Before, h.older[1].Before}; !reflect.DeepEqual(got, []string{"p5", "p3"}) {
+		t.Fatalf("anchors=%v", got)
+	}
+}
+
+func TestMattermostRecentLiveReplacementPreservesScrolledSelection(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "a"}, {ID: "b", Text: strings.Repeat("b ", 30)}, {ID: "c"}}}}
+	a.SetMattermostHistoryService(h)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	a.messagepane.SelectByID("b")
+	_ = a.messagepane.View(8, 24)
+	before := a.messagepane.YOffset()
+	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: a.activeHistoryRequest, Messages: []messages.MessageItem{{ID: "a"}, {ID: "b", Text: strings.Repeat("live ", 30)}, {ID: "c"}, {ID: "d"}}})
+	selected, _ := a.messagepane.SelectedMessage()
+	if selected.MessageID() != "b" {
+		t.Fatalf("selected=%q", selected.MessageID())
+	}
+	_ = a.messagepane.View(8, 24)
+	if a.messagepane.YOffset() == 0 && before != 0 {
+		t.Fatalf("viewport reset: before=%d after=%d", before, a.messagepane.YOffset())
 	}
 }
 

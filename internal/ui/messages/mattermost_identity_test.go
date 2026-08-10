@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nosovk/mmk/internal/ui/selection"
 )
 
 func TestMessageItemCanonicalIdentityAndTime(t *testing.T) {
@@ -81,5 +82,40 @@ func TestPrependMessagesDedupesOpaqueIDsAndPreservesOrderSelectionAndAnchor(t *t
 	}
 	if m.OldestID() != "older-z" {
 		t.Fatalf("OldestID=%q", m.OldestID())
+	}
+}
+
+func TestReplaceMessagesPreservingPositionKeepsScrolledSelectionAndTextSelection(t *testing.T) {
+	m := New([]MessageItem{{ID: "a", Text: "alpha"}, {ID: "b", Text: "bravo " + strings.Repeat("wrap ", 20)}, {ID: "c", Text: "charlie"}}, "general")
+	m.SelectByID("b")
+	_ = m.View(8, 24)
+	beforeY := m.selectedStartLine - m.yOffset
+	m.selRange = selection.Range{Start: selection.Anchor{MessageID: "a"}, End: selection.Anchor{MessageID: "b"}, Active: true}
+	m.hasSelection = true
+	m.ReplaceMessagesPreservingPosition([]MessageItem{{ID: "a", Text: "alpha live"}, {ID: "b", Text: "bravo live " + strings.Repeat("wrap ", 20)}, {ID: "c", Text: "charlie live"}, {ID: "d", Text: "delta"}})
+	selected, _ := m.SelectedMessage()
+	if selected.MessageID() != "b" {
+		t.Fatalf("selected=%q", selected.MessageID())
+	}
+	_ = m.View(8, 24)
+	if got := m.selectedStartLine - m.yOffset; got != beforeY {
+		t.Fatalf("visual y=%d want %d", got, beforeY)
+	}
+	if !m.hasSelection {
+		t.Fatal("text selection over retained IDs was cleared")
+	}
+}
+
+func TestReplaceMessagesPreservingPositionKeepsBottomFollowAndClearsMissingSelection(t *testing.T) {
+	m := New([]MessageItem{{ID: "a"}, {ID: "b"}}, "general")
+	m.selRange = selection.Range{Start: selection.Anchor{MessageID: "missing"}, End: selection.Anchor{MessageID: "b"}, Active: true}
+	m.hasSelection = true
+	m.ReplaceMessagesPreservingPosition([]MessageItem{{ID: "a"}, {ID: "b"}, {ID: "c"}})
+	selected, _ := m.SelectedMessage()
+	if selected.MessageID() != "c" {
+		t.Fatalf("bottom selection=%q want c", selected.MessageID())
+	}
+	if m.hasSelection {
+		t.Fatal("selection referencing missing ID survived")
 	}
 }
