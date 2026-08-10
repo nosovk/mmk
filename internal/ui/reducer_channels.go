@@ -54,7 +54,6 @@
 package ui
 
 import (
-	"context"
 	"log"
 	"time"
 
@@ -361,9 +360,9 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		a.statusbar.SetChannel(m.Name)
 		a.statusbar.SetChannelType(m.Type)
 		a.historyGeneration++
+		historyCtx := a.resetMattermostHistoryGeneration()
 		request := HistoryRequest{ServerID: ids.ServerID(a.activeServerID), ChannelID: m.ID, Generation: a.historyGeneration}
 		a.activeHistoryRequest = request
-		delete(a.mattermostHistoryExhausted, request)
 		var cached []messages.MessageItem
 		if a.mattermostHistory != nil {
 			cached, _ = a.mattermostHistory.ReadCached(request, "")
@@ -384,7 +383,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		}
 		service := a.mattermostHistory
 		return tea.Batch(spinnerTickCmd(), func() tea.Msg {
-			return service.FetchRecent(context.Background(), request)
+			return service.FetchRecent(historyCtx, request)
 		}), true
 	}
 	if a.compose.Uploading() || a.threadCompose.Uploading() {

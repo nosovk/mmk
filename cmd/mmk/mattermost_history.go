@@ -28,17 +28,17 @@ func (s mattermostUIHistoryService) ReadCached(request ui.HistoryRequest, before
 	return mattermostHistoryItems(page.Messages), nil
 }
 
-func (s mattermostUIHistoryService) FetchRecent(_ context.Context, request ui.HistoryRequest) ui.MattermostMessagesLoadedMsg {
-	page, err := s.fetch(request, "")
+func (s mattermostUIHistoryService) FetchRecent(ctx context.Context, request ui.HistoryRequest) ui.MattermostMessagesLoadedMsg {
+	page, err := s.fetch(ctx, request, "")
 	return ui.MattermostMessagesLoadedMsg{Request: request, Messages: mattermostHistoryItems(page.Messages), HasMore: page.HasMore, Err: err}
 }
 
-func (s mattermostUIHistoryService) FetchOlder(_ context.Context, request ui.HistoryRequest, before string) ui.MattermostOlderMessagesLoadedMsg {
-	page, err := s.fetch(request, before)
+func (s mattermostUIHistoryService) FetchOlder(ctx context.Context, request ui.HistoryRequest, before string) ui.MattermostOlderMessagesLoadedMsg {
+	page, err := s.fetch(ctx, request, before)
 	return ui.MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: before, Messages: mattermostHistoryItems(page.Messages), HasMore: page.HasMore, Err: err}
 }
 
-func (s mattermostUIHistoryService) fetch(request ui.HistoryRequest, before string) (service.MattermostHistoryPage, error) {
+func (s mattermostUIHistoryService) fetch(ctx context.Context, request ui.HistoryRequest, before string) (service.MattermostHistoryPage, error) {
 	if s.ctx.Err() != nil {
 		return service.MattermostHistoryPage{}, s.ctx.Err()
 	}
@@ -49,10 +49,19 @@ func (s mattermostUIHistoryService) fetch(request ui.HistoryRequest, before stri
 		return service.MattermostHistoryPage{}, errors.New("Mattermost history network unavailable")
 	}
 	history := service.NewMattermostHistoryService(string(request.ServerID), serverContext.client, s.cache, mattermostHistoryPageSize)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	if before == "" {
-		return history.FetchRecent(s.ctx, request.ChannelID)
+		return history.FetchRecent(ctx, request.ChannelID)
 	}
-	return history.FetchOlder(s.ctx, request.ChannelID, before)
+	return history.FetchOlder(ctx, request.ChannelID, before)
 }
 
 func mattermostHistoryItems(source []service.MattermostHistoryMessage) []messages.MessageItem {

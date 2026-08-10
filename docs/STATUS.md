@@ -8,7 +8,7 @@ Last updated: 2026-08-11
 - [x] Task 9: cache-first read-only Mattermost channel timeline, exact REST page ordering, opaque post IDs, author resolution, and older-history pagination
 - [ ] Mattermost compose/send remains disabled until Task 10
 
-Mattermost history always renders cached roots and replies immediately when available, then verifies the channel against the live server. Failed verification preserves cached content; authoritative empty responses clear it. Requests are scoped by server, channel, and selection generation so late results cannot overwrite a newer selection. Older-page exhaustion suppresses repeated terminal requests.
+Mattermost history renders cached roots and replies before the Bubble Tea program starts when startup data is already available, then schedules live verification through `Init`. Recent verification preserves a reader's selected post and viewport anchor unless they are following the newest post. Older pagination prepends each cached page immediately, advances the opaque anchor across offline retries, and treats only a live terminal page as exhausted. Requests carry a cancelable server/channel/selection generation; stale UI results are dropped and per-generation pagination maps are cleared. Response fullness uses the bounded raw Mattermost `order` count, duplicate IDs are first-wins, author enrichment is best-effort with user-ID fallback, and remote display names are stripped of terminal control sequences at render time.
 
 ## What's Working
 

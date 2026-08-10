@@ -2060,7 +2060,7 @@ func (m *Model) blockkitContext(msg MessageItem, userNames, channelNames map[str
 func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, channelNames map[string]string, isSelected bool, stats *entryPerfStats) (
 	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit, reactionHits []reactionEntryHit,
 ) {
-	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.DisplayTime())
+	line := styles.Username.Render(sanitizeRemoteLabel(msg.UserName)) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.DisplayTime())
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -2492,6 +2492,18 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	// kitty uploads would be silently dropped here and the terminal
 	// would show blank cells where placeholder runes were rendered.
 	return msgContent, append(allFlushes, flushes...), allSixel, hits, reactionHits
+}
+
+func sanitizeRemoteLabel(value string) string {
+	value = ansi.Strip(value)
+	var out strings.Builder
+	for _, r := range value {
+		if r < 0x20 || r >= 0x7f && r <= 0x9f {
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 // placeAvatarBeside renders the avatar to the left of the message content.

@@ -49,6 +49,21 @@ func TestMattermostPlainRendererPreservesLiteralTextAndStripsControls(t *testing
 	}
 }
 
+func TestMessageRendererSanitizesRemoteUsernameControls(t *testing.T) {
+	name := "Al\x1b[31mice\x1b]8;;https://evil.example\x07link\x1b]8;;\x1b\\ bell\x07 esc\x1b c1\u009b31m"
+	m := New([]MessageItem{{ID: "p1", UserName: name, Text: "body", Format: FormatMattermostPlain}}, "general")
+	out := m.View(10, 60)
+	plain := ansi.Strip(out)
+	if !strings.Contains(plain, "Alicelink bell esc131m") {
+		t.Fatalf("plain=%q", plain)
+	}
+	for _, unsafe := range []string{"\x07", "\u009b", "https://evil.example"} {
+		if strings.Contains(plain, unsafe) {
+			t.Fatalf("unsafe %q survived in %q", unsafe, out)
+		}
+	}
+}
+
 func TestPrependMessagesDedupesOpaqueIDsAndPreservesOrderSelectionAndAnchor(t *testing.T) {
 	m := New([]MessageItem{
 		{ID: "current-a", CreatedAt: 1000, UserName: "a", Text: strings.Repeat("a ", 20)},

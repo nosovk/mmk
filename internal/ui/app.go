@@ -174,6 +174,8 @@ type App struct {
 	mattermostHistory          MattermostHistoryService
 	historyGeneration          uint64
 	activeHistoryRequest       HistoryRequest
+	activeHistoryContext       context.Context
+	activeHistoryCancel        context.CancelFunc
 	mattermostFetchingOlder    map[HistoryRequest]bool
 	mattermostHistoryExhausted map[HistoryRequest]bool
 	// messages is the App's MessageService collaborator (send / edit /
@@ -1429,7 +1431,8 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 		a.mattermostFetchingOlder[request] = true
 		a.messagepane.SetLoading(true)
 		service := a.mattermostHistory
-		return tea.Batch(spinnerTickCmd(), func() tea.Msg { return service.FetchOlder(context.Background(), request, anchor) })
+		historyCtx := a.activeHistoryContext
+		return tea.Batch(spinnerTickCmd(), func() tea.Msg { return service.FetchOlder(historyCtx, request, anchor) })
 	}
 	// Backfill is triggered by focused-window scrolling, so the
 	// gate/set are keyed by the focused channel.
@@ -1452,6 +1455,18 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 			return channels.FetchOlder(chID, oldestTS)
 		},
 	)
+}
+
+func (a *App) resetMattermostHistoryGeneration() context.Context {
+	if a.activeHistoryCancel != nil {
+		a.activeHistoryCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.activeHistoryContext = ctx
+	a.activeHistoryCancel = cancel
+	clear(a.mattermostFetchingOlder)
+	clear(a.mattermostHistoryExhausted)
+	return ctx
 }
 
 // openQuitConfirm raises the centered "Quit mmk?" overlay. Called from

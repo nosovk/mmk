@@ -20,14 +20,60 @@ type fakeUIHistory struct {
 		Request HistoryRequest
 		Before  string
 	}
+	recentContexts []context.Context
 }
 
 func (f *fakeUIHistory) ReadCached(request HistoryRequest, before string) ([]messages.MessageItem, error) {
 	return append([]messages.MessageItem(nil), f.cached[string(request.ServerID)+":"+request.ChannelID+":"+before]...), nil
 }
-func (f *fakeUIHistory) FetchRecent(_ context.Context, request HistoryRequest) MattermostMessagesLoadedMsg {
+func (f *fakeUIHistory) FetchRecent(ctx context.Context, request HistoryRequest) MattermostMessagesLoadedMsg {
+	f.recentContexts = append(f.recentContexts, ctx)
 	f.recent = append(f.recent, request)
 	return MattermostMessagesLoadedMsg{Request: request}
+}
+
+func TestMattermostHistorySelectionCancelsPreviousGenerationAndBoundsState(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{}}
+	a.SetMattermostHistoryService(h)
+	_, cmd1 := a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	runHistoryCmd(cmd1)
+	ctx1 := h.recentContexts[len(h.recentContexts)-1]
+	first := a.activeHistoryRequest
+	a.mattermostFetchingOlder[first] = true
+	a.mattermostHistoryExhausted[first] = true
+	_, cmd2 := a.Update(ChannelSelectedMsg{ID: "c2", Name: "Two"})
+	runHistoryCmd(cmd2)
+	select {
+	case <-ctx1.Done():
+	default:
+		t.Fatal("previous generation context not canceled")
+	}
+	if len(a.mattermostFetchingOlder) > 0 || len(a.mattermostHistoryExhausted) > 0 {
+		t.Fatalf("state maps fetching=%d exhausted=%d", len(a.mattermostFetchingOlder), len(a.mattermostHistoryExhausted))
+	}
+	if len(h.recentContexts) != 2 {
+		t.Fatalf("contexts=%d", len(h.recentContexts))
+	}
+}
+
+func TestMattermostOlderFailureAfterCachedPrependClearsInflightAndUsesAdvancedAnchor(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "p3"}, {ID: "p4"}}, "s1:c1:p3": {{ID: "p1"}, {ID: "p2"}}}}
+	a.SetMattermostHistoryService(h)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	cmd := a.maybeFetchOlderHistory(true)
+	runHistoryCmd(cmd)
+	_, _ = a.Update(MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: "p3", Err: errors.New("offline")})
+	if a.mattermostFetchingOlder[request] {
+		t.Fatal("inflight retained")
+	}
+	cmd = a.maybeFetchOlderHistory(true)
+	runHistoryCmd(cmd)
+	if len(h.older) != 2 || h.older[1].Before != "p1" {
+		t.Fatalf("older=%#v", h.older)
+	}
 }
 func (f *fakeUIHistory) FetchOlder(_ context.Context, request HistoryRequest, before string) MattermostOlderMessagesLoadedMsg {
 	f.older = append(f.older, struct {
