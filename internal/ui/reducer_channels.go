@@ -311,6 +311,29 @@ func (a *App) retargetActiveChannel(id, name, chType string) {
 // The permalink-completion hook uses !fetchFired as its `authoritative`
 // flag.
 func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
+	if a.features.kind == ContextMattermost {
+		a.cancelEdit()
+		a.view = ViewChannels
+		a.sidebar.SetThreadsActive(false)
+		a.CloseThread()
+		a.clearSelections()
+		a.clearActiveSearch()
+		a.focusedPanel = PanelMessages
+		a.sidebar.SetActiveChannelID(m.ID)
+		a.messagepane.SetChannel(m.Name, "")
+		a.messagepane.SetChannelType(m.Type)
+		a.activeChannelID = m.ID
+		a.compose.SetChannel(m.Name)
+		a.compose.SetActiveChannel(m.ID)
+		a.threadCompose.SetActiveChannel(m.ID)
+		a.statusbar.SetChannel(m.Name)
+		a.statusbar.SetChannelType(m.Type)
+		a.statusbar.SetSyncing(false)
+		a.messagepane.SetLoading(false)
+		a.messagepane.SetMessages(nil)
+		a.setFocusedWindowChannel(m.ID, m.Name, m.Type)
+		return nil, false
+	}
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		return a.uploadToastCmd("Upload in progress", 2*time.Second), false
 	}

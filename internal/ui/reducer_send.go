@@ -6,34 +6,34 @@
 // message lifecycle for channel messages (thread-reply lifecycle
 // lives in reducer_threads.go):
 //
-//   NewMessageMsg            - inbound WS event for any channel:
-//                              edit-echo update, self-send dedup
-//                              (recorded + early-arrival in-flight
-//                              guards), append-to-pane or
-//                              mark-channel-unread, and threads-list
-//                              dirty-bump for replies.
-//   SendMessageMsg           - user send: optimistic placeholder +
-//                              chat.postMessage call.
-//   MessageSentMsg           - send landed: swap placeholder for
-//                              authoritative message.
-//   MessageSendFailedMsg     - send failed: roll back placeholder
-//                              + fire SendFailed toast.
-//   EditMessageMsg           - user edit: chat.update call.
-//   MessageEditedMsg         - edit result: leave edit mode + on
-//                              failure fire EditFailed toast.
-//   DeleteMessageMsg         - user delete: chat.delete call.
-//   MessageDeletedMsg        - delete result: on failure fire
-//                              DeleteFailed toast.
-//   MarkUnreadMsg            - user mark-unread: subscriptions
-//                              mark call.
-//   MessageMarkedUnreadMsg   - mark-unread result: apply local
-//                              read-state mark + fire success or
-//                              failure toast.
-//   WSMessageDeletedMsg      - inbound WS delete echo: remove from
-//                              both panes, cancel any in-flight
-//                              edit of this message, close the
-//                              thread panel if the deleted message
-//                              is the open thread's parent.
+//	NewMessageMsg            - inbound WS event for any channel:
+//	                           edit-echo update, self-send dedup
+//	                           (recorded + early-arrival in-flight
+//	                           guards), append-to-pane or
+//	                           mark-channel-unread, and threads-list
+//	                           dirty-bump for replies.
+//	SendMessageMsg           - user send: optimistic placeholder +
+//	                           chat.postMessage call.
+//	MessageSentMsg           - send landed: swap placeholder for
+//	                           authoritative message.
+//	MessageSendFailedMsg     - send failed: roll back placeholder
+//	                           + fire SendFailed toast.
+//	EditMessageMsg           - user edit: chat.update call.
+//	MessageEditedMsg         - edit result: leave edit mode + on
+//	                           failure fire EditFailed toast.
+//	DeleteMessageMsg         - user delete: chat.delete call.
+//	MessageDeletedMsg        - delete result: on failure fire
+//	                           DeleteFailed toast.
+//	MarkUnreadMsg            - user mark-unread: subscriptions
+//	                           mark call.
+//	MessageMarkedUnreadMsg   - mark-unread result: apply local
+//	                           read-state mark + fire success or
+//	                           failure toast.
+//	WSMessageDeletedMsg      - inbound WS delete echo: remove from
+//	                           both panes, cancel any in-flight
+//	                           edit of this message, close the
+//	                           thread panel if the deleted message
+//	                           is the open thread's parent.
 //
 // Free reducer (not controller-absorbed): these arms cooperate on
 // the messagepane, threadPanel, selfSend, editController, sidebar
@@ -61,6 +61,9 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return reduceNewMessage(a, m), true
 
 	case SendMessageMsg:
+		if !a.allows(FeatureSend) {
+			return nil, true
+		}
 		return reduceSendMessage(a, m), true
 
 	case MessageSentMsg:
@@ -110,6 +113,9 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}, true
 
 	case EditMessageMsg:
+		if !a.allows(FeatureEditDelete) {
+			return nil, true
+		}
 		a.selfSend.MarkInFlight(m.ChannelID)
 		messageSvc := a.messageSvc
 		chID, ts, text := ids.ChannelID(m.ChannelID), ids.MessageTS(m.TS), m.NewText
@@ -134,6 +140,9 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}, true
 
 	case DeleteMessageMsg:
+		if !a.allows(FeatureEditDelete) {
+			return nil, true
+		}
 		messageSvc := a.messageSvc
 		chID, ts := ids.ChannelID(m.ChannelID), ids.MessageTS(m.TS)
 		return func() tea.Msg {
@@ -141,6 +150,9 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}, true
 
 	case MarkUnreadMsg:
+		if !a.allows(FeatureMarkUnread) {
+			return nil, true
+		}
 		messageSvc := a.messageSvc
 		chID := ids.ChannelID(m.ChannelID)
 		threadTS := ids.ThreadTS(m.ThreadTS)

@@ -29,6 +29,9 @@ func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		// channels in the finder but route to a view activation
 		// rather than a channel switch.
 		if result.Type == "threads" {
+			if !a.allows(FeatureThreads) {
+				return nil
+			}
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
 		// Already-joined: switch immediately. Not joined: kick off

@@ -44,6 +44,8 @@ func MattermostTask8Features() FeatureSet {
 
 func (f FeatureSet) Allows(feature Feature) bool { return !f.disabled[feature] }
 
+func (a *App) allows(feature Feature) bool { return a.features.Allows(feature) }
+
 func (a *App) helpEntries() []help.Entry {
 	entries := help.FromKeyMap(a.keys)
 	if a.features.kind == ContextSlack {
@@ -55,6 +57,7 @@ func (a *App) helpEntries() []help.Entry {
 		"mark unread": FeatureMarkUnread, "search workspace": FeatureWorkspaceSearch,
 		"new message": FeatureNewConversation, "copy permalink": FeaturePermalink,
 		"set status": FeaturePresence, "insert mode": FeatureSend,
+		"toggle thread": FeatureThreads, "save thread": FeatureThreads,
 	}
 	out := make([]help.Entry, 0, len(entries))
 	for _, entry := range entries {

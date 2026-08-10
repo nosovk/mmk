@@ -137,6 +137,9 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return cmd, true
 
 	case ThreadsViewActivatedMsg:
+		if !a.allows(FeatureThreads) {
+			return nil, true
+		}
 		_ = m
 		a.view = ViewThreads
 		a.sidebar.SetThreadsActive(true)
@@ -191,6 +194,9 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return func() tea.Msg { return threads.ListFetch(team) }, true
 
 	case SendThreadReplyMsg:
+		if !a.allows(FeatureThreads) || !a.allows(FeatureSend) {
+			return nil, true
+		}
 		a.selfSend.MarkInFlight(m.ChannelID)
 		// Instant-display: append an optimistic placeholder to the
 		// thread panel immediately, before the chat.postMessage HTTP

@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/help"
+	"github.com/nosovk/mmk/internal/ui/messages"
 )
 
 func TestMattermostFeatureGatesActionsAndHelpWhileSlackDefaultsRemainEnabled(t *testing.T) {
@@ -27,6 +29,53 @@ func TestMattermostFeatureGatesActionsAndHelpWhileSlackDefaultsRemainEnabled(t *
 		if helpContains(entries, hidden) {
 			t.Fatalf("Mattermost help exposes %q", hidden)
 		}
+	}
+}
+
+func TestMattermostReducerOperationBoundariesNoOp(t *testing.T) {
+	app := NewApp()
+	app.Update(ServerReadyMsg{Server: ServerViewState{ServerID: "s1", InitialActive: true}})
+	beforeMode := app.mode
+	for _, msg := range []tea.Msg{
+		SendMessageMsg{ChannelID: "c1", Text: "no"},
+		SendThreadReplyMsg{ChannelID: "c1", ThreadTS: "1", Text: "no"},
+		EditMessageMsg{ChannelID: "c1", TS: "1", NewText: "no"},
+		DeleteMessageMsg{ChannelID: "c1", TS: "1"},
+		MarkUnreadMsg{ChannelID: "c1", BoundaryTS: "1"},
+		ThreadsViewActivatedMsg{}, EnterNewMessageMsg{},
+	} {
+		if _, cmd := app.Update(msg); cmd != nil {
+			t.Fatalf("%T returned command", msg)
+		}
+	}
+	if app.mode != beforeMode || app.view == ViewThreads || app.threadVisible {
+		t.Fatalf("disabled operation mutated UI: mode=%v view=%v thread=%v", app.mode, app.view, app.threadVisible)
+	}
+	for _, hidden := range []string{"toggle thread", "save thread"} {
+		if helpContains(app.helpEntries(), hidden) {
+			t.Fatalf("Mattermost help exposes %q", hidden)
+		}
+	}
+}
+
+func TestMattermostChannelSelectionsUpdateContextWithoutLegacyFetchOrLoading(t *testing.T) {
+	app := NewApp()
+	app.Update(ServerReadyMsg{Server: ServerViewState{ServerID: "s1", InitialActive: true}})
+	var calls []string
+	app.SetChannelService(NewChannelService(ChannelServiceFuncs{
+		ReadCache:       func(ids.ChannelID) []messages.MessageItem { calls = append(calls, "cache"); return nil },
+		Fetch:           func(ids.ChannelID, string) tea.Msg { calls = append(calls, "fetch"); return nil },
+		RecordVisit:     func(ids.ChannelID) { calls = append(calls, "visit") },
+		MembershipFetch: func(ids.ChannelID) { calls = append(calls, "membership") },
+	}))
+	for _, selected := range []ChannelSelectedMsg{{ID: "c1", Name: "One"}, {ID: "c2", Name: "Two"}, {ID: "c1", Name: "One"}} {
+		_, _ = app.Update(selected)
+		if app.activeChannelID != selected.ID || app.messagepane.IsLoading() || len(app.messagepane.Messages()) != 0 {
+			t.Fatalf("selection %#v left active=%q loading=%v messages=%d", selected, app.activeChannelID, app.messagepane.IsLoading(), len(app.messagepane.Messages()))
+		}
+	}
+	if !reflect.DeepEqual(calls, []string(nil)) {
+		t.Fatalf("legacy channel calls = %v", calls)
 	}
 }
 

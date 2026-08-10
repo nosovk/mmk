@@ -2,18 +2,18 @@
 //
 // Reducer for the new-message picker lifecycle:
 //
-//   EnterNewMessageMsg     - user pressed Ctrl+N: seed the picker
-//                            with current workspace users, open it,
-//                            enter ModeNewMessage.
-//   NewMessageOpenedMsg    - conversations.open succeeded: validate
-//                            RequestID against the in-flight counter
-//                            and the cancelled flag, then close the
-//                            modal, switch to the opened channel,
-//                            and enter ModeInsert (so the cursor
-//                            lands in compose ready to type).
-//   NewMessageFailedMsg    - conversations.open failed: log and
-//                            keep the modal open so the user can
-//                            retry or cancel.
+//	EnterNewMessageMsg     - user pressed Ctrl+N: seed the picker
+//	                         with current workspace users, open it,
+//	                         enter ModeNewMessage.
+//	NewMessageOpenedMsg    - conversations.open succeeded: validate
+//	                         RequestID against the in-flight counter
+//	                         and the cancelled flag, then close the
+//	                         modal, switch to the opened channel,
+//	                         and enter ModeInsert (so the cursor
+//	                         lands in compose ready to type).
+//	NewMessageFailedMsg    - conversations.open failed: log and
+//	                         keep the modal open so the user can
+//	                         retry or cancel.
 //
 // Cache hydration for AlreadyOpen=false is implemented in Task 12;
 // this task emits ChannelSelectedMsg directly without inserting a
@@ -37,12 +37,18 @@ import (
 var reduceNewMessagePicker reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case EnterNewMessageMsg:
+		if !a.allows(FeatureNewConversation) {
+			return nil, true
+		}
 		a.seedNewMessagePicker()
 		a.newMessagePicker.Open()
 		a.SetMode(ModeNewMessage)
 		return nil, true
 
 	case NewMessageOpenedMsg:
+		if !a.allows(FeatureNewConversation) {
+			return nil, true
+		}
 		if !newMessageResultIsCurrent(a, m.RequestID) {
 			debuglog.General("new-message: dropping stale/cancelled NewMessageOpenedMsg req=%d inflight=%d cancelled=%v", m.RequestID, a.newMessageInFlightID, a.newMessageCancelled)
 			return nil, true
@@ -67,6 +73,9 @@ var reduceNewMessagePicker reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, boo
 		return tea.Batch(emitSelected, a.compose.Focus()), true
 
 	case NewMessageFailedMsg:
+		if !a.allows(FeatureNewConversation) {
+			return nil, true
+		}
 		if !newMessageResultIsCurrent(a, m.RequestID) {
 			return nil, true
 		}

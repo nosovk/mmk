@@ -143,6 +143,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case key.Matches(msg, a.keys.ToggleThread):
+		if !a.allows(FeatureThreads) {
+			return nil
+		}
 		a.ToggleThread()
 
 	case key.Matches(msg, a.keys.NavBack):
@@ -172,6 +175,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.FocusNext()
 
 	case key.Matches(msg, a.keys.Enter):
+		if a.focusedPanel == PanelMessages && !a.allows(FeatureThreads) {
+			return nil
+		}
 		return a.handleEnter()
 
 	case key.Matches(msg, a.keys.ToggleSection):
@@ -273,6 +279,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return a.openReactionsView()
 
 	case key.Matches(msg, a.keys.SaveThread):
+		if !a.allows(FeatureThreads) {
+			return nil
+		}
 		return a.saveThreadToFile()
 
 	case key.Matches(msg, a.keys.CopyPermalink):

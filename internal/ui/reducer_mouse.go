@@ -5,18 +5,18 @@
 // Owns the two remaining mouse Update arms that act as multi-panel
 // routers:
 //
-//   tea.MouseWheelMsg  - viewport scroll for the panel under the
-//                        cursor (sidebar, messages pane / threads
-//                        view, thread panel). Decoupled from j/k
-//                        selection. Triggers maybeFetchOlderHistory
-//                        on the messages pane when the viewport
-//                        hits the top.
-//   tea.MouseClickMsg  - panel-router: workspace rail (switch
-//                        workspace), sidebar (channel select /
-//                        threads view), messages pane (threads
-//                        click / reaction hit-test / image hit-test
-//                        / drag begin), thread panel (reaction
-//                        hit-test / drag begin).
+//	tea.MouseWheelMsg  - viewport scroll for the panel under the
+//	                     cursor (sidebar, messages pane / threads
+//	                     view, thread panel). Decoupled from j/k
+//	                     selection. Triggers maybeFetchOlderHistory
+//	                     on the messages pane when the viewport
+//	                     hits the top.
+//	tea.MouseClickMsg  - panel-router: workspace rail (switch
+//	                     workspace), sidebar (channel select /
+//	                     threads view), messages pane (threads
+//	                     click / reaction hit-test / image hit-test
+//	                     / drag begin), thread panel (reaction
+//	                     hit-test / drag begin).
 //
 // Free reducer (not controller-absorbed) because both arms route
 // across multiple sub-models: the sidebar, messagepane, threadPanel,
@@ -221,6 +221,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		// if the click landed there (sidebar updates its own
 		// selection state), activate the threads view.
 		if a.sidebar.IsThreadsSelected() {
+			if !a.allows(FeatureThreads) {
+				return nil
+			}
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
 		return nil
@@ -246,6 +249,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		// image-hit-test code below operates on the (hidden)
 		// channel pane and must not run here.
 		if a.view == ViewThreads {
+			if !a.allows(FeatureThreads) {
+				return nil
+			}
 			panel, _, py, ok := a.panelAt(m.X, m.Y)
 			if ok && panel == PanelMessages && py >= 0 && a.threadsView.ClickAt(py) {
 				return a.openSelectedThreadCmd(false)
@@ -268,6 +274,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		contentY := py - a.messagepane.ChromeHeight()
 		if contentY >= 0 {
 			if hitMsgIdx, emojiName, hit := a.messagepane.HitTestReaction(contentY, px); hit && emojiName != "" {
+				if !a.allows(FeatureReactions) {
+					return nil
+				}
 				msgs := a.messagepane.Messages()
 				if hitMsgIdx >= 0 && hitMsgIdx < len(msgs) {
 					return a.toggleReactionOnMessageItem(a.activeChannelID, msgs[hitMsgIdx], emojiName)
@@ -309,6 +318,9 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		// of the thread chromeHeight), matching the frame returned
 		// by panelAt.
 		if hitReplyIdx, emojiName, hit := a.threadPanel.HitTestReaction(py, px); hit && emojiName != "" {
+			if !a.allows(FeatureReactions) {
+				return nil
+			}
 			replies := a.threadPanel.Replies()
 			if hitReplyIdx >= 0 && hitReplyIdx < len(replies) {
 				return a.toggleReactionOnMessageItem(a.threadPanel.ChannelID(), replies[hitReplyIdx], emojiName)
