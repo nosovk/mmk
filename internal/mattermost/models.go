@@ -144,8 +144,21 @@ type Message struct {
 	Text       string
 	CreatedAt  int64
 	UpdatedAt  int64
+	EditedAt   int64
 	DeletedAt  int64
 	ReplyCount int64
+}
+
+// ChannelPostsOptions controls one Mattermost channel-history page.
+type ChannelPostsOptions struct {
+	Page    int
+	PerPage int
+	Before  string
+}
+
+// MessagePage preserves the exact newest-first order returned by Mattermost.
+type MessagePage struct {
+	Messages []Message
 }
 
 // ThreadRootID returns the root post ID for both root posts and replies.

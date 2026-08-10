@@ -325,6 +325,63 @@ func (c *Client) UsersByGroupChannelIDs(ctx context.Context, channelIDs []string
 	return result, nil
 }
 
+// ChannelPosts returns one newest-first channel-history page reconstructed
+// from Mattermost's authoritative order array.
+func (c *Client) ChannelPosts(ctx context.Context, channelID string, options ChannelPostsOptions) (MessagePage, error) {
+	if err := validateBulkID(channelID); err != nil {
+		return MessagePage{}, fmt.Errorf("Mattermost channel ID: %w", err)
+	}
+	if options.Page < 0 {
+		return MessagePage{}, errors.New("Mattermost posts page must not be negative")
+	}
+	if options.PerPage < 1 || options.PerPage > 200 {
+		return MessagePage{}, errors.New("Mattermost posts per_page must be between 1 and 200")
+	}
+	if options.Before != "" {
+		if err := validateBulkID(options.Before); err != nil {
+			return MessagePage{}, fmt.Errorf("Mattermost before post ID: %w", err)
+		}
+	}
+
+	query := url.Values{}
+	query.Set("page", fmt.Sprint(options.Page))
+	query.Set("per_page", fmt.Sprint(options.PerPage))
+	if options.Before != "" {
+		query.Set("before", options.Before)
+	}
+	var wire postListResponse
+	endpoint := "channels/" + url.PathEscape(channelID) + "/posts?" + query.Encode()
+	if err := c.do(ctx, http.MethodGet, endpoint, nil, &wire); err != nil {
+		return MessagePage{}, err
+	}
+
+	messages := make([]Message, 0, len(wire.Order))
+	seen := make(map[string]struct{}, len(wire.Order))
+	for _, orderedID := range wire.Order {
+		if err := validateBulkID(orderedID); err != nil {
+			return MessagePage{}, fmt.Errorf("Mattermost ordered post ID %q: %w", orderedID, err)
+		}
+		if _, duplicate := seen[orderedID]; duplicate {
+			continue
+		}
+		seen[orderedID] = struct{}{}
+		post, ok := wire.Posts[orderedID]
+		if !ok {
+			return MessagePage{}, fmt.Errorf("Mattermost post order references missing post %q", orderedID)
+		}
+		if post.ID == "" {
+			post.ID = orderedID
+		} else if post.ID != orderedID {
+			return MessagePage{}, fmt.Errorf("Mattermost post %q has mismatched ID %q", orderedID, post.ID)
+		}
+		if post.ChannelID != channelID {
+			return MessagePage{}, fmt.Errorf("Mattermost post %q belongs to channel %q, expected %q", orderedID, post.ChannelID, channelID)
+		}
+		messages = append(messages, post.domain())
+	}
+	return MessagePage{Messages: messages}, nil
+}
+
 func idSet(ids []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -404,13 +461,15 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body io.Reader
 // request performs shared request construction, authentication, transport, and
 // status handling. The caller owns the returned successful response body.
 func (c *Client) request(ctx context.Context, method, endpoint string, body io.Reader) (*http.Response, error) {
+	endpointPath, rawQuery, _ := strings.Cut(endpoint, "?")
 	requestURL := *c.baseURL
-	requestURL.RawPath = strings.TrimRight(requestURL.EscapedPath(), "/") + "/" + strings.TrimLeft(endpoint, "/")
+	requestURL.RawPath = strings.TrimRight(requestURL.EscapedPath(), "/") + "/" + strings.TrimLeft(endpointPath, "/")
 	path, err := url.PathUnescape(requestURL.RawPath)
 	if err != nil {
 		return nil, fmt.Errorf("build Mattermost request path: %w", err)
 	}
 	requestURL.Path = path
+	requestURL.RawQuery = rawQuery
 
 	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), body)
 	if err != nil {
@@ -656,6 +715,32 @@ type channelMembershipResponse struct {
 	MentionCount int64  `json:"mention_count"`
 	LastViewedAt int64  `json:"last_viewed_at"`
 	UpdatedAt    int64  `json:"last_update_at"`
+}
+
+type postListResponse struct {
+	Order []string                `json:"order"`
+	Posts map[string]postResponse `json:"posts"`
+}
+
+type postResponse struct {
+	ID         string `json:"id"`
+	ChannelID  string `json:"channel_id"`
+	UserID     string `json:"user_id"`
+	RootID     string `json:"root_id"`
+	Message    string `json:"message"`
+	CreatedAt  int64  `json:"create_at"`
+	UpdatedAt  int64  `json:"update_at"`
+	EditedAt   int64  `json:"edit_at"`
+	DeletedAt  int64  `json:"delete_at"`
+	ReplyCount int64  `json:"reply_count"`
+}
+
+func (p postResponse) domain() Message {
+	return Message{
+		ID: p.ID, ChannelID: p.ChannelID, UserID: p.UserID, RootID: p.RootID,
+		Text: p.Message, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+		EditedAt: p.EditedAt, DeletedAt: p.DeletedAt, ReplyCount: p.ReplyCount,
+	}
 }
 
 func (m channelMembershipResponse) domain() ChannelMembership {
