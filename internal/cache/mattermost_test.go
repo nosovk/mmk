@@ -168,6 +168,35 @@ func TestMattermostSnapshotStoresSuppliedRawUsersMembershipsAndParticipants(t *t
 	}
 }
 
+func TestLoadMattermostBootstrapSnapshotReadsCohesiveNonDeletedState(t *testing.T) {
+	db := setupMattermostDB(t)
+	snapshot := MattermostBootstrapSnapshot{
+		Server:      MattermostServer{ID: "s1", Name: "One", URL: "https://one.example", CurrentUserID: "u1", LastSyncedAt: 9},
+		CurrentUser: MattermostUser{ID: "u1", Username: "self", UpdatedAt: 7},
+		Users:       []MattermostUser{{ID: "u2", Username: "peer", UpdatedAt: 8}},
+		Teams:       []MattermostTeam{{ID: "t1", DisplayName: "Team", UpdatedAt: 6}},
+		Channels: []MattermostChannel{
+			{ID: "c1", TeamID: "t1", Kind: "public", UpdatedAt: 5},
+			{ID: "gone", TeamID: "t1", Kind: "public", DeletedAt: 10},
+		},
+		Memberships:  []MattermostChannelMembership{{ChannelID: "c1", UserID: "u1", MsgCount: 3, UpdatedAt: 9}},
+		ChannelUsers: map[string][]string{"c1": {"u1", "u2"}},
+	}
+	if err := db.ApplyMattermostBootstrapSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Channels) != 1 || got.Channels[0].ID != "c1" || !reflect.DeepEqual(got.ChannelUsers["c1"], []string{"u1", "u2"}) {
+		t.Fatalf("loaded snapshot = %#v", got)
+	}
+	if _, err := db.LoadMattermostBootstrapSnapshot("missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing error = %v", err)
+	}
+}
+
 func TestMattermostSnapshotParticipantUpsertsDoNotDeleteOmittedRows(t *testing.T) {
 	db := setupMattermostDB(t)
 	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {

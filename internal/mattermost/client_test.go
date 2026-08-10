@@ -389,6 +389,20 @@ func TestClient_TeamsForUserReturnsEmptySlice(t *testing.T) {
 	}
 }
 
+func TestClientDecodesUserAndChannelRevisionFields(t *testing.T) {
+	user := userResponse{ID: "u1", UpdatedAt: 41}.domain()
+	if user.UpdatedAt != 41 {
+		t.Fatalf("user updated_at = %d", user.UpdatedAt)
+	}
+	channel, err := (channelResponse{ID: "c1", Type: "O", UpdatedAt: 42, DeletedAt: 43}).domain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if channel.UpdatedAt != 42 || channel.DeletedAt != 43 {
+		t.Fatalf("channel revisions = %#v", channel)
+	}
+}
+
 func TestClient_ChannelsForUserCallsCrossTeamEndpointAndReturnsCompleteResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.Method, http.MethodGet; got != want {

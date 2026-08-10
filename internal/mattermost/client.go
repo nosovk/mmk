@@ -602,6 +602,7 @@ type userResponse struct {
 	Nickname  string `json:"nickname"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
+	UpdatedAt int64  `json:"update_at"`
 }
 
 type teamResponse struct {
@@ -627,6 +628,8 @@ type channelResponse struct {
 	DisplayName   string `json:"display_name"`
 	Type          string `json:"type"`
 	TotalMsgCount int64  `json:"total_msg_count"`
+	UpdatedAt     int64  `json:"update_at"`
+	DeletedAt     int64  `json:"delete_at"`
 }
 
 func (c channelResponse) domain() (Channel, error) {
@@ -641,6 +644,8 @@ func (c channelResponse) domain() (Channel, error) {
 		DisplayName:   c.DisplayName,
 		Kind:          kind,
 		TotalMsgCount: c.TotalMsgCount,
+		UpdatedAt:     c.UpdatedAt,
+		DeletedAt:     c.DeletedAt,
 	}, nil
 }
 
@@ -669,5 +674,6 @@ func (u userResponse) domain() *User {
 		Nickname:  u.Nickname,
 		FirstName: u.FirstName,
 		LastName:  u.LastName,
+		UpdatedAt: u.UpdatedAt,
 	}
 }

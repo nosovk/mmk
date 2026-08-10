@@ -26,10 +26,12 @@ type ServerBootstrapClient interface {
 var _ ServerBootstrapClient = (*mattermost.Client)(nil)
 
 type ServerSnapshot struct {
-	Server      mattermost.Server
-	CurrentUser mattermost.User
-	Teams       []mattermost.Team
-	Sections    []ChannelSection
+	Server       mattermost.Server
+	CurrentUser  mattermost.User
+	Users        []mattermost.User
+	Teams        []mattermost.Team
+	Sections     []ChannelSection
+	ChannelUsers map[string][]string
 }
 
 func BootstrapServer(ctx context.Context, client ServerBootstrapClient, server mattermost.Server) (ServerSnapshot, error) {
@@ -90,16 +92,18 @@ func BootstrapServer(ctx context.Context, client ServerBootstrapClient, server m
 	for i := range channels {
 		channels[i].ServerID = server.ID
 	}
-	sections, err := buildChannelSections(ctx, client, server.ID, snapshotUser, teams, channels, memberships)
+	sections, users, channelUsers, err := buildChannelSections(ctx, client, server.ID, snapshotUser, teams, channels, memberships)
 	if err != nil {
 		return ServerSnapshot{}, err
 	}
 
 	return ServerSnapshot{
-		Server:      snapshotServer,
-		CurrentUser: snapshotUser,
-		Teams:       teams,
-		Sections:    sections,
+		Server:       snapshotServer,
+		CurrentUser:  snapshotUser,
+		Users:        users,
+		Teams:        teams,
+		Sections:     sections,
+		ChannelUsers: channelUsers,
 	}, nil
 }
 

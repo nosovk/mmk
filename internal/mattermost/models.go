@@ -39,6 +39,7 @@ type User struct {
 	Nickname  string
 	FirstName string
 	LastName  string
+	UpdatedAt int64
 }
 
 // DisplayName returns the first available name in Mattermost's usual display
@@ -69,6 +70,8 @@ type Channel struct {
 	DisplayName   string
 	Kind          ChannelKind
 	TotalMsgCount int64
+	UpdatedAt     int64
+	DeletedAt     int64
 }
 
 // ChannelMembership contains the per-user read metadata returned separately

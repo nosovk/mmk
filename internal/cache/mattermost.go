@@ -534,6 +534,48 @@ func (db *DB) ApplyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnaps
 	return nil
 }
 
+func (db *DB) LoadMattermostBootstrapSnapshot(serverID string) (MattermostBootstrapSnapshot, error) {
+	server, err := db.GetMattermostServer(serverID)
+	if err != nil {
+		return MattermostBootstrapSnapshot{}, err
+	}
+	currentUser, err := db.GetMattermostUser(serverID, server.CurrentUserID)
+	if err != nil {
+		return MattermostBootstrapSnapshot{}, err
+	}
+	users, err := db.ListMattermostUsers(serverID)
+	if err != nil {
+		return MattermostBootstrapSnapshot{}, err
+	}
+	teams, err := db.ListMattermostTeams(serverID)
+	if err != nil {
+		return MattermostBootstrapSnapshot{}, err
+	}
+	channels, err := db.listMattermostChannels(`SELECT id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at
+		FROM mattermost_channels WHERE server_id = ? AND deleted_at = 0 ORDER BY display_name, name, id`, serverID)
+	if err != nil {
+		return MattermostBootstrapSnapshot{}, err
+	}
+	memberships, err := db.ListMattermostChannelMemberships(serverID, server.CurrentUserID)
+	if err != nil {
+		return MattermostBootstrapSnapshot{}, err
+	}
+	channelUsers := make(map[string][]string, len(channels))
+	for _, channel := range channels {
+		participants, err := db.ListMattermostChannelUserIDs(serverID, channel.ID)
+		if err != nil {
+			return MattermostBootstrapSnapshot{}, err
+		}
+		if len(participants) > 0 {
+			channelUsers[channel.ID] = participants
+		}
+	}
+	return MattermostBootstrapSnapshot{
+		Server: server, CurrentUser: currentUser, Users: users, Teams: teams,
+		Channels: channels, Memberships: memberships, ChannelUsers: channelUsers,
+	}, nil
+}
+
 func (db *DB) UpsertMattermostPost(serverID string, post MattermostPost) error {
 	return upsertMattermostPost(db.conn, serverID, post)
 }

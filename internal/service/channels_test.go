@@ -76,6 +76,23 @@ func TestServerBootstrapBuildsDirectThenStableTeamSections(t *testing.T) {
 			}
 		}
 	}
+	if got, want := userIDsFromSnapshot(snapshot.Users), []string{"me", "user-a", "user-z"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("snapshot users = %v, want %v", got, want)
+	}
+	if got, want := snapshot.ChannelUsers["direct-a"], []string{"me", "user-a"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct participants = %v, want %v", got, want)
+	}
+	if got, want := snapshot.ChannelUsers["group-1"], []string{"user-z", "me", "user-a"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("group participants = %v, want fetched order with duplicates removed", got)
+	}
+}
+
+func userIDsFromSnapshot(users []mattermost.User) []string {
+	ids := make([]string, len(users))
+	for i := range users {
+		ids[i] = users[i].ID
+	}
+	return ids
 }
 
 func TestServerBootstrapSupportsSelfDMWithoutBulkLookup(t *testing.T) {

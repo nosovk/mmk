@@ -39,7 +39,7 @@ func buildChannelSections(
 	teams []mattermost.Team,
 	channels []mattermost.Channel,
 	memberships map[string]mattermost.ChannelMembership,
-) ([]ChannelSection, error) {
+) ([]ChannelSection, []mattermost.User, map[string][]string, error) {
 	directPeerIDs := make([]string, 0)
 	directPeerByChannel := make(map[string]string)
 	groupChannelIDs := make([]string, 0)
@@ -69,7 +69,7 @@ func buildChannelSections(
 	if len(directPeerIDs) > 0 {
 		users, err := client.UsersByIDs(ctx, directPeerIDs)
 		if err != nil {
-			return nil, fmt.Errorf("fetch direct-message users for Mattermost server %q: %w", serverID, err)
+			return nil, nil, nil, fmt.Errorf("fetch direct-message users for Mattermost server %q: %w", serverID, err)
 		}
 		for _, user := range users {
 			if _, exists := usersByID[user.ID]; !exists {
@@ -83,10 +83,54 @@ func buildChannelSections(
 		var err error
 		groupUsers, err = client.UsersByGroupChannelIDs(ctx, groupChannelIDs)
 		if err != nil {
-			return nil, fmt.Errorf("fetch group-message users for Mattermost server %q: %w", serverID, err)
+			return nil, nil, nil, fmt.Errorf("fetch group-message users for Mattermost server %q: %w", serverID, err)
 		}
 	}
 
+	allUsers := make(map[string]mattermost.User, len(usersByID))
+	for id, user := range usersByID {
+		user.ServerID = serverID
+		allUsers[id] = user
+	}
+	channelUsers := make(map[string][]string)
+	for channelID, users := range groupUsers {
+		seen := map[string]struct{}{}
+		for _, user := range users {
+			if _, ok := seen[user.ID]; ok || user.ID == "" {
+				continue
+			}
+			seen[user.ID] = struct{}{}
+			channelUsers[channelID] = append(channelUsers[channelID], user.ID)
+			user.ServerID = serverID
+			if _, exists := allUsers[user.ID]; !exists {
+				allUsers[user.ID] = user
+			}
+		}
+	}
+	for channelID, peerID := range directPeerByChannel {
+		channelUsers[channelID] = dedupeIDs([]string{currentUser.ID, peerID})
+	}
+	sections, err := BuildChannelSections(serverID, currentUser, teams, channels, memberships, allUsers, channelUsers)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for i := range sections {
+		for j := range sections[i].Channels {
+			entry := &sections[i].Channels[j]
+			if entry.Channel.Kind == mattermost.ChannelKindGroup {
+				entry.DisplayName = groupDisplayName(entry.Channel, currentUser.ID, groupUsers[entry.Channel.ID])
+			}
+		}
+	}
+	users := make([]mattermost.User, 0, len(allUsers))
+	for _, user := range allUsers {
+		users = append(users, user)
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].ID < users[j].ID })
+	return sections, users, channelUsers, nil
+}
+
+func BuildChannelSections(serverID string, currentUser mattermost.User, teams []mattermost.Team, channels []mattermost.Channel, memberships map[string]mattermost.ChannelMembership, usersByID map[string]mattermost.User, channelUsers map[string][]string) ([]ChannelSection, error) {
 	teamSections := make(map[string]*ChannelSection, len(teams))
 	sections := make([]ChannelSection, 0, len(teams)+1)
 	for _, team := range teams {
@@ -110,10 +154,23 @@ func buildChannelSections(
 
 		switch channel.Kind {
 		case mattermost.ChannelKindDirect:
-			entry.DisplayName = directDisplayName(channel, directPeerByChannel[channel.ID], usersByID)
+			peerID := ""
+			for _, userID := range channelUsers[channel.ID] {
+				if userID != currentUser.ID || len(channelUsers[channel.ID]) == 1 {
+					peerID = userID
+					break
+				}
+			}
+			entry.DisplayName = directDisplayName(channel, peerID, usersByID)
 			directEntries = append(directEntries, entry)
 		case mattermost.ChannelKindGroup:
-			entry.DisplayName = groupDisplayName(channel, currentUser.ID, groupUsers[channel.ID])
+			participants := make([]mattermost.User, 0, len(channelUsers[channel.ID]))
+			for _, userID := range channelUsers[channel.ID] {
+				if user, ok := usersByID[userID]; ok {
+					participants = append(participants, user)
+				}
+			}
+			entry.DisplayName = groupDisplayName(channel, currentUser.ID, participants)
 			directEntries = append(directEntries, entry)
 		case mattermost.ChannelKindPublic, mattermost.ChannelKindPrivate:
 			section := teamSections[channel.TeamID]
@@ -141,6 +198,22 @@ func buildChannelSections(
 		sections = append([]ChannelSection{directSection}, sections...)
 	}
 	return sections, nil
+}
+
+func dedupeIDs(ids []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func directPeerID(name, currentUserID string) (string, bool) {
