@@ -197,6 +197,19 @@ func WordWrap(s string, limit int) string {
 	return result.String()
 }
 
+// RenderMattermostPlain renders literal Mattermost post text without Slack
+// mrkdwn, Block Kit, or terminal control interpretation.
+func RenderMattermostPlain(text string, limit int) string {
+	text = ansi.Strip(text)
+	text = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, text)
+	return WordWrap(text, limit)
+}
+
 // wrapLine wraps a single line at word boundaries using lipgloss.Width.
 // Words wider than limit are hard-broken via ansi.Hardwrap so no output line
 // exceeds the limit. Leaving an overlong line intact would cause the

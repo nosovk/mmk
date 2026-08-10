@@ -23,6 +23,10 @@ import (
 )
 
 type MessageItem struct {
+	ID          string
+	CreatedAt   int64
+	RootID      string
+	Format      MessageFormat
 	TS          string
 	UserName    string
 	UserID      string
@@ -47,6 +51,48 @@ type MessageItem struct {
 	// `attachments` field (color stripe + title + fields style bot
 	// cards). Rendered after Blocks.
 	LegacyAttachments []blockkit.LegacyAttachment
+}
+
+type MessageFormat uint8
+
+const (
+	FormatSlack MessageFormat = iota
+	FormatMattermostPlain
+)
+
+func (m MessageItem) MessageID() string {
+	if m.ID != "" {
+		return m.ID
+	}
+	return m.TS
+}
+
+func (m MessageItem) EventTime() string {
+	if m.CreatedAt != 0 {
+		return strconv.FormatInt(m.CreatedAt, 10)
+	}
+	return m.TS
+}
+
+func (m MessageItem) RootMessageID() string {
+	if m.RootID != "" {
+		return m.RootID
+	}
+	return m.ThreadTS
+}
+
+func (m MessageItem) Date() string {
+	if m.CreatedAt != 0 {
+		return time.UnixMilli(m.CreatedAt).Format("2006-01-02")
+	}
+	return DateFromTS(m.TS)
+}
+
+func (m MessageItem) DisplayTime() string {
+	if m.CreatedAt != 0 {
+		return time.UnixMilli(m.CreatedAt).Format("3:04 PM")
+	}
+	return m.Timestamp
 }
 
 // Attachment represents a file or image attached to a message.
@@ -392,7 +438,7 @@ func (m *Model) SetFocused(focused bool) {
 		if m.staleEntries == nil {
 			m.staleEntries = make(map[string]struct{})
 		}
-		m.staleEntries[m.messages[m.selected].TS] = struct{}{}
+		m.staleEntries[m.messages[m.selected].MessageID()] = struct{}{}
 	}
 	m.dirty()
 	debuglog.Perf("messages.SetFocused flip focused=%v msgs=%d selected-row-marked-stale",
@@ -515,7 +561,7 @@ func (m *Model) HandleAvatarReady(userID string) {
 		if m.staleEntries == nil {
 			m.staleEntries = make(map[string]struct{})
 		}
-		m.staleEntries[msg.TS] = struct{}{}
+		m.staleEntries[msg.MessageID()] = struct{}{}
 		marked = true
 	}
 	if marked {
@@ -681,10 +727,10 @@ func (m *Model) AppendMessage(msg MessageItem) {
 	// before the HTTP response returns -- so a TS-keyed dedup map at the
 	// caller can race. Dedup here, at the model boundary, defends
 	// against duplicates regardless of arrival order.
-	if msg.TS != "" {
+	if msg.MessageID() != "" {
 		// Scan from the back: dupes, when they happen, are recent.
 		for i := len(m.messages) - 1; i >= 0; i-- {
-			if m.messages[i].TS == msg.TS {
+			if m.messages[i].MessageID() == msg.MessageID() {
 				return
 			}
 		}
@@ -774,9 +820,9 @@ func (m *Model) RemoveLocalSent(localTS string) bool {
 // lines, the previously-selected last index now extends below the
 // fold and would otherwise stay clipped.
 func (m *Model) UpsertSelfSent(msg MessageItem) {
-	if msg.TS != "" {
+	if msg.MessageID() != "" {
 		for i := len(m.messages) - 1; i >= 0; i-- {
-			if m.messages[i].TS == msg.TS {
+			if m.messages[i].MessageID() == msg.MessageID() {
 				m.messages[i] = msg
 				m.cache = nil
 				m.dirty()
@@ -827,11 +873,16 @@ func (m *Model) SelectByIndex(i int) {
 // in the loaded buffer. Used by the permalink-navigation path to land
 // on the exact message a Slack archive link points at.
 func (m *Model) SelectByTS(ts string) bool {
-	if ts == "" {
+	return m.SelectByID(ts)
+}
+
+// SelectByID selects a message using its provider-neutral canonical ID.
+func (m *Model) SelectByID(id string) bool {
+	if id == "" {
 		return false
 	}
 	for i := range m.messages {
-		if m.messages[i].TS == ts {
+		if m.messages[i].MessageID() == id {
 			m.selected = i
 			m.hasSnapped = false
 			m.dirty()
@@ -980,27 +1031,45 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 	if len(msgs) == 0 {
 		return
 	}
-	// Boundary guard: a backfill that raced a channel re-select (the
-	// re-select replaced the buffer while the backfill was in flight)
-	// can deliver items the buffer already contains. Keep only items
-	// strictly older than the current head. TS comparison is
-	// lexicographic, matching the rest of the model (e.g. buildCache's
-	// lastReadTS compare): real Slack TSes are fixed-width
-	// "seconds.micros" strings. A "local:" optimistic placeholder at
-	// the head compares greater than any numeric TS, so the guard
-	// degrades to keep-everything there — never a wrong drop.
-	if len(m.messages) > 0 {
-		head := m.messages[0].TS
-		kept := make([]MessageItem, 0, len(msgs))
-		for _, item := range msgs {
-			if item.TS < head {
-				kept = append(kept, item)
+	seen := make(map[string]struct{}, len(m.messages)+len(msgs))
+	slackHead := ""
+	if len(m.messages) > 0 && m.messages[0].ID == "" {
+		slackHead = m.messages[0].TS
+	}
+	for _, item := range m.messages {
+		if id := item.MessageID(); id != "" {
+			seen[id] = struct{}{}
+		}
+	}
+	kept := make([]MessageItem, 0, len(msgs))
+	for _, item := range msgs {
+		if slackHead != "" && item.ID == "" && item.TS >= slackHead {
+			continue
+		}
+		id := item.MessageID()
+		if id != "" {
+			if _, duplicate := seen[id]; duplicate {
+				continue
+			}
+			seen[id] = struct{}{}
+		}
+		kept = append(kept, item)
+	}
+	if len(kept) == 0 {
+		return
+	}
+	msgs = kept
+	selectedID := ""
+	selectedVisualY := 0
+	anchorReady := m.cache != nil && m.selected >= 0 && m.selected < len(m.messages)
+	if anchorReady {
+		selectedID = m.messages[m.selected].MessageID()
+		for i, entry := range m.cache {
+			if entry.msgIdx == m.selected {
+				selectedVisualY = m.entryOffsets[i] - m.yOffset
+				break
 			}
 		}
-		if len(kept) == 0 {
-			return
-		}
-		msgs = kept
 	}
 	count := len(msgs)
 	if debuglog.Enabled() {
@@ -1010,6 +1079,17 @@ func (m *Model) PrependMessages(msgs []MessageItem) {
 	m.messages = append(msgs, m.messages...)
 	m.selected += count
 	m.cache = nil // invalidate cache
+	if anchorReady && m.cacheWidth > 0 {
+		m.buildCache(m.cacheWidth)
+		if entryIndex, ok := m.messageIDToEntryIdx[selectedID]; ok {
+			m.yOffset = m.entryOffsets[entryIndex] - selectedVisualY
+			if m.yOffset < 0 {
+				m.yOffset = 0
+			}
+			m.snappedSelection = m.selected
+			m.hasSnapped = true
+		}
+	}
 	m.dirty()
 }
 
@@ -1465,6 +1545,13 @@ func (m *Model) OldestTS() string {
 	return m.messages[0].TS
 }
 
+func (m *Model) OldestID() string {
+	if len(m.messages) == 0 {
+		return ""
+	}
+	return m.messages[0].MessageID()
+}
+
 // cacheStyles bundles the lipgloss styles and pre-rendered strings that
 // buildCache and partialRebuild share. Computing them once per
 // (width, theme) avoids re-allocating identical lipgloss styles per
@@ -1745,7 +1832,7 @@ func (m *Model) buildCache(width int) {
 	var lastDate string
 	newMsgLandmarkInserted := false
 	for i, msg := range m.messages {
-		msgDate := DateFromTS(msg.TS)
+		msgDate := msg.Date()
 		if msgDate != "" && msgDate != lastDate {
 			label := FormatDateSeparator(msgDate)
 			sepStr := "── " + label + " ──"
@@ -1757,7 +1844,7 @@ func (m *Model) buildCache(width int) {
 		}
 
 		// New message landmark: insert before the first unread message
-		if m.lastReadTS != "" && !newMsgLandmarkInserted && msg.TS > m.lastReadTS {
+		if m.lastReadTS != "" && !newMsgLandmarkInserted && msg.EventTime() > m.lastReadTS {
 			newStr := "── new ──"
 			label := lipgloss.NewStyle().Background(styles.Background).Foreground(styles.Error).Bold(true).
 				Width(width).Align(lipgloss.Center).
@@ -1766,7 +1853,7 @@ func (m *Model) buildCache(width int) {
 			newMsgLandmarkInserted = true
 		}
 
-		m.messageIDToEntryIdx[msg.TS] = len(m.cache)
+		m.messageIDToEntryIdx[msg.MessageID()] = len(m.cache)
 		m.cache = append(m.cache, m.renderMessageEntry(i, width, cs, stats))
 	}
 
@@ -1854,7 +1941,7 @@ func (m *Model) blockkitContext(msg MessageItem, userNames, channelNames map[str
 		MaxRows:     imgCtx.MaxRows,
 		MaxCols:     imgCtx.MaxCols,
 		UserNames:   userNames,
-		MessageTS:   msg.TS,
+		MessageTS:   msg.MessageID(),
 		Channel:     m.channelName,
 		// Capture channelNames in a closure so blockkit's two-arg
 		// RenderText signature stays stable; channel-name resolution
@@ -1907,7 +1994,7 @@ func (m *Model) blockkitContext(msg MessageItem, userNames, channelNames map[str
 func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, channelNames map[string]string, isSelected bool, stats *entryPerfStats) (
 	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit, reactionHits []reactionEntryHit,
 ) {
-	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
+	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.DisplayTime())
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
@@ -1937,6 +2024,9 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		EmojiFlushes: &flushes,
 	}
 	rendered := RenderSlackMarkdownWith(MessageTextSource(msg), bodyOpts)
+	if msg.Format == FormatMattermostPlain {
+		rendered = RenderMattermostPlain(msg.Text, contentWidth)
+	}
 	if len(m.searchTerms) > 0 {
 		// SearchHighlightSGR's close sequence restores the theme bg/fg
 		// after the highlight's reset so plain body text doesn't bleed
@@ -2159,7 +2249,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	bkCtx := m.blockkitContext(msg, userNames, channelNames)
 	var bkLines []string
 	bkInteractive := false
-	if len(msg.Blocks) > 0 {
+	if msg.Format != FormatMattermostPlain && len(msg.Blocks) > 0 {
 		var bkT0 time.Time
 		if stats != nil {
 			bkT0 = time.Now()
@@ -2185,7 +2275,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		_ = res.Hits
 		bkInteractive = bkInteractive || res.Interactive
 	}
-	if len(msg.LegacyAttachments) > 0 {
+	if msg.Format != FormatMattermostPlain && len(msg.LegacyAttachments) > 0 {
 		var lgT0 time.Time
 		var lgPerf *blockkit.LegacyPerf
 		legacyCtx := bkCtx
@@ -2242,7 +2332,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		bkBlock = "\n" + strings.Join(bkLines, "\n")
 	}
 
-	if len(msg.Attachments) > 0 {
+	if msg.Format != FormatMattermostPlain && len(msg.Attachments) > 0 {
 		var attT0 time.Time
 		if stats != nil {
 			attT0 = time.Now()
@@ -2262,7 +2352,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 				Name:   att.Name,
 				URL:    att.URL,
 				Thumbs: imgThumbs,
-			}, m.channelName, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
+			}, m.channelName, msg.MessageID(), contentWidth, rowCursor, attIdx, contentColBase)
 			attachLineSlices = append(attachLineSlices, res.Lines)
 			allFlushes = append(allFlushes, res.Flushes...)
 			for k, v := range convertSixelMap(res.SixelRows) {
@@ -2541,7 +2631,7 @@ func (m *Model) anchorAt(absLine, col int) (selection.Anchor, bool) {
 		}
 		var msgID string
 		if e.msgIdx >= 0 && e.msgIdx < len(m.messages) {
-			msgID = m.messages[e.msgIdx].TS
+			msgID = m.messages[e.msgIdx].MessageID()
 		}
 		return selection.Anchor{MessageID: msgID, Line: lineIdx, Col: plainCol}, true
 	}
@@ -2574,7 +2664,7 @@ func (m *Model) snapToMessageAnchor(a selection.Anchor, absLine int) (selection.
 	for i := startEntry + 1; i < len(m.cache); i++ {
 		e := m.cache[i]
 		if e.msgIdx >= 0 && e.msgIdx < len(m.messages) {
-			return selection.Anchor{MessageID: m.messages[e.msgIdx].TS, Line: 0, Col: 0}, true
+			return selection.Anchor{MessageID: m.messages[e.msgIdx].MessageID(), Line: 0, Col: 0}, true
 		}
 	}
 	for i := startEntry - 1; i >= 0; i-- {
@@ -2585,7 +2675,7 @@ func (m *Model) snapToMessageAnchor(a selection.Anchor, absLine int) (selection.
 			if lastLine < len(e.linesPlain) {
 				col = displayWidthOfPlain(e.linesPlain[lastLine])
 			}
-			return selection.Anchor{MessageID: m.messages[e.msgIdx].TS, Line: lastLine, Col: col}, true
+			return selection.Anchor{MessageID: m.messages[e.msgIdx].MessageID(), Line: lastLine, Col: col}, true
 		}
 	}
 	return selection.Anchor{}, false
@@ -3447,7 +3537,7 @@ func summarizeMessageItems(items []MessageItem) string {
 		return "count=0"
 	}
 	return fmt.Sprintf("count=%d oldest=%s newest=%s",
-		len(items), items[0].TS, items[len(items)-1].TS)
+		len(items), items[0].MessageID(), items[len(items)-1].MessageID())
 }
 
 // AppendUserID returns a new slice with userID appended. Empty IDs are
