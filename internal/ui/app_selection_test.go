@@ -221,6 +221,23 @@ func TestApp_DragDoesNotOpenThread(t *testing.T) {
 	}
 }
 
+func TestDragControllerPlainMessageClickHonorsFeatureThreads(t *testing.T) {
+	a := newTestAppWithMessages(t)
+	a.features = MattermostTask8Features()
+	called := false
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+		called = true
+		return ThreadRepliesLoadedMsg{}
+	})
+	d := newDragState()
+	d.Begin(PanelMessages, 1, 3)
+	d.SetClickedMessage(true)
+	cmd, handled := d.Handle(a, tea.MouseReleaseMsg{Button: tea.MouseLeft})
+	if !handled || cmd != nil || called || a.threadVisible {
+		t.Fatalf("disabled plain click: handled=%v cmd=%v called=%v visible=%v", handled, cmd != nil, called, a.threadVisible)
+	}
+}
+
 func TestApp_CopiedMsgShowsToastAndSchedulesClear(t *testing.T) {
 	a := newTestAppWithMessages(t)
 	_, cmd := a.Update(statusbar.CopiedMsg{N: 7})

@@ -347,7 +347,7 @@ func (d *dragState) Handle(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				// Treat a click on a real message row as Enter:
 				// open that message's thread. Clicks that missed
 				// (chrome, empty space) leave the panel as-is.
-				if clickedMessage {
+				if clickedMessage && a.allows(FeatureThreads) {
 					if cmd := a.openThreadForSelectedMessage(); cmd != nil {
 						return cmd, true
 					}

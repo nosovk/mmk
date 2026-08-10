@@ -233,6 +233,9 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case channelSearchDebounceMsg:
+		if !a.allows(FeatureRemoteChannelSearch) {
+			return nil, true
+		}
 		// The typing has stopped. Anything older than the current
 		// generation is a keystroke the user has already typed past.
 		if m.gen != a.pendingChannelSearchGen || m.query == "" {

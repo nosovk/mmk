@@ -319,7 +319,7 @@ func mattermostServerViewState(snapshot service.ServerSnapshot, initialActive bo
 			itemKind, legacyType := mattermostSidebarKind(entry.Channel.Kind)
 			item := sidebar.ChannelItem{ID: entry.Channel.ID, Name: entry.DisplayName, Kind: itemKind, SectionID: section.ID, Type: legacyType}
 			channels = append(channels, item)
-			finder = append(finder, channelfinder.Item{ID: item.ID, Name: item.Name, Type: legacyType})
+			finder = append(finder, channelfinder.Item{ID: item.ID, Name: item.Name, Type: legacyType, Joined: true})
 			if entry.Membership != nil {
 				unread := entry.Membership.MentionCount > 0 || entry.Channel.TotalMsgCount > entry.Membership.MsgCount
 				readState[item.ID] = cache.ReadState{HasUnread: unread}

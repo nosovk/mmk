@@ -132,6 +132,46 @@ func TestChannelFinder_EmptyQueryIssuesNoSearch(t *testing.T) {
 	}
 }
 
+func TestMattermostChannelFinderNeverSchedulesOrExecutesRemoteSearch(t *testing.T) {
+	var searched []string
+	a := newFinderApp(t, &searched, nil)
+	a.features = MattermostTask8Features()
+	beforeGen := a.pendingChannelSearchGen
+	cmd := handleChannelFinderMode(a, tea.KeyPressMsg{Code: 't', Text: "t"})
+	if cmd != nil || a.pendingChannelSearchGen != beforeGen {
+		t.Fatalf("Mattermost finder scheduled search: cmd=%v gen=%d->%d", cmd != nil, beforeGen, a.pendingChannelSearchGen)
+	}
+	_, cmd = a.Update(channelSearchDebounceMsg{query: "t", gen: beforeGen})
+	if cmd != nil {
+		_ = drainBatch(cmd)
+	}
+	if len(searched) != 0 {
+		t.Fatalf("Mattermost remote searches = %v", searched)
+	}
+}
+
+func TestMattermostJoinedFinderSelectionEmitsChannelSelectedMsg(t *testing.T) {
+	a := NewApp()
+	a.features = MattermostTask8Features()
+	a.channelFinder.SetSyntheticItems(nil)
+	a.SetChannelFinderItems([]channelfinder.Item{{ID: "c1", Name: "Town Square", Type: "channel", Joined: true}})
+	a.channelFinder.Open()
+	a.SetMode(ModeChannelFinder)
+	cmd := handleChannelFinderMode(a, tea.KeyPressMsg{Code: tea.KeyEnter})
+	msgs := drainBatch(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("finder messages = %#v", msgs)
+	}
+	selected, ok := msgs[0].(ChannelSelectedMsg)
+	if !ok || selected.ID != "c1" {
+		t.Fatalf("finder result = %#v", msgs[0])
+	}
+	_, _ = a.Update(selected)
+	if a.activeChannelID != "c1" {
+		t.Fatalf("active channel = %q", a.activeChannelID)
+	}
+}
+
 func TestChannelFinder_LocalMatchesShowBeforeAnySearchCompletes(t *testing.T) {
 	// Typing must stay responsive. The cache answers on the keystroke;
 	// the server's answer merges when it arrives.

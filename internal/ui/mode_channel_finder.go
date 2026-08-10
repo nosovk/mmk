@@ -60,6 +60,9 @@ func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	// on screen is up to date before anything touches the network.
 	// Only the server query is deferred.
 	if after := a.channelFinder.Query(); after != before {
+		if !a.allows(FeatureRemoteChannelSearch) {
+			return nil
+		}
 		return a.scheduleChannelSearch(after)
 	}
 	return nil

@@ -223,6 +223,16 @@ func TestMattermostStartupDoesNotSendAfterCancellationReleasesBlockedSecretStore
 	}
 }
 
+func TestMattermostServerViewStateMarksFinderChannelsJoined(t *testing.T) {
+	state := mattermostServerViewState(service.ServerSnapshot{
+		Server: mattermost.Server{ID: "s1"}, CurrentUser: mattermost.User{ID: "u1"},
+		Sections: []service.ChannelSection{{Channels: []service.ChannelEntry{{Channel: mattermost.Channel{ID: "c1", Kind: mattermost.ChannelKindPublic}, DisplayName: "Town Square"}}}},
+	}, false)
+	if len(state.FinderItems) != 1 || !state.FinderItems[0].Joined {
+		t.Fatalf("finder items = %#v", state.FinderItems)
+	}
+}
+
 func nextServerReady(t *testing.T, messages <-chan tea.Msg) ui.ServerReadyMsg {
 	t.Helper()
 	deadline := time.After(time.Second)
