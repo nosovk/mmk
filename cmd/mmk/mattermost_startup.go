@@ -259,6 +259,8 @@ func mattermostServerViewState(snapshot service.ServerSnapshot, initialActive bo
 	finder := make([]channelfinder.Item, 0)
 	users := make(map[string]string, len(snapshot.Users))
 	sections := make([]sidebar.SectionMeta, 0, len(snapshot.Sections))
+	readState := make(map[string]cache.ReadState)
+	hasUnread := false
 	for _, user := range snapshot.Users {
 		users[user.ID] = user.DisplayName()
 	}
@@ -273,9 +275,14 @@ func mattermostServerViewState(snapshot service.ServerSnapshot, initialActive bo
 			item := sidebar.ChannelItem{ID: entry.Channel.ID, Name: entry.DisplayName, Kind: itemKind, SectionID: section.ID, Type: legacyType}
 			channels = append(channels, item)
 			finder = append(finder, channelfinder.Item{ID: item.ID, Name: item.Name, Type: legacyType})
+			if entry.Membership != nil {
+				unread := entry.Membership.MentionCount > 0 || entry.Channel.TotalMsgCount > entry.Membership.MsgCount
+				readState[item.ID] = cache.ReadState{HasUnread: unread}
+				hasUnread = hasUnread || unread
+			}
 		}
 	}
-	return ui.ServerViewState{ServerID: ids.ServerID(snapshot.Server.ID), ServerName: snapshot.Server.Name, Channels: channels, FinderItems: finder, UserNames: users, UserID: snapshot.CurrentUser.ID, SectionsProvider: staticSectionsProvider{sections: sections}, InitialActive: initialActive}
+	return ui.ServerViewState{ServerID: ids.ServerID(snapshot.Server.ID), ServerName: snapshot.Server.Name, Channels: channels, FinderItems: finder, UserNames: users, UserID: snapshot.CurrentUser.ID, SectionsProvider: staticSectionsProvider{sections: sections}, ReadState: readState, HasUnread: hasUnread, InitialActive: initialActive}
 }
 
 func mattermostSidebarKind(kind mattermost.ChannelKind) (sidebar.ChannelKind, string) {

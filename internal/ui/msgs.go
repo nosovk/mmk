@@ -270,6 +270,8 @@ type (
 		UserNames        map[string]string
 		UserID           string
 		SectionsProvider sidebar.SectionsProvider
+		ReadState        map[string]cache.ReadState
+		HasUnread        bool
 		InitialActive    bool
 		LastChannelID    string
 	}

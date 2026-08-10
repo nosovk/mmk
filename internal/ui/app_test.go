@@ -1181,6 +1181,29 @@ func TestServerReadyUsesServerIDAndSkipsSlackThreadsFetch(t *testing.T) {
 	}
 }
 
+func TestServerRefreshPreservesSelectionAndInstallsUnreadState(t *testing.T) {
+	app := NewApp()
+	app.SetWorkspaces([]workspace.WorkspaceItem{{ID: "s1", Name: "One"}, {ID: "s2", Name: "Two"}})
+	app.Update(ServerReadyMsg{Server: ServerViewState{ServerID: ids.ServerID("s1"), InitialActive: true, Channels: []sidebar.ChannelItem{{ID: "c1"}, {ID: "c2"}}}})
+	app.activeChannelID = "c2"
+
+	app.Update(ServerRefreshedMsg{Server: ServerViewState{
+		ServerID: ids.ServerID("s1"), Channels: []sidebar.ChannelItem{{ID: "c1"}, {ID: "c2"}},
+		ReadState: map[string]cache.ReadState{"c2": {HasUnread: true}}, HasUnread: true,
+	}})
+	if app.activeChannelID != "c2" || app.sidebar.UnreadChannelCount() != 1 {
+		t.Fatalf("active=%q unread=%d", app.activeChannelID, app.sidebar.UnreadChannelCount())
+	}
+	if items := app.workspaceRail.Items(); !items[0].HasUnread {
+		t.Fatalf("rail unread not installed: %#v", items)
+	}
+
+	app.Update(ServerRefreshedMsg{Server: ServerViewState{ServerID: ids.ServerID("s2"), Channels: []sidebar.ChannelItem{{ID: "other"}}}})
+	if app.activeServerID != "s1" || app.activeChannelID != "c2" {
+		t.Fatalf("inactive refresh mutated visible state: server=%q channel=%q", app.activeServerID, app.activeChannelID)
+	}
+}
+
 func TestApp_WorkspaceSwitchedTriggersThreadsListFetchAndSelectsThreadsRow(t *testing.T) {
 	app := NewApp()
 	// Move sidebar selection off the Threads row first to verify the reset.

@@ -59,6 +59,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/styles"
 )
@@ -205,6 +206,8 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	a.SetMode(ModeNormal)
 	a.compose.Blur()
 	a.sidebar.SetSectionsProvider(state.SectionsProvider)
+	readState := state.ReadState
+	a.sidebar.SetReadStateReader(func() map[string]cache.ReadState { return readState })
 	a.sidebar.ResetPresence()
 	a.SetChannels(state.Channels)
 	a.channelFinder.SetItems(state.FinderItems)
@@ -215,6 +218,7 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	a.SetCurrentUserID(state.UserID)
 	a.activeServerID = string(state.ServerID)
 	a.workspaceRail.SelectByID(a.activeServerID)
+	a.workspaceRail.SetUnread(a.activeServerID, state.HasUnread)
 	if state.Theme != "" {
 		styles.Apply(state.Theme, a.themeOverrides)
 		a.invalidateAllWinModelCaches()
