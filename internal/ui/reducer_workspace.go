@@ -194,7 +194,7 @@ func reduceServerSwitched(a *App, state ServerViewState) tea.Cmd {
 
 func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.Cmd {
 	if a.features.kind == ContextMattermost {
-		a.resetMattermostHistoryGeneration()
+		a.resetMattermostHistoryGeneration(state.ServerID)
 	}
 	a.features = MattermostTask8Features()
 	previousChannelID := ""

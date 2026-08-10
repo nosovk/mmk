@@ -17,14 +17,18 @@ type fakeMattermostHistoryClient struct {
 	userErr   error
 	userCalls [][]string
 	postCalls []mattermost.ChannelPostsOptions
+	usersFunc func(context.Context, []string) ([]mattermost.User, error)
 }
 
 func (f *fakeMattermostHistoryClient) ChannelPosts(_ context.Context, _ string, options mattermost.ChannelPostsOptions) (mattermost.MessagePage, error) {
 	f.postCalls = append(f.postCalls, options)
 	return f.page, f.err
 }
-func (f *fakeMattermostHistoryClient) UsersByIDs(_ context.Context, ids []string) ([]mattermost.User, error) {
+func (f *fakeMattermostHistoryClient) UsersByIDs(ctx context.Context, ids []string) ([]mattermost.User, error) {
 	f.userCalls = append(f.userCalls, append([]string(nil), ids...))
+	if f.usersFunc != nil {
+		return f.usersFunc(ctx, ids)
+	}
 	return f.users, f.userErr
 }
 
@@ -142,6 +146,47 @@ func TestMattermostHistoryAuthorLookupFailureStillCachesAndPresentsPosts(t *test
 	}
 	if _, err := db.GetMattermostPost("s1", "p1"); err != nil {
 		t.Fatalf("post not cached: %v", err)
+	}
+}
+
+func TestMattermostHistoryAuthorLookupContextErrorAbortsWithoutCachingPage(t *testing.T) {
+	for _, lookupErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(lookupErr.Error(), func(t *testing.T) {
+			db := setupMattermostHistoryDB(t)
+			client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{Messages: []mattermost.Message{{ID: "p1", ChannelID: "c1", UserID: "u1"}}}, userErr: lookupErr}
+			_, err := NewMattermostHistoryService("s1", client, db, 20).FetchRecent(context.Background(), "c1")
+			if !errors.Is(err, lookupErr) {
+				t.Fatalf("err=%v", err)
+			}
+			if _, err := db.GetMattermostPost("s1", "p1"); err == nil {
+				t.Fatal("canceled page was cached")
+			}
+		})
+	}
+}
+
+func TestMattermostHistoryCancellationDuringAuthorLookupAbortsWithoutCachingPage(t *testing.T) {
+	db := setupMattermostHistoryDB(t)
+	entered := make(chan struct{})
+	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{Messages: []mattermost.Message{{ID: "p1", ChannelID: "c1", UserID: "u1"}}}, usersFunc: func(ctx context.Context, _ []string) ([]mattermost.User, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewMattermostHistoryService("s1", client, db, 20).FetchRecent(ctx, "c1")
+		done <- err
+	}()
+	<-entered
+	cancel()
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := db.GetMattermostPost("s1", "p1"); err == nil {
+		t.Fatal("canceled page was cached")
 	}
 }
 

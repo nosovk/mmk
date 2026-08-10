@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/nosovk/mmk/internal/cache"
@@ -102,6 +103,9 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 	if len(unknown) > 0 {
 		resolved, err = s.client.UsersByIDs(ctx, unknown)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return MattermostHistoryPage{}, fmt.Errorf("resolve Mattermost history authors: %w", err)
+			}
 			// Author enrichment is best-effort. The post page is authoritative
 			// and remains useful with user-ID fallbacks.
 			resolved = nil

@@ -74,7 +74,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.messagepane.SetLoading(false)
 		a.statusbar.SetSyncing(false)
 		if m.Err == nil {
-			a.messagepane.ReplaceMessagesPreservingPosition(m.Messages)
+			a.messagepane.ReconcileRecentPage(m.CachedIDs, m.Messages)
 			a.mattermostHistoryExhausted[m.Request] = !m.HasMore
 		}
 		return nil, true
@@ -88,7 +88,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.Err != nil || !a.messagepane.ContainsMessageID(m.AnchorID) {
 			return nil, true
 		}
-		a.messagepane.PrependMessages(m.Messages)
+		a.messagepane.ReconcileOlderPage(m.AnchorID, m.CachedIDs, m.Messages)
 		if !m.HasMore {
 			a.mattermostHistoryExhausted[m.Request] = true
 		}
@@ -359,8 +359,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		a.threadCompose.SetActiveChannel(m.ID)
 		a.statusbar.SetChannel(m.Name)
 		a.statusbar.SetChannelType(m.Type)
-		a.historyGeneration++
-		historyCtx := a.resetMattermostHistoryGeneration()
+		historyCtx := a.resetMattermostHistoryGeneration(ids.ServerID(a.activeServerID))
 		request := HistoryRequest{ServerID: ids.ServerID(a.activeServerID), ChannelID: m.ID, Generation: a.historyGeneration}
 		a.activeHistoryRequest = request
 		var cached []messages.MessageItem
@@ -382,8 +381,14 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 		service := a.mattermostHistory
+		cachedIDs := make([]string, len(cached))
+		for i := range cached {
+			cachedIDs[i] = cached[i].MessageID()
+		}
 		return tea.Batch(spinnerTickCmd(), func() tea.Msg {
-			return service.FetchRecent(historyCtx, request)
+			msg := service.FetchRecent(historyCtx, request)
+			msg.CachedIDs = cachedIDs
+			return msg
 		}), true
 	}
 	if a.compose.Uploading() || a.threadCompose.Uploading() {

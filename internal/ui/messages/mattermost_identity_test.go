@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -133,4 +134,54 @@ func TestReplaceMessagesPreservingPositionKeepsBottomFollowAndClearsMissingSelec
 	if m.hasSelection {
 		t.Fatal("selection referencing missing ID survived")
 	}
+}
+
+func TestReconcileRecentPagePreservesOlderPrefixAndReplacesAuthoritativeSuffix(t *testing.T) {
+	m := New([]MessageItem{{ID: "old"}, {ID: "p1", Text: "cached 1"}, {ID: "missing"}, {ID: "p3", Text: "cached 3"}}, "general")
+	m.SelectByID("p1")
+	_ = m.View(8, 24)
+	m.ReconcileRecentPage([]string{"p1", "missing", "p3"}, []MessageItem{{ID: "p1", Text: "live 1"}, {ID: "p2", Text: "live 2"}, {ID: "p3", Text: "live 3"}})
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"old", "p1", "p2", "p3"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	if m.Messages()[1].Text != "live 1" {
+		t.Fatalf("overlap not updated: %#v", m.Messages()[1])
+	}
+	selected, _ := m.SelectedMessage()
+	if selected.MessageID() != "p1" {
+		t.Fatalf("selected=%q", selected.MessageID())
+	}
+}
+
+func TestReconcileRecentPagePreservesOlderPagesLoadedWhileRecentInFlight(t *testing.T) {
+	m := New([]MessageItem{{ID: "older1"}, {ID: "older2"}, {ID: "cached1"}, {ID: "cached2"}}, "general")
+	m.ReconcileRecentPage([]string{"cached1", "cached2"}, []MessageItem{{ID: "cached1", Text: "updated"}, {ID: "live2"}})
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"older1", "older2", "cached1", "live2"}) {
+		t.Fatalf("ids=%v", got)
+	}
+}
+
+func TestReconcileOlderPageReplacesCapturedSegmentBeforeAnchor(t *testing.T) {
+	m := New([]MessageItem{{ID: "older"}, {ID: "p1", Text: "cached"}, {ID: "p3"}, {ID: "anchor"}, {ID: "new"}}, "general")
+	m.SelectByID("anchor")
+	_ = m.View(8, 24)
+	m.ReconcileOlderPage("anchor", []string{"p1", "p3"}, []MessageItem{{ID: "p1", Text: "updated"}, {ID: "p2"}})
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"older", "p1", "p2", "anchor", "new"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	if m.Messages()[1].Text != "updated" {
+		t.Fatal("edit not reconciled")
+	}
+	selected, _ := m.SelectedMessage()
+	if selected.MessageID() != "anchor" {
+		t.Fatalf("selected=%q", selected.MessageID())
+	}
+}
+
+func messageIDs(items []MessageItem) []string {
+	out := make([]string, len(items))
+	for i := range items {
+		out[i] = items[i].MessageID()
+	}
+	return out
 }

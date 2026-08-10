@@ -1425,6 +1425,10 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 			return nil
 		}
 		cached, _ := a.mattermostHistory.ReadCached(request, anchor)
+		cachedIDs := make([]string, len(cached))
+		for i := range cached {
+			cachedIDs[i] = cached[i].MessageID()
+		}
 		if len(cached) > 0 {
 			a.messagepane.PrependMessages(cached)
 		}
@@ -1432,7 +1436,11 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 		a.messagepane.SetLoading(true)
 		service := a.mattermostHistory
 		historyCtx := a.activeHistoryContext
-		return tea.Batch(spinnerTickCmd(), func() tea.Msg { return service.FetchOlder(historyCtx, request, anchor) })
+		return tea.Batch(spinnerTickCmd(), func() tea.Msg {
+			msg := service.FetchOlder(historyCtx, request, anchor)
+			msg.CachedIDs = cachedIDs
+			return msg
+		})
 	}
 	// Backfill is triggered by focused-window scrolling, so the
 	// gate/set are keyed by the focused channel.
@@ -1457,11 +1465,13 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 	)
 }
 
-func (a *App) resetMattermostHistoryGeneration() context.Context {
+func (a *App) resetMattermostHistoryGeneration(serverID ids.ServerID) context.Context {
 	if a.activeHistoryCancel != nil {
 		a.activeHistoryCancel()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	a.historyGeneration++
+	a.activeHistoryRequest = HistoryRequest{ServerID: serverID, Generation: a.historyGeneration}
 	a.activeHistoryContext = ctx
 	a.activeHistoryCancel = cancel
 	clear(a.mattermostFetchingOlder)

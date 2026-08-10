@@ -75,6 +75,98 @@ func TestMattermostServerSwitchWithoutChannelsCancelsHistoryGeneration(t *testin
 	}
 }
 
+func TestMattermostServerActivationImmediatelyInvalidatesOldRecentAndOlderResults(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"switched zero", ServerSwitchedMsg{Server: ServerViewState{ServerID: "s2"}}},
+		{"switched channels", ServerSwitchedMsg{Server: ServerViewState{ServerID: "s2", Channels: testMattermostChannels()}}},
+		{"refreshed channels", ServerRefreshedMsg{Server: ServerViewState{ServerID: "s1", Channels: testMattermostChannels()}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newMattermostHistoryApp(t, "s1")
+			a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+			_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+			old := a.activeHistoryRequest
+			_, cmd := a.Update(tt.msg)
+			if a.activeHistoryRequest == old || a.activeHistoryRequest.ChannelID != "" {
+				t.Fatalf("request not invalidated: old=%#v active=%#v", old, a.activeHistoryRequest)
+			}
+			_, _ = a.Update(MattermostMessagesLoadedMsg{Request: old, Messages: []messages.MessageItem{{ID: "stale-recent"}}})
+			_, _ = a.Update(MattermostOlderMessagesLoadedMsg{Request: old, AnchorID: "anything", Messages: []messages.MessageItem{{ID: "stale-older"}}})
+			for _, id := range historyItemIDs(a.messagepane.Messages()) {
+				if strings.HasPrefix(id, "stale-") {
+					t.Fatalf("stale applied before cmd: %v", historyItemIDs(a.messagepane.Messages()))
+				}
+			}
+			_ = cmd
+		})
+	}
+}
+
+func TestMattermostInitialServerReadyImmediatelyInvalidatesOldResults(t *testing.T) {
+	a := NewApp()
+	a.features = MattermostTask8Features()
+	a.historyGeneration = 7
+	old := HistoryRequest{ServerID: "old", ChannelID: "c1", Generation: 7}
+	a.activeHistoryRequest = old
+	_, cmd := a.Update(ServerReadyMsg{Server: ServerViewState{ServerID: "s1", InitialActive: true, Channels: testMattermostChannels()}})
+	if cmd == nil || a.activeHistoryRequest == old || a.activeHistoryRequest.ServerID != "s1" || a.activeHistoryRequest.ChannelID != "" {
+		t.Fatalf("active=%#v cmd=%v", a.activeHistoryRequest, cmd)
+	}
+	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: old, Messages: []messages.MessageItem{{ID: "stale"}}})
+	if len(a.messagepane.Messages()) != 0 {
+		t.Fatal("old ready-gap result applied")
+	}
+}
+
+func TestMattermostOlderLiveReconcilesCapturedCachedSegment(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "anchor"}, {ID: "new"}}, "s1:c1:anchor": {{ID: "p1", Text: "cached"}, {ID: "p3"}}}}
+	a.SetMattermostHistoryService(h)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	cmd := a.maybeFetchOlderHistory(true)
+	runHistoryCmd(cmd)
+	_, _ = a.Update(MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: "anchor", CachedIDs: []string{"p1", "p3"}, Messages: []messages.MessageItem{{ID: "p1", Text: "updated"}, {ID: "p2"}}, HasMore: true})
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"p1", "p2", "anchor", "new"}) {
+		t.Fatalf("ids=%v", got)
+	}
+}
+
+func TestMattermostRecentResultPreservesOlderPageLoadedWhileInFlight(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "p3", Text: "cached"}, {ID: "p4"}}}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	a.messagepane.PrependMessages([]messages.MessageItem{{ID: "p1"}, {ID: "p2"}})
+	a.messagepane.SelectByID("p2")
+	_ = a.messagepane.View(8, 24)
+	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: request, CachedIDs: []string{"p3", "p4"}, Messages: []messages.MessageItem{{ID: "p3", Text: "updated"}, {ID: "p5"}}, HasMore: true})
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"p1", "p2", "p3", "p5"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	selected, _ := a.messagepane.SelectedMessage()
+	if selected.MessageID() != "p2" {
+		t.Fatalf("selected=%q", selected.MessageID())
+	}
+}
+
+func TestMattermostOlderDispatchAttachesCapturedCachedIDs(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "anchor"}}, "s1:c1:anchor": {{ID: "p1"}, {ID: "p3"}}}}
+	a.SetMattermostHistoryService(h)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	msg, ok := findOlderLoadedMsg(a.maybeFetchOlderHistory(true))
+	if !ok {
+		t.Fatal("older result absent")
+	}
+	if !reflect.DeepEqual(msg.CachedIDs, []string{"p1", "p3"}) {
+		t.Fatalf("cached ids=%v", msg.CachedIDs)
+	}
+}
+
 func TestMattermostOlderFailureAfterCachedPrependClearsInflightAndUsesAdvancedAnchor(t *testing.T) {
 	a := newMattermostHistoryApp(t, "s1")
 	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "p3"}, {ID: "p4"}}, "s1:c1:p3": {{ID: "p1"}, {ID: "p2"}}}}
@@ -295,4 +387,22 @@ func runHistoryCmd(cmd tea.Cmd) {
 			runHistoryCmd(next)
 		}
 	}
+}
+
+func findOlderLoadedMsg(cmd tea.Cmd) (MattermostOlderMessagesLoadedMsg, bool) {
+	if cmd == nil {
+		return MattermostOlderMessagesLoadedMsg{}, false
+	}
+	msg := cmd()
+	if loaded, ok := msg.(MattermostOlderMessagesLoadedMsg); ok {
+		return loaded, true
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, next := range batch {
+			if loaded, ok := findOlderLoadedMsg(next); ok {
+				return loaded, true
+			}
+		}
+	}
+	return MattermostOlderMessagesLoadedMsg{}, false
 }

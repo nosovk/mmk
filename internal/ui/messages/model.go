@@ -773,6 +773,73 @@ func (m *Model) ReplaceMessagesPreservingPosition(msgs []MessageItem) {
 	m.dirty()
 }
 
+// ReconcileRecentPage replaces the cached newest window captured at dispatch.
+// Older pages loaded while the request was in flight are not part of that
+// captured set and remain untouched.
+func (m *Model) ReconcileRecentPage(cachedIDs []string, live []MessageItem) {
+	if len(cachedIDs) == 0 {
+		m.ReplaceMessagesPreservingPosition(live)
+		return
+	}
+	m.reconcileCapturedPage("", cachedIDs, live)
+}
+
+// ReconcileOlderPage replaces exactly the cached segment captured when the
+// live request was dispatched, leaving all other loaded history untouched.
+func (m *Model) ReconcileOlderPage(anchorID string, cachedIDs []string, live []MessageItem) {
+	if len(cachedIDs) == 0 {
+		m.PrependMessages(live)
+		return
+	}
+	m.reconcileCapturedPage(anchorID, cachedIDs, live)
+}
+
+func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs []string, live []MessageItem) {
+	replace := make(map[string]struct{}, len(cachedIDs))
+	for _, id := range cachedIDs {
+		replace[id] = struct{}{}
+	}
+	anchor := len(m.messages)
+	if anchorID != "" {
+		for i, item := range m.messages {
+			if item.MessageID() == anchorID {
+				anchor = i
+				break
+			}
+		}
+	}
+	start := anchor
+	for start > 0 {
+		if _, ok := replace[m.messages[start-1].MessageID()]; !ok {
+			break
+		}
+		start--
+	}
+	merged := make([]MessageItem, 0, len(m.messages)-len(cachedIDs)+len(live))
+	merged = append(merged, m.messages[:start]...)
+	seen := make(map[string]struct{}, len(merged)+len(live))
+	for _, item := range merged {
+		seen[item.MessageID()] = struct{}{}
+	}
+	for _, item := range live {
+		if _, ok := seen[item.MessageID()]; !ok {
+			seen[item.MessageID()] = struct{}{}
+			merged = append(merged, item)
+		}
+	}
+	for _, item := range m.messages[start:] {
+		if _, drop := replace[item.MessageID()]; drop {
+			continue
+		}
+		if _, ok := seen[item.MessageID()]; ok {
+			continue
+		}
+		seen[item.MessageID()] = struct{}{}
+		merged = append(merged, item)
+	}
+	m.ReplaceMessagesPreservingPosition(merged)
+}
+
 func (m *Model) ContainsMessageID(id string) bool {
 	if id == "" {
 		return false
