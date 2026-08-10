@@ -21,6 +21,7 @@ type MattermostTeam struct {
 	Name        string
 	DisplayName string
 	UpdatedAt   int64
+	IsActive    bool
 }
 
 type MattermostUser struct {
@@ -41,6 +42,7 @@ type MattermostChannel struct {
 	TotalMsgCount int64
 	UpdatedAt     int64
 	DeletedAt     int64
+	IsActive      bool
 }
 
 type MattermostChannelMembership struct {
@@ -155,7 +157,7 @@ func upsertMattermostTeam(exec mattermostExecer, serverID string, team Mattermos
 	if team.UpdatedAt < 0 {
 		return errors.New("Mattermost team updated_at must not be negative")
 	}
-	_, err := exec.Exec(`INSERT INTO mattermost_teams (server_id, id, name, display_name, updated_at) VALUES (?, ?, ?, ?, ?)
+	_, err := exec.Exec(`INSERT INTO mattermost_teams (server_id, id, name, display_name, updated_at, is_active) VALUES (?, ?, ?, ?, ?, 1)
 		ON CONFLICT(server_id, id) DO UPDATE SET
 		name=CASE WHEN excluded.updated_at > mattermost_teams.updated_at THEN excluded.name
 			WHEN excluded.updated_at = mattermost_teams.updated_at THEN max(mattermost_teams.name, excluded.name)
@@ -163,7 +165,7 @@ func upsertMattermostTeam(exec mattermostExecer, serverID string, team Mattermos
 		display_name=CASE WHEN excluded.updated_at > mattermost_teams.updated_at THEN excluded.display_name
 			WHEN excluded.updated_at = mattermost_teams.updated_at THEN max(mattermost_teams.display_name, excluded.display_name)
 			ELSE mattermost_teams.display_name END,
-		updated_at=max(mattermost_teams.updated_at, excluded.updated_at)`,
+		updated_at=max(mattermost_teams.updated_at, excluded.updated_at), is_active=1`,
 		serverID, team.ID, team.Name, team.DisplayName, team.UpdatedAt)
 	return wrapMattermostError("upserting team", err)
 }
@@ -176,7 +178,7 @@ func (db *DB) GetMattermostTeam(serverID, teamID string) (MattermostTeam, error)
 }
 
 func (db *DB) ListMattermostTeams(serverID string) ([]MattermostTeam, error) {
-	rows, err := db.conn.Query(`SELECT id, name, display_name, updated_at FROM mattermost_teams WHERE server_id = ? ORDER BY display_name, name, id`, serverID)
+	rows, err := db.conn.Query(`SELECT id, name, display_name, updated_at FROM mattermost_teams WHERE server_id = ? AND is_active = 1 ORDER BY display_name, name, id`, serverID)
 	if err != nil {
 		return nil, fmt.Errorf("listing Mattermost teams: %w", err)
 	}
@@ -262,8 +264,8 @@ func upsertMattermostChannel(exec mattermostExecer, serverID string, channel Mat
 		teamID = channel.TeamID
 	}
 	_, err := exec.Exec(`INSERT INTO mattermost_channels
-		(server_id, id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(server_id, id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at, is_active)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 		ON CONFLICT(server_id, id) DO UPDATE SET
 		team_id=CASE
 			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at)
@@ -299,7 +301,7 @@ func upsertMattermostChannel(exec mattermostExecer, serverID string, channel Mat
 		deleted_at=CASE
 			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN excluded.deleted_at
 			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.deleted_at, excluded.deleted_at)
-			ELSE mattermost_channels.deleted_at END`,
+			ELSE mattermost_channels.deleted_at END, is_active=1`,
 		serverID, channel.ID, teamID, channel.Name, channel.DisplayName, channel.Kind,
 		channel.TotalMsgCount, channel.UpdatedAt, channel.DeletedAt)
 	return wrapMattermostError("upserting channel", err)
@@ -480,6 +482,14 @@ func (db *DB) ListMattermostChannelUserIDs(serverID, channelID string) ([]string
 }
 
 func (db *DB) ApplyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnapshot) error {
+	return db.applyMattermostBootstrapSnapshot(snapshot, false)
+}
+
+func (db *DB) ReplaceMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnapshot) error {
+	return db.applyMattermostBootstrapSnapshot(snapshot, true)
+}
+
+func (db *DB) applyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnapshot, replace bool) error {
 	serverID := snapshot.Server.ID
 	if snapshot.CurrentUser.ID != snapshot.Server.CurrentUserID {
 		return errors.New("Mattermost snapshot current user must match server current_user_id")
@@ -524,7 +534,27 @@ func (db *DB) ApplyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnaps
 	}
 	sort.Strings(channelIDs)
 	for _, channelID := range channelIDs {
-		if err := upsertMattermostChannelUserIDs(tx, serverID, channelID, snapshot.ChannelUsers[channelID]); err != nil {
+		var err error
+		if replace {
+			err = replaceMattermostChannelUserIDs(tx, serverID, channelID, snapshot.ChannelUsers[channelID])
+		} else {
+			err = upsertMattermostChannelUserIDs(tx, serverID, channelID, snapshot.ChannelUsers[channelID])
+		}
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if replace {
+		if _, err := tx.Exec(`UPDATE mattermost_teams SET is_active = CASE WHEN id IN (`+placeholders(len(snapshot.Teams))+`) THEN 1 ELSE 0 END WHERE server_id = ?`, append(teamIDArgs(snapshot.Teams), serverID)...); err != nil {
+			return fail(err)
+		}
+		if _, err := tx.Exec(`UPDATE mattermost_channels SET is_active = CASE WHEN id IN (`+placeholders(len(snapshot.Channels))+`) THEN 1 ELSE 0 END WHERE server_id = ?`, append(channelIDArgs(snapshot.Channels), serverID)...); err != nil {
+			return fail(err)
+		}
+		if _, err := tx.Exec(`DELETE FROM mattermost_channel_memberships WHERE server_id = ? AND user_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Memberships))+`)`, append([]any{serverID, snapshot.Server.CurrentUserID}, membershipIDArgs(snapshot.Memberships)...)...); err != nil {
+			return fail(err)
+		}
+		if _, err := tx.Exec(`DELETE FROM mattermost_channel_users WHERE server_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Channels))+`)`, append([]any{serverID}, channelIDArgs(snapshot.Channels)...)...); err != nil {
 			return fail(err)
 		}
 	}
@@ -552,7 +582,7 @@ func (db *DB) LoadMattermostBootstrapSnapshot(serverID string) (MattermostBootst
 		return MattermostBootstrapSnapshot{}, err
 	}
 	channels, err := db.listMattermostChannels(`SELECT id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at
-		FROM mattermost_channels WHERE server_id = ? AND deleted_at = 0 ORDER BY display_name, name, id`, serverID)
+		FROM mattermost_channels WHERE server_id = ? AND deleted_at = 0 AND is_active = 1 ORDER BY display_name, name, id`, serverID)
 	if err != nil {
 		return MattermostBootstrapSnapshot{}, err
 	}
@@ -560,20 +590,59 @@ func (db *DB) LoadMattermostBootstrapSnapshot(serverID string) (MattermostBootst
 	if err != nil {
 		return MattermostBootstrapSnapshot{}, err
 	}
-	channelUsers := make(map[string][]string, len(channels))
-	for _, channel := range channels {
-		participants, err := db.ListMattermostChannelUserIDs(serverID, channel.ID)
-		if err != nil {
-			return MattermostBootstrapSnapshot{}, err
-		}
-		if len(participants) > 0 {
-			channelUsers[channel.ID] = participants
-		}
+	channelUsers, err := db.listMattermostServerChannelUserIDs(serverID)
+	if err != nil {
+		return MattermostBootstrapSnapshot{}, err
 	}
 	return MattermostBootstrapSnapshot{
 		Server: server, CurrentUser: currentUser, Users: users, Teams: teams,
 		Channels: channels, Memberships: memberships, ChannelUsers: channelUsers,
 	}, nil
+}
+
+func (db *DB) listMattermostServerChannelUserIDs(serverID string) (map[string][]string, error) {
+	rows, err := db.conn.Query(`SELECT cu.channel_id, cu.user_id FROM mattermost_channel_users cu JOIN mattermost_channels c ON c.server_id=cu.server_id AND c.id=cu.channel_id WHERE cu.server_id=? AND c.is_active=1 AND c.deleted_at=0 ORDER BY cu.channel_id, cu.user_id`, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("listing Mattermost server participants: %w", err)
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var channelID, userID string
+		if err := rows.Scan(&channelID, &userID); err != nil {
+			return nil, err
+		}
+		out[channelID] = append(out[channelID], userID)
+	}
+	return out, rows.Err()
+}
+
+func placeholders(n int) string {
+	if n == 0 {
+		return "NULL"
+	}
+	return strings.TrimRight(strings.Repeat("?,", n), ",")
+}
+func teamIDArgs(items []MattermostTeam) []any {
+	out := make([]any, len(items))
+	for i := range items {
+		out[i] = items[i].ID
+	}
+	return out
+}
+func channelIDArgs(items []MattermostChannel) []any {
+	out := make([]any, len(items))
+	for i := range items {
+		out[i] = items[i].ID
+	}
+	return out
+}
+func membershipIDArgs(items []MattermostChannelMembership) []any {
+	out := make([]any, len(items))
+	for i := range items {
+		out[i] = items[i].ChannelID
+	}
+	return out
 }
 
 func (db *DB) UpsertMattermostPost(serverID string, post MattermostPost) error {

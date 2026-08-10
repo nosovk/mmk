@@ -108,6 +108,7 @@ func startupMode(registry config.ServerRegistry) startupModeKind {
 type mattermostSnapshotStore interface {
 	LoadMattermostBootstrapSnapshot(string) (cache.MattermostBootstrapSnapshot, error)
 	ApplyMattermostBootstrapSnapshot(cache.MattermostBootstrapSnapshot) error
+	ReplaceMattermostBootstrapSnapshot(cache.MattermostBootstrapSnapshot) error
 }
 
 type mattermostSecretReader interface {
@@ -228,7 +229,7 @@ func (s *mattermostStartup) refreshServer(ctx context.Context, deps mattermostSt
 		return
 	}
 	observedAt := deps.Clock()
-	if err := deps.Cache.ApplyMattermostBootstrapSnapshot(mattermostCacheSnapshot(snapshot, observedAt)); err != nil {
+	if err := deps.Cache.ReplaceMattermostBootstrapSnapshot(mattermostCacheSnapshot(snapshot, observedAt)); err != nil {
 		deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateError, Err: fmt.Errorf("persist Mattermost bootstrap: %w", err)})
 		return
 	}

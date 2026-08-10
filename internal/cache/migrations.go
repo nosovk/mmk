@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const mattermostSchemaVersion = 2
+const mattermostSchemaVersion = 3
 
 type mattermostMigration struct {
 	version    int
@@ -110,6 +110,13 @@ var mattermostMigrations = []mattermostMigration{
 			`ALTER TABLE mattermost_teams ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0 CHECK (updated_at >= 0)`,
 			`DROP INDEX idx_mattermost_posts_channel_chronology`,
 			`CREATE INDEX idx_mattermost_posts_channel_chronology ON mattermost_posts(server_id, channel_id, created_at, id)`,
+		},
+	},
+	{
+		version: 3,
+		statements: []string{
+			`ALTER TABLE mattermost_teams ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))`,
+			`ALTER TABLE mattermost_channels ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))`,
 		},
 	},
 }

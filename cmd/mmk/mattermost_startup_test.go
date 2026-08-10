@@ -223,6 +223,10 @@ func (f *fakeMattermostSnapshotStore) ApplyMattermostBootstrapSnapshot(snapshot 
 	return nil
 }
 
+func (f *fakeMattermostSnapshotStore) ReplaceMattermostBootstrapSnapshot(snapshot cache.MattermostBootstrapSnapshot) error {
+	return f.ApplyMattermostBootstrapSnapshot(snapshot)
+}
+
 type fakeMattermostSecrets struct {
 	tokens map[string]string
 	errs   map[string]error

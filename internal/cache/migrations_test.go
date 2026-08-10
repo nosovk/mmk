@@ -33,8 +33,8 @@ func TestMattermostMigrationCreatesVersionedSchemaWithoutChangingLegacyRows(t *t
 	if err := db.conn.QueryRow(`SELECT version FROM cache_schema_versions WHERE component = 'mattermost'`).Scan(&version); err != nil {
 		t.Fatalf("Mattermost schema version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("Mattermost schema version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("Mattermost schema version = %d, want 3", version)
 	}
 
 	for _, table := range []string{
@@ -166,7 +166,7 @@ func TestMattermostMigrationRollsBackDDLAndVersionOnFailure(t *testing.T) {
 				`THIS IS NOT SQL`,
 			},
 		},
-		{version: 2},
+		{version: 2}, {version: 3},
 	})
 	if err == nil {
 		t.Fatal("migrateMattermost returned nil error")
@@ -192,12 +192,12 @@ func TestMattermostMigrationRejectsMalformedSequences(t *testing.T) {
 		migrations []mattermostMigration
 		want       string
 	}{
-		{"empty", nil, "must end at version 2"},
+		{"empty", nil, "must end at version 3"},
 		{"starts above one", []mattermostMigration{{version: 2}}, "start at version 1"},
 		{"gap", []mattermostMigration{{version: 1}, {version: 3}}, "contiguous"},
 		{"duplicate", []mattermostMigration{{version: 1}, {version: 1}}, "contiguous"},
-		{"missing terminal", []mattermostMigration{{version: 1}}, "must end at version 2"},
-		{"beyond current", []mattermostMigration{{version: 1}, {version: 2}, {version: 3}}, "newer than supported"},
+		{"missing terminal", []mattermostMigration{{version: 1}}, "must end at version 3"},
+		{"beyond current", []mattermostMigration{{version: 1}, {version: 2}, {version: 3}, {version: 4}}, "newer than supported"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -211,6 +211,44 @@ func TestMattermostMigrationRejectsMalformedSequences(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestMattermostMigrationUpgradesV2WithActiveFlags(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "cache.db")
+	conn, err := sql.Open("sqlite", appendPragmas(dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(priorMattermostV1Schema + `
+		ALTER TABLE mattermost_teams ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0 CHECK (updated_at >= 0);
+		DROP INDEX idx_mattermost_posts_channel_chronology;
+		CREATE INDEX idx_mattermost_posts_channel_chronology ON mattermost_posts(server_id, channel_id, created_at, id);
+		INSERT INTO cache_schema_versions (component, version, applied_at) VALUES ('mattermost', 2, 1);
+		INSERT INTO mattermost_servers VALUES ('s1', 'One', 'https://one.example', 'u1', 1);
+		INSERT INTO mattermost_teams (server_id,id,name,display_name,updated_at) VALUES ('s1','t1','','',0);
+		INSERT INTO mattermost_channels VALUES ('s1','c1','t1','','','public',0,0,0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	db, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version, teamActive, channelActive int
+	if err := db.conn.QueryRow(`SELECT version FROM cache_schema_versions WHERE component='mattermost'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.conn.QueryRow(`SELECT is_active FROM mattermost_teams WHERE id='t1'`).Scan(&teamActive); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.conn.QueryRow(`SELECT is_active FROM mattermost_channels WHERE id='c1'`).Scan(&channelActive); err != nil {
+		t.Fatal(err)
+	}
+	if version != 3 || teamActive != 1 || channelActive != 1 {
+		t.Fatalf("version=%d team=%d channel=%d", version, teamActive, channelActive)
 	}
 }
 
@@ -247,7 +285,7 @@ func TestMattermostMigrationUpgradesExactPriorV1Schema(t *testing.T) {
 	if err := db.conn.QueryRow(`SELECT name, updated_at FROM mattermost_teams WHERE server_id = 's1' AND id = 't1'`).Scan(&name, &updatedAt); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 || name != "team" || updatedAt != 0 {
+	if version != 3 || name != "team" || updatedAt != 0 {
 		t.Fatalf("upgraded data: version=%d name=%q updated_at=%d", version, name, updatedAt)
 	}
 	columns := indexColumns(t, db, "idx_mattermost_posts_channel_chronology")

@@ -224,6 +224,44 @@ func TestMattermostSnapshotParticipantUpsertsDoNotDeleteOmittedRows(t *testing.T
 	}
 }
 
+func TestReplaceMattermostBootstrapSnapshotRetiresAbsentRowsAndPreservesPosts(t *testing.T) {
+	db := setupMattermostDB(t)
+	initial := MattermostBootstrapSnapshot{
+		Server: MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}, CurrentUser: MattermostUser{ID: "u1"},
+		Teams:        []MattermostTeam{{ID: "t1"}, {ID: "gone-team"}},
+		Channels:     []MattermostChannel{{ID: "c1", TeamID: "t1", Kind: "public"}, {ID: "gone", TeamID: "gone-team", Kind: "public"}},
+		Memberships:  []MattermostChannelMembership{{ChannelID: "c1", UserID: "u1"}, {ChannelID: "gone", UserID: "u1"}},
+		ChannelUsers: map[string][]string{"c1": {"u1", "peer"}, "gone": {"u1", "departed"}},
+	}
+	if err := db.ReplaceMattermostBootstrapSnapshot(initial); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "gone", Text: "retained"}); err != nil {
+		t.Fatal(err)
+	}
+	next := MattermostBootstrapSnapshot{
+		Server: initial.Server, CurrentUser: initial.CurrentUser,
+		Teams: []MattermostTeam{{ID: "t1"}}, Channels: []MattermostChannel{{ID: "c1", TeamID: "t1", Kind: "public"}},
+		Memberships: []MattermostChannelMembership{{ChannelID: "c1", UserID: "u1"}}, ChannelUsers: map[string][]string{"c1": {"u1"}},
+	}
+	if err := db.ReplaceMattermostBootstrapSnapshot(next); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(teamIDs(loaded.Teams), []string{"t1"}) || !reflect.DeepEqual(channelIDs(loaded.Channels), []string{"c1"}) {
+		t.Fatalf("active snapshot teams=%v channels=%v", teamIDs(loaded.Teams), channelIDs(loaded.Channels))
+	}
+	if len(loaded.Memberships) != 1 || !reflect.DeepEqual(loaded.ChannelUsers["c1"], []string{"u1"}) {
+		t.Fatalf("replacement memberships=%#v users=%#v", loaded.Memberships, loaded.ChannelUsers)
+	}
+	if post, err := db.GetMattermostPost("s1", "p1"); err != nil || post.Text != "retained" {
+		t.Fatalf("retained post=%#v err=%v", post, err)
+	}
+}
+
 func TestMattermostRevisionAwareUpsertsRejectDelayedSnapshotRows(t *testing.T) {
 	db := setupMattermostDB(t)
 	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
