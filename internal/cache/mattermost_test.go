@@ -691,6 +691,38 @@ func TestMattermostPostsUseRevisionConflictPolicyAndWindows(t *testing.T) {
 	}
 }
 
+func TestListMattermostChannelTimelineIncludesRepliesAndUsesLocalOrder(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostPosts("s1", []MattermostPost{
+		{ID: "z", ChannelID: "c1", CreatedAt: 10},
+		{ID: "a", ChannelID: "c1", RootID: "z", CreatedAt: 10},
+		{ID: "new", ChannelID: "c1", CreatedAt: 20},
+		{ID: "deleted", ChannelID: "c1", CreatedAt: 30, DeletedAt: 31},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.ListMattermostChannelTimeline("s1", "c1", 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a", "z", "new"}; !reflect.DeepEqual(postIDs(got), want) {
+		t.Fatalf("ids=%v want %v", postIDs(got), want)
+	}
+	older, err := db.ListMattermostChannelTimeline("s1", "c1", 10, "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a", "z"}; !reflect.DeepEqual(postIDs(older), want) {
+		t.Fatalf("older=%v want %v", postIDs(older), want)
+	}
+}
+
 func TestMattermostPostEqualRevisionMergeIsOrderIndependent(t *testing.T) {
 	run := func(t *testing.T, reverse bool) MattermostPost {
 		db := setupMattermostDB(t)

@@ -719,12 +719,24 @@ func upsertMattermostPost(exec mattermostExecer, serverID string, post Mattermos
 }
 
 func (db *DB) UpsertMattermostPosts(serverID string, posts []MattermostPost) error {
+	return db.UpsertMattermostHistory(serverID, posts, nil)
+}
+
+// UpsertMattermostHistory stores one fetched page and its resolved authors in
+// a single transaction.
+func (db *DB) UpsertMattermostHistory(serverID string, posts []MattermostPost, users []MattermostUser) error {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return fmt.Errorf("beginning Mattermost post upsert: %w", err)
 	}
 	for _, post := range posts {
 		if err := upsertMattermostPost(tx, serverID, post); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	for _, user := range users {
+		if err := upsertMattermostUser(tx, serverID, user); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -762,6 +774,32 @@ func (db *DB) ListMattermostChannelPosts(serverID, channelID string, limit int, 
 			serverID, channelID, beforePostID).Scan(&createdAt, &id)
 		if err != nil {
 			return nil, wrapMattermostError("resolving post anchor", err)
+		}
+		inner += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, createdAt, createdAt, id)
+	}
+	inner += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+	return db.queryMattermostPosts(`SELECT * FROM (`+inner+`) ORDER BY created_at, id`, args...)
+}
+
+// ListMattermostChannelTimeline returns roots and replies in local ascending
+// (created_at,id) order. The existing root-only history API remains unchanged.
+func (db *DB) ListMattermostChannelTimeline(serverID, channelID string, limit int, beforePostID string) ([]MattermostPost, error) {
+	if err := requireMattermostIDs(serverID, channelID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return nil, errors.New("Mattermost post limit must be positive")
+	}
+	inner := `SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, deleted_at, reply_count
+		FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND deleted_at = 0`
+	args := []any{serverID, channelID}
+	if beforePostID != "" {
+		var createdAt int64
+		var id string
+		if err := db.conn.QueryRow(`SELECT created_at, id FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND id = ?`, serverID, channelID, beforePostID).Scan(&createdAt, &id); err != nil {
+			return nil, wrapMattermostError("resolving timeline anchor", err)
 		}
 		inner += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
 		args = append(args, createdAt, createdAt, id)
