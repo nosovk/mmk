@@ -82,6 +82,7 @@ type ChannelMembership struct {
 	MsgCount     int64
 	MentionCount int64
 	LastViewedAt int64
+	UpdatedAt    int64
 }
 
 // ChannelKind classifies channels for application behavior and presentation.

@@ -165,7 +165,7 @@ func upsertMattermostTeam(exec mattermostExecer, serverID string, team Mattermos
 		display_name=CASE WHEN excluded.updated_at > mattermost_teams.updated_at THEN excluded.display_name
 			WHEN excluded.updated_at = mattermost_teams.updated_at THEN max(mattermost_teams.display_name, excluded.display_name)
 			ELSE mattermost_teams.display_name END,
-		updated_at=max(mattermost_teams.updated_at, excluded.updated_at), is_active=1`,
+		updated_at=max(mattermost_teams.updated_at, excluded.updated_at)`,
 		serverID, team.ID, team.Name, team.DisplayName, team.UpdatedAt)
 	return wrapMattermostError("upserting team", err)
 }
@@ -301,7 +301,7 @@ func upsertMattermostChannel(exec mattermostExecer, serverID string, channel Mat
 		deleted_at=CASE
 			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN excluded.deleted_at
 			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.deleted_at, excluded.deleted_at)
-			ELSE mattermost_channels.deleted_at END, is_active=1`,
+			ELSE mattermost_channels.deleted_at END`,
 		serverID, channel.ID, teamID, channel.Name, channel.DisplayName, channel.Kind,
 		channel.TotalMsgCount, channel.UpdatedAt, channel.DeletedAt)
 	return wrapMattermostError("upserting channel", err)
@@ -559,7 +559,11 @@ func (db *DB) applyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnaps
 		if _, err := tx.Exec(`UPDATE mattermost_channels SET is_active = CASE WHEN id IN (`+placeholders(len(snapshot.Channels))+`) THEN 1 ELSE 0 END WHERE server_id = ?`, append(channelIDArgs(snapshot.Channels), serverID)...); err != nil {
 			return fail(err)
 		}
-		if _, err := tx.Exec(`DELETE FROM mattermost_channel_memberships WHERE server_id = ? AND user_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Memberships))+`)`, append([]any{serverID, snapshot.Server.CurrentUserID}, membershipIDArgs(snapshot.Memberships)...)...); err != nil {
+		if len(snapshot.Memberships) == 0 {
+			if _, err := tx.Exec(`DELETE FROM mattermost_channel_memberships WHERE server_id = ? AND user_id = ?`, serverID, snapshot.Server.CurrentUserID); err != nil {
+				return fail(err)
+			}
+		} else if _, err := tx.Exec(`DELETE FROM mattermost_channel_memberships WHERE server_id = ? AND user_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Memberships))+`)`, append([]any{serverID, snapshot.Server.CurrentUserID}, membershipIDArgs(snapshot.Memberships)...)...); err != nil {
 			return fail(err)
 		}
 		if _, err := tx.Exec(`DELETE FROM mattermost_channel_users WHERE server_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Channels))+`)`, append([]any{serverID}, channelIDArgs(snapshot.Channels)...)...); err != nil {

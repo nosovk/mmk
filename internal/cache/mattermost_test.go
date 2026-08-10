@@ -278,6 +278,50 @@ func TestReplaceMattermostBootstrapSnapshotClearsOmittedActiveChannelParticipant
 	}
 }
 
+func TestReplaceMattermostBootstrapSnapshotEmptyMembershipsDeletesAllCurrentUserRows(t *testing.T) {
+	db := setupMattermostDB(t)
+	base := MattermostBootstrapSnapshot{Server: MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}, CurrentUser: MattermostUser{ID: "u1"}, Teams: []MattermostTeam{{ID: "t1"}}, Channels: []MattermostChannel{{ID: "c1", TeamID: "t1", Kind: "public", TotalMsgCount: 5}}, Memberships: []MattermostChannelMembership{{ChannelID: "c1", UserID: "u1", MsgCount: 1, MentionCount: 2}}}
+	if err := db.ReplaceMattermostBootstrapSnapshot(base); err != nil {
+		t.Fatal(err)
+	}
+	base.Memberships = nil
+	if err := db.ReplaceMattermostBootstrapSnapshot(base); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Memberships) != 0 {
+		t.Fatalf("memberships=%#v", loaded.Memberships)
+	}
+}
+
+func TestMattermostOrdinaryUpsertsDoNotReactivateAuthoritativelyRetiredRows(t *testing.T) {
+	db := setupMattermostDB(t)
+	full := MattermostBootstrapSnapshot{Server: MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}, CurrentUser: MattermostUser{ID: "u1"}, Teams: []MattermostTeam{{ID: "gone-team", UpdatedAt: 10}}, Channels: []MattermostChannel{{ID: "gone", TeamID: "gone-team", Kind: "public", UpdatedAt: 10}}}
+	if err := db.ReplaceMattermostBootstrapSnapshot(full); err != nil {
+		t.Fatal(err)
+	}
+	full.Teams, full.Channels = nil, nil
+	if err := db.ReplaceMattermostBootstrapSnapshot(full); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "gone-team", UpdatedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "gone", TeamID: "gone-team", Kind: "public", UpdatedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Teams) != 0 || len(loaded.Channels) != 0 {
+		t.Fatalf("stale reactivation teams=%#v channels=%#v", loaded.Teams, loaded.Channels)
+	}
+}
+
 func TestLoadMattermostBootstrapSnapshotFiltersMembershipsForInactiveChannels(t *testing.T) {
 	db := setupMattermostDB(t)
 	if err := db.ApplyMattermostBootstrapSnapshot(MattermostBootstrapSnapshot{Server: MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}, CurrentUser: MattermostUser{ID: "u1"}, Teams: []MattermostTeam{{ID: "t1"}}, Channels: []MattermostChannel{{ID: "c1", TeamID: "t1", Kind: "public"}}, Memberships: []MattermostChannelMembership{{ChannelID: "c1", UserID: "u1"}}}); err != nil {

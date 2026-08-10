@@ -233,6 +233,20 @@ func TestMattermostServerViewStateMarksFinderChannelsJoined(t *testing.T) {
 	}
 }
 
+func TestMattermostCacheHydrationWithoutMembershipClearsUnread(t *testing.T) {
+	raw := cachedMattermostSnapshot("s1", "u1", "town-square")
+	raw.Channels[0].TotalMsgCount = 5
+	raw.Memberships = nil
+	snapshot, err := mattermostServiceSnapshot(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := mattermostServerViewState(snapshot, false)
+	if state.HasUnread || len(state.ReadState) != 0 {
+		t.Fatalf("unread state=%#v hasUnread=%v", state.ReadState, state.HasUnread)
+	}
+}
+
 func nextServerReady(t *testing.T, messages <-chan tea.Msg) ui.ServerReadyMsg {
 	t.Helper()
 	deadline := time.After(time.Second)

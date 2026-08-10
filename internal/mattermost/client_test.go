@@ -558,7 +558,7 @@ func TestClient_ChannelMembershipsForUserCallsDocumentedTeamEndpointAndConvertsM
 			t.Errorf("query = %q, want empty query", got)
 		}
 		_, _ = io.WriteString(w, `[
-			{"channel_id":"channel-2","user_id":"user/1","last_viewed_at":222,"msg_count":12,"mention_count":3,"roles":"channel_user"},
+			{"channel_id":"channel-2","user_id":"user/1","last_viewed_at":222,"last_update_at":333,"msg_count":12,"mention_count":3,"roles":"channel_user"},
 			{"channel_id":"channel-1","user_id":"user/1","last_viewed_at":111,"msg_count":7,"mention_count":1}
 		]`)
 	}))
@@ -573,7 +573,7 @@ func TestClient_ChannelMembershipsForUserCallsDocumentedTeamEndpointAndConvertsM
 		t.Fatalf("ChannelMembershipsForUser returned error: %v", err)
 	}
 	want := []ChannelMembership{
-		{ChannelID: "channel-2", UserID: "user/1", LastViewedAt: 222, MsgCount: 12, MentionCount: 3},
+		{ChannelID: "channel-2", UserID: "user/1", LastViewedAt: 222, UpdatedAt: 333, MsgCount: 12, MentionCount: 3},
 		{ChannelID: "channel-1", UserID: "user/1", LastViewedAt: 111, MsgCount: 7, MentionCount: 1},
 	}
 	if !reflect.DeepEqual(memberships, want) {
