@@ -401,6 +401,7 @@ type App struct {
 	// glyph. Shared by the bootstrap overlay and the messages pane's
 	// in-channel load spinner; advanced by SpinnerTickMsg.
 	spinnerFrame int
+	initCmds     []tea.Cmd
 
 	// drag owns the mouse-drag selection FSM (set by MouseClickMsg,
 	// advanced by MouseMotionMsg, drained by MouseReleaseMsg). See
@@ -571,8 +572,11 @@ func (a *App) defaultHelpHint() string {
 }
 
 func (a *App) Init() tea.Cmd {
+	queued := tea.Batch(a.initCmds...)
+	a.initCmds = nil
 	if a.bootstrap.IsLoading() {
 		return tea.Batch(
+			queued,
 			tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 				return SpinnerTickMsg{}
 			}),
@@ -581,7 +585,15 @@ func (a *App) Init() tea.Cmd {
 			}),
 		)
 	}
-	return nil
+	return queued
+}
+
+// QueueInitCmd defers asynchronous work discovered during pre-program startup
+// until Bubble Tea starts running the model.
+func (a *App) QueueInitCmd(cmd tea.Cmd) {
+	if cmd != nil {
+		a.initCmds = append(a.initCmds, cmd)
+	}
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

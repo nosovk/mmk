@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,9 +12,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/config"
+	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/mattermost"
 	"github.com/nosovk/mmk/internal/service"
 	"github.com/nosovk/mmk/internal/ui"
+	"github.com/nosovk/mmk/internal/ui/workspace"
 )
 
 func TestStartupModeSelectsMattermostForAnyRegisteredServer(t *testing.T) {
@@ -179,6 +182,50 @@ func TestMattermostStartupRetainsHistoryCapableClientPerServer(t *testing.T) {
 	if retained == nil {
 		t.Fatal("history-capable client was not retained")
 	}
+}
+
+func TestApplyPendingMattermostMessagesQueuesCachedHistoryLifecycleForInit(t *testing.T) {
+	db := setupMattermostHistoryStartupDB(t)
+	app := ui.NewApp()
+	startup := &mattermostStartup{contexts: map[ids.ServerID]mattermostServerContext{"s1": {server: mattermost.Server{ID: "s1"}}}}
+	app.SetMattermostHistoryService(mattermostUIHistoryService{ctx: context.Background(), startup: startup, cache: db})
+	state := mattermostServerViewState(service.ServerSnapshot{
+		Server: mattermost.Server{ID: "s1", Name: "One"}, CurrentUser: mattermost.User{ID: "u1"},
+		Sections: []service.ChannelSection{{Channels: []service.ChannelEntry{{Channel: mattermost.Channel{ID: "c1", Kind: mattermost.ChannelKindPublic}, DisplayName: "Town Square"}}}},
+	}, true)
+	applyPendingMattermostMessages(app, []tea.Msg{mattermostRailMsg{Items: []workspace.WorkspaceItem{{ID: "s1", Name: "One"}}}, ui.ServerReadyMsg{Server: state}})
+	if got := app.ActiveChannelID(); got != "c1" {
+		t.Fatalf("active channel=%q", got)
+	}
+	_, _ = app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if view := app.View().Content; !strings.Contains(view, "cached") {
+		t.Fatalf("cached message absent from view: %q", view)
+	}
+	if cmd := app.Init(); cmd == nil {
+		t.Fatal("live verification command was not queued for program Init")
+	}
+}
+
+func setupMattermostHistoryStartupDB(t *testing.T) *cache.DB {
+	t.Helper()
+	db, err := cache.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.UpsertMattermostServer(cache.MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostTeam("s1", cache.MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", cache.MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostPost("s1", cache.MattermostPost{ID: "cached", ChannelID: "c1", Text: "cached", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	return db
 }
 
 func closedChannel() chan struct{} { ch := make(chan struct{}); close(ch); return ch }

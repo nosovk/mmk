@@ -72,6 +72,10 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 	if err != nil {
 		return MattermostHistoryPage{}, fmt.Errorf("fetch Mattermost history: %w", err)
 	}
+	orderCount := page.OrderCount
+	if orderCount == 0 && len(page.Messages) > 0 {
+		orderCount = len(page.Messages)
+	}
 	cachedUsers, err := s.store.ListMattermostUsers(s.serverID)
 	if err != nil {
 		return MattermostHistoryPage{}, err
@@ -98,7 +102,9 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 	if len(unknown) > 0 {
 		resolved, err = s.client.UsersByIDs(ctx, unknown)
 		if err != nil {
-			return MattermostHistoryPage{}, fmt.Errorf("resolve Mattermost history authors: %w", err)
+			// Author enrichment is best-effort. The post page is authoritative
+			// and remains useful with user-ID fallbacks.
+			resolved = nil
 		}
 	}
 	cacheUsers := make([]cache.MattermostUser, len(resolved))
@@ -121,7 +127,7 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 		}
 		presented = append(presented, MattermostHistoryMessage{Message: message, UserName: name})
 	}
-	return MattermostHistoryPage{Messages: presented, HasMore: len(page.Messages) == s.perPage}, nil
+	return MattermostHistoryPage{Messages: presented, HasMore: orderCount == s.perPage}, nil
 }
 
 func cachePost(m mattermost.Message) cache.MattermostPost {

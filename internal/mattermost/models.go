@@ -159,6 +159,9 @@ type ChannelPostsOptions struct {
 // MessagePage preserves the exact newest-first order returned by Mattermost.
 type MessagePage struct {
 	Messages []Message
+	// OrderCount is the raw bounded order-array length before duplicate IDs
+	// are collapsed. Pagination fullness is based on server-returned slots.
+	OrderCount int
 }
 
 // ThreadRootID returns the root post ID for both root posts and replies.

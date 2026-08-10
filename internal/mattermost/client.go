@@ -354,6 +354,9 @@ func (c *Client) ChannelPosts(ctx context.Context, channelID string, options Cha
 	if err := c.do(ctx, http.MethodGet, endpoint, nil, &wire); err != nil {
 		return MessagePage{}, err
 	}
+	if len(wire.Order) > options.PerPage {
+		return MessagePage{}, fmt.Errorf("Mattermost posts order contains %d entries, exceeds requested per_page %d", len(wire.Order), options.PerPage)
+	}
 
 	messages := make([]Message, 0, len(wire.Order))
 	seen := make(map[string]struct{}, len(wire.Order))
@@ -379,7 +382,7 @@ func (c *Client) ChannelPosts(ctx context.Context, channelID string, options Cha
 		}
 		messages = append(messages, post.domain())
 	}
-	return MessagePage{Messages: messages}, nil
+	return MessagePage{Messages: messages, OrderCount: len(wire.Order)}, nil
 }
 
 func idSet(ids []string) map[string]struct{} {

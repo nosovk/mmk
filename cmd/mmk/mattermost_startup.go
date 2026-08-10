@@ -70,25 +70,50 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 		_ = startup.WaitContext(ctx)
 	}()
 
-	pendingMu.Lock()
-	for _, msg := range pending {
-		switch value := msg.(type) {
-		case mattermostRailMsg:
-			app.SetLoadingServers(loadingServers(value.Items))
-			app.SetWorkspaces(value.Items)
-		case ui.ServerReadyMsg, ui.ServerRefreshedMsg, ui.ServerStateMsg:
-			_, _ = app.Update(msg)
+	for {
+		pendingMu.Lock()
+		batch := pending
+		pending = nil
+		if len(batch) == 0 {
+			program = tea.NewProgram(app)
+			pendingMu.Unlock()
+			break
 		}
+		pendingMu.Unlock()
+		applyPendingMattermostMessages(app, batch)
 	}
-	program = tea.NewProgram(app)
-	pending = nil
-	pendingMu.Unlock()
 
 	app.SetWorkspaceSwitcher(func(serverID string) tea.Msg {
 		return startup.switchMsg(serverID)
 	})
 	_, err = program.Run()
 	return err
+}
+
+func applyPendingMattermostMessages(app *ui.App, pending []tea.Msg) {
+	for _, msg := range pending {
+		switch value := msg.(type) {
+		case mattermostRailMsg:
+			app.SetLoadingServers(loadingServers(value.Items))
+			app.SetWorkspaces(value.Items)
+		case ui.ServerReadyMsg, ui.ServerRefreshedMsg, ui.ServerSwitchedMsg:
+			_, cmd := app.Update(msg)
+			if cmd == nil {
+				continue
+			}
+			// Server activation emits an immediate ChannelSelectedMsg. Apply
+			// that local transition now so cache is visible before first View.
+			selected := cmd()
+			if channel, ok := selected.(ui.ChannelSelectedMsg); ok {
+				_, async := app.Update(channel)
+				app.QueueInitCmd(async)
+			} else {
+				app.QueueInitCmd(cmd)
+			}
+		case ui.ServerStateMsg:
+			_, _ = app.Update(msg)
+		}
+	}
 }
 
 func loadingServers(items []workspace.WorkspaceItem) []ui.LoadingServer {

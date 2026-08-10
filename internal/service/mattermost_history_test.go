@@ -14,6 +14,7 @@ type fakeMattermostHistoryClient struct {
 	page      mattermost.MessagePage
 	err       error
 	users     []mattermost.User
+	userErr   error
 	userCalls [][]string
 	postCalls []mattermost.ChannelPostsOptions
 }
@@ -24,7 +25,7 @@ func (f *fakeMattermostHistoryClient) ChannelPosts(_ context.Context, _ string, 
 }
 func (f *fakeMattermostHistoryClient) UsersByIDs(_ context.Context, ids []string) ([]mattermost.User, error) {
 	f.userCalls = append(f.userCalls, append([]string(nil), ids...))
-	return f.users, nil
+	return f.users, f.userErr
 }
 
 func TestMattermostHistoryFetchCachesExactPageAndResolvesUnknownAuthorsOnce(t *testing.T) {
@@ -122,6 +123,25 @@ func TestMattermostHistoryFetchFailureIsDistinctAndDoesNotEraseCache(t *testing.
 	page, err := svc.ReadCached("c1", "")
 	if err != nil || !reflect.DeepEqual(historyIDs(page.Messages), []string{"cached"}) {
 		t.Fatalf("cached=%#v err=%v", page, err)
+	}
+}
+
+func TestMattermostHistoryAuthorLookupFailureStillCachesAndPresentsPosts(t *testing.T) {
+	db := setupMattermostHistoryDB(t)
+	client := &fakeMattermostHistoryClient{
+		page:    mattermost.MessagePage{OrderCount: 1, Messages: []mattermost.Message{{ID: "p1", ChannelID: "c1", UserID: "unknown", Text: "body", CreatedAt: 1}}},
+		userErr: errors.New("profile lookup failed secret-token"),
+	}
+	svc := NewMattermostHistoryService("s1", client, db, 1)
+	page, err := svc.FetchRecent(context.Background(), "c1")
+	if err != nil {
+		t.Fatalf("FetchRecent=%v", err)
+	}
+	if len(page.Messages) != 1 || page.Messages[0].UserName != "unknown" || !page.HasMore {
+		t.Fatalf("page=%#v", page)
+	}
+	if _, err := db.GetMattermostPost("s1", "p1"); err != nil {
+		t.Fatalf("post not cached: %v", err)
 	}
 }
 
