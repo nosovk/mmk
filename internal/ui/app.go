@@ -120,6 +120,7 @@ type App struct {
 	width          int
 	height         int
 	keys           KeyMap
+	features       FeatureSet
 
 	// cmdline accumulates the text typed at the vi-style ':' prompt
 	// while in ModeCommand. Owned by mode_command.go; always "" in
@@ -463,6 +464,7 @@ func NewApp() *App {
 	wins, rootWin := wintree.New(wintree.Channel{})
 	app := &App{
 		workspaceRail:         workspace.New(nil, 0),
+		features:              SlackFeatures(),
 		sidebar:               sidebar.New(nil),
 		compose:               compose.New(""),
 		statusbar:             statusbar.New(),

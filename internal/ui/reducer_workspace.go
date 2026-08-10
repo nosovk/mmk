@@ -188,6 +188,7 @@ func reduceServerSwitched(a *App, state ServerViewState) tea.Cmd {
 }
 
 func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.Cmd {
+	a.features = MattermostTask8Features()
 	previousChannelID := ""
 	if preserveSelection {
 		previousChannelID = a.activeChannelID
@@ -253,6 +254,7 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 // the reduceWorkspace dispatch switch because the arm is ~60 lines
 // (InitialActive activation branch alone is ~50).
 func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
+	a.features = SlackFeatures()
 	a.bootstrap.MarkReady(m.TeamName)
 	if m.Domain != "" {
 		a.workspaceDomains[m.TeamID] = m.Domain
@@ -341,6 +343,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 // lines (tears down per-workspace transient state, applies new
 // data, restores last-viewed channel).
 func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
+	a.features = SlackFeatures()
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		return a.uploadToastCmd("Upload in progress", 2*time.Second)
 	}

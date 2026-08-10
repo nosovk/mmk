@@ -30,7 +30,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nosovk/mmk/internal/ui/help"
 	"github.com/nosovk/mmk/internal/ui/themeswitcher"
 )
 
@@ -53,6 +52,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	switch {
 	case key.Matches(msg, a.keys.InsertMode):
+		if !a.features.Allows(FeatureSend) {
+			return nil
+		}
 		a.SetMode(ModeInsert)
 		// In the Threads view there is no main compose box -- the
 		// only way to type is into the right-side thread panel's
@@ -112,6 +114,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return a.searchStep(-1)
 
 	case key.Matches(msg, a.keys.WorkspaceSearch):
+		if !a.features.Allows(FeatureWorkspaceSearch) {
+			return nil
+		}
 		a.searchResults.Open()
 		a.SetMode(ModeWorkspaceSearch)
 		return nil
@@ -206,7 +211,7 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case key.Matches(msg, a.keys.Help):
-		a.help.SetEntries(help.FromKeyMap(a.keys))
+		a.help.SetEntries(a.helpEntries())
 		a.help.Open()
 		a.SetMode(ModeHelp)
 
@@ -223,6 +228,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return nil
 
 	case key.Matches(msg, a.keys.PresenceMenu):
+		if !a.features.Allows(FeaturePresence) {
+			return nil
+		}
 		header := a.workspaceNameForActive()
 		pres, dndEnabled, dndEnd, _ := a.presence.Status(a.activeServerID)
 		a.presenceMenu.OpenWith(header, pres, dndEnabled, dndEnd)
@@ -233,9 +241,15 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.SetMode(ModeChannelFinder)
 
 	case key.Matches(msg, a.keys.NewMessage):
+		if !a.features.Allows(FeatureNewConversation) {
+			return nil
+		}
 		return func() tea.Msg { return EnterNewMessageMsg{} }
 
 	case key.Matches(msg, a.keys.Reaction):
+		if !a.features.Allows(FeatureReactions) {
+			return nil
+		}
 		if a.focusedPanel == PanelMessages {
 			return a.openPickerFromMessage()
 		} else if a.focusedPanel == PanelThread {
@@ -243,6 +257,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case key.Matches(msg, a.keys.ReactionNav):
+		if !a.features.Allows(FeatureReactions) {
+			return nil
+		}
 		if a.focusedPanel == PanelMessages {
 			a.messagepane.EnterReactionNav()
 		} else if a.focusedPanel == PanelThread {
@@ -250,18 +267,30 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case key.Matches(msg, a.keys.ListReactions):
+		if !a.features.Allows(FeatureReactions) {
+			return nil
+		}
 		return a.openReactionsView()
 
 	case key.Matches(msg, a.keys.SaveThread):
 		return a.saveThreadToFile()
 
 	case key.Matches(msg, a.keys.CopyPermalink):
+		if !a.features.Allows(FeaturePermalink) {
+			return nil
+		}
 		return a.copyPermalinkOfSelected()
 
 	case key.Matches(msg, a.keys.Edit):
+		if !a.features.Allows(FeatureEditDelete) {
+			return nil
+		}
 		return a.beginEditOfSelected()
 
 	case key.Matches(msg, a.keys.Delete):
+		if !a.features.Allows(FeatureEditDelete) {
+			return nil
+		}
 		return a.beginDeleteOfSelected()
 
 	case key.Matches(msg, a.keys.OpenPreview):
@@ -271,6 +300,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return a.openLinksOfSelected()
 
 	case key.Matches(msg, a.keys.MarkUnread):
+		if !a.features.Allows(FeatureMarkUnread) {
+			return nil
+		}
 		return a.markUnreadOfSelected()
 
 	case key.Matches(msg, a.keys.CloseThreadView):
