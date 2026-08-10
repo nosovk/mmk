@@ -115,6 +115,9 @@ func (a *App) completePendingLinkNav(channelID string, authoritative bool) tea.C
 // when available, else a minimal stub that the ThreadRepliesLoadedMsg
 // handler backfills from cache once the fetch lands.
 func (a *App) openThreadForPermalink(channelID, threadTS string) tea.Cmd {
+	if !a.allows(FeatureThreads) {
+		return nil
+	}
 	parent := messages.MessageItem{TS: threadTS, ThreadTS: threadTS}
 	if channelID == a.activeChannelID {
 		for _, m := range a.messagepane.Messages() {

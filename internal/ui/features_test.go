@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/help"
 	"github.com/nosovk/mmk/internal/ui/messages"
@@ -76,6 +77,25 @@ func TestMattermostChannelSelectionsUpdateContextWithoutLegacyFetchOrLoading(t *
 	}
 	if !reflect.DeepEqual(calls, []string(nil)) {
 		t.Fatalf("legacy channel calls = %v", calls)
+	}
+}
+
+func TestMattermostThreadHelpersNoOpAtOperationBoundary(t *testing.T) {
+	a := NewApp()
+	a.features = MattermostTask8Features()
+	a.messagepane.SetMessages([]messages.MessageItem{{TS: "1"}})
+	a.threadsView.SetSummaries([]cache.ThreadSummary{{ChannelID: "c1", ThreadTS: "1"}})
+	for name, cmd := range map[string]tea.Cmd{
+		"selected message": a.openThreadForSelectedMessage(),
+		"threads view":     a.openSelectedThreadCmd(false),
+		"permalink":        a.openThreadForPermalink("c1", "1"),
+	} {
+		if cmd != nil {
+			t.Errorf("%s helper returned command", name)
+		}
+	}
+	if a.threadVisible {
+		t.Fatal("disabled helper opened thread")
 	}
 }
 

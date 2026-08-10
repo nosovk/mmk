@@ -1427,6 +1427,9 @@ func (a *App) openQuitConfirm() {
 func (a *App) handleEnter() tea.Cmd {
 	if a.focusedPanel == PanelSidebar {
 		if a.sidebar.IsThreadsSelected() {
+			if !a.allows(FeatureThreads) {
+				return nil
+			}
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
 		// A section header? Toggle its collapse state and stay in
@@ -1484,6 +1487,9 @@ func (a *App) handleEnter() tea.Cmd {
 // click-to-open-thread path so the two entry points stay in lockstep.
 // Returns nil when there is no selected message or no threadFetcher.
 func (a *App) openThreadForSelectedMessage() tea.Cmd {
+	if !a.allows(FeatureThreads) {
+		return nil
+	}
 	msg, ok := a.messagepane.SelectedMessage()
 	if !ok {
 		return nil
@@ -1640,6 +1646,9 @@ func (a *App) ToggleSidebar() {
 }
 
 func (a *App) ToggleThread() {
+	if !a.allows(FeatureThreads) {
+		return
+	}
 	a.clearSelections()
 	if a.threadVisible {
 		a.CloseThread()
@@ -1676,6 +1685,9 @@ func (a *App) CloseThread() {
 // hammering the Slack API and clobbering an in-progress read on every j/k
 // press or list reload).
 func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
+	if !a.allows(FeatureThreads) {
+		return nil
+	}
 	sum, ok := a.threadsView.SelectedSummary()
 	if !ok {
 		return nil
