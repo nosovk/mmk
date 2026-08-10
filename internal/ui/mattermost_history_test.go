@@ -57,6 +57,24 @@ func TestMattermostHistorySelectionCancelsPreviousGenerationAndBoundsState(t *te
 	}
 }
 
+func TestMattermostServerSwitchWithoutChannelsCancelsHistoryGeneration(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{}}
+	a.SetMattermostHistoryService(h)
+	_, cmd := a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	runHistoryCmd(cmd)
+	ctx := h.recentContexts[len(h.recentContexts)-1]
+	_, _ = a.Update(ServerSwitchedMsg{Server: ServerViewState{ServerID: "s2"}})
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("server switch without channel selection did not cancel history")
+	}
+	if len(a.mattermostFetchingOlder) > 0 || len(a.mattermostHistoryExhausted) > 0 {
+		t.Fatal("server switch retained generation maps")
+	}
+}
+
 func TestMattermostOlderFailureAfterCachedPrependClearsInflightAndUsesAdvancedAnchor(t *testing.T) {
 	a := newMattermostHistoryApp(t, "s1")
 	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "p3"}, {ID: "p4"}}, "s1:c1:p3": {{ID: "p1"}, {ID: "p2"}}}}
