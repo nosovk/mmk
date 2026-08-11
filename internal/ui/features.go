@@ -42,6 +42,12 @@ func MattermostTask8Features() FeatureSet {
 	return FeatureSet{kind: ContextMattermost, disabled: disabled}
 }
 
+func MattermostTask10Features() FeatureSet {
+	features := MattermostTask8Features()
+	delete(features.disabled, FeatureSend)
+	return features
+}
+
 func (f FeatureSet) Allows(feature Feature) bool { return !f.disabled[feature] }
 
 func (a *App) allows(feature Feature) bool { return a.features.Allows(feature) }

@@ -173,6 +173,7 @@ type App struct {
 	// mattermostHistory owns provider-neutral cache/network history callbacks.
 	mattermostHistory          MattermostHistoryService
 	historyGeneration          uint64
+	mattermostWindowScopes     map[wintree.LeafID]*mattermostHistoryScope
 	activeHistoryRequest       HistoryRequest
 	activeHistoryContext       context.Context
 	activeHistoryCancel        context.CancelFunc
@@ -183,6 +184,10 @@ type App struct {
 	// Defaulted to a no-op adapter in NewApp so call sites can dispatch
 	// without nil-checks.
 	messageSvc MessageService
+	// mattermostSend is intentionally separate from the Slack-shaped
+	// MessageService send operation.
+	mattermostSend          MattermostSendService
+	mattermostCorrelationID func() (string, error)
 
 	uploader UploadFunc
 
@@ -506,6 +511,7 @@ func NewApp() *App {
 		fetchingOlder:              map[string]bool{},
 		mattermostFetchingOlder:    map[HistoryRequest]bool{},
 		mattermostHistoryExhausted: map[HistoryRequest]bool{},
+		mattermostWindowScopes:     map[wintree.LeafID]*mattermostHistoryScope{},
 		mouseWheelLines:            3,
 		userNames:                  map[string]string{},
 		externalUsers:              map[string]bool{},
@@ -517,6 +523,8 @@ func NewApp() *App {
 		reactions:                  noopReactionService,
 		threads:                    noopThreadService,
 		messageSvc:                 noopMessageService,
+		mattermostSend:             noopMattermostSendService,
+		mattermostCorrelationID:    generateMattermostCorrelationID,
 		channels:                   noopChannelService,
 		searchSvc:                  noopSearchService,
 		lastChannelByTeam:          map[string]string{},
@@ -561,6 +569,13 @@ func NewApp() *App {
 
 func (a *App) SetMattermostHistoryService(service MattermostHistoryService) {
 	a.mattermostHistory = service
+}
+
+func (a *App) SetMattermostSendService(service MattermostSendService) {
+	if service == nil {
+		service = noopMattermostSendService
+	}
+	a.mattermostSend = service
 }
 
 // defaultHelpHint is the resting statusbar hint ("? for keybindings").
@@ -1463,20 +1478,6 @@ func (a *App) maybeFetchOlderHistory(atTop bool) tea.Cmd {
 			return channels.FetchOlder(chID, oldestTS)
 		},
 	)
-}
-
-func (a *App) resetMattermostHistoryGeneration(serverID ids.ServerID) context.Context {
-	if a.activeHistoryCancel != nil {
-		a.activeHistoryCancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	a.historyGeneration++
-	a.activeHistoryRequest = HistoryRequest{ServerID: serverID, Generation: a.historyGeneration}
-	a.activeHistoryContext = ctx
-	a.activeHistoryCancel = cancel
-	clear(a.mattermostFetchingOlder)
-	clear(a.mattermostHistoryExhausted)
-	return ctx
 }
 
 // openQuitConfirm raises the centered "Quit mmk?" overlay. Called from

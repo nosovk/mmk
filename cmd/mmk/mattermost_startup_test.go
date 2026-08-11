@@ -382,8 +382,16 @@ func (blockingBootstrapClient) ChannelPosts(context.Context, string, mattermost.
 	return mattermost.MessagePage{}, errors.New("unused history")
 }
 
+func (blockingBootstrapClient) CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error) {
+	return mattermost.Message{}, errors.New("unused send")
+}
+
 func (fixedBlockingBootstrapClient) ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error) {
 	return mattermost.MessagePage{}, errors.New("unused history")
+}
+
+func (fixedBlockingBootstrapClient) CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error) {
+	return mattermost.Message{}, errors.New("unused send")
 }
 
 func (b fixedBlockingBootstrapClient) CurrentUser(ctx context.Context) (*mattermost.User, error) {

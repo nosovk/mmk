@@ -61,7 +61,7 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	if err != nil {
 		return err
 	}
-	app.SetMattermostHistoryService(mattermostUIHistoryService{ctx: runCtx, startup: startup, cache: db})
+	wireMattermostRuntime(app, runCtx, startup, db)
 	defer func() {
 		stopRun()
 		startup.Cancel()
@@ -171,6 +171,17 @@ type mattermostServerContext struct {
 type mattermostStartupClient interface {
 	service.ServerBootstrapClient
 	ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error)
+	CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error)
+}
+
+type mattermostRuntimeApp interface {
+	SetMattermostHistoryService(ui.MattermostHistoryService)
+	SetMattermostSendService(ui.MattermostSendService)
+}
+
+func wireMattermostRuntime(app mattermostRuntimeApp, runCtx context.Context, startup *mattermostStartup, db *cache.DB) {
+	app.SetMattermostHistoryService(mattermostUIHistoryService{ctx: runCtx, startup: startup, cache: db})
+	app.SetMattermostSendService(ui.NewMattermostSendService((mattermostUISendService{ctx: runCtx, startup: startup}).Send))
 }
 
 type mattermostStartup struct {

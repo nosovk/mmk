@@ -22,12 +22,13 @@ const (
 	defaultHTTPTimeout  = 30 * time.Second
 	maxSuccessBodyBytes = 10 << 20
 	// The unpaginated cross-team channel endpoint needs a higher finite cap.
-	maxChannelBodyBytes = 64 << 20
-	maxErrorBodyBytes   = 1 << 20
-	bulkLookupBatchSize = 100
-	maxBulkLookupIDs    = 10000
-	maxBulkIDBytes      = 128 // Mattermost uses 26-byte lowercase IDs; allow bounded fixture/legacy IDs.
-	maxGroupUsers       = 8
+	maxChannelBodyBytes   = 64 << 20
+	maxErrorBodyBytes     = 1 << 20
+	bulkLookupBatchSize   = 100
+	maxBulkLookupIDs      = 10000
+	maxBulkIDBytes        = 128 // Mattermost uses 26-byte lowercase IDs; allow bounded fixture/legacy IDs.
+	maxPendingPostIDBytes = 256
+	maxGroupUsers         = 8
 	// Bound malformed duplicate-heavy responses before participant normalization.
 	maxRawGroupUsers = 64
 )
@@ -385,6 +386,63 @@ func (c *Client) ChannelPosts(ctx context.Context, channelID string, options Cha
 	return MessagePage{Messages: messages, OrderCount: len(wire.Order)}, nil
 }
 
+// CreatePostRequest contains the fields needed to create a Mattermost post.
+type CreatePostRequest struct {
+	ChannelID     string
+	Message       string
+	CorrelationID string
+}
+
+// CreatePost creates a post and returns Mattermost's authoritative response.
+func (c *Client) CreatePost(ctx context.Context, input CreatePostRequest) (Message, error) {
+	if strings.TrimSpace(input.ChannelID) == "" {
+		return Message{}, errors.New("Mattermost channel ID must not be blank")
+	}
+	if strings.TrimSpace(input.Message) == "" {
+		return Message{}, errors.New("Mattermost post message must not be blank")
+	}
+	if err := validatePendingPostID(input.CorrelationID); err != nil {
+		return Message{}, fmt.Errorf("Mattermost correlation ID: %w", err)
+	}
+
+	payload := createPostRequest{
+		ChannelID:     input.ChannelID,
+		Message:       input.Message,
+		PendingPostID: input.CorrelationID,
+	}
+	var wire postResponse
+	if err := c.doJSON(ctx, http.MethodPost, "posts", payload, &wire); err != nil {
+		return Message{}, err
+	}
+	if strings.TrimSpace(wire.ID) == "" {
+		return Message{}, errors.New("Mattermost created post ID must not be blank")
+	}
+	if strings.TrimSpace(wire.ChannelID) == "" {
+		return Message{}, errors.New("Mattermost created post channel ID must not be blank")
+	}
+	if wire.ChannelID != input.ChannelID {
+		err := fmt.Errorf("Mattermost created post belongs to channel %q, expected %q", wire.ChannelID, input.ChannelID)
+		return Message{}, redactError("validate Mattermost created post", err, c.token)
+	}
+	if wire.PendingPostID == "" {
+		wire.PendingPostID = input.CorrelationID
+	} else if wire.PendingPostID != input.CorrelationID {
+		err := fmt.Errorf("Mattermost created post pending_post_id %q does not match submitted correlation %q", wire.PendingPostID, input.CorrelationID)
+		return Message{}, redactError("validate Mattermost created post", err, c.token)
+	}
+	return wire.domain(), nil
+}
+
+func validatePendingPostID(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("must not be blank")
+	}
+	if len(id) > maxPendingPostIDBytes {
+		return fmt.Errorf("exceeds %d bytes", maxPendingPostIDBytes)
+	}
+	return nil
+}
+
 func idSet(ids []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -725,23 +783,30 @@ type postListResponse struct {
 	Posts map[string]postResponse `json:"posts"`
 }
 
+type createPostRequest struct {
+	ChannelID     string `json:"channel_id"`
+	Message       string `json:"message"`
+	PendingPostID string `json:"pending_post_id"`
+}
+
 type postResponse struct {
-	ID         string `json:"id"`
-	ChannelID  string `json:"channel_id"`
-	UserID     string `json:"user_id"`
-	RootID     string `json:"root_id"`
-	Message    string `json:"message"`
-	CreatedAt  int64  `json:"create_at"`
-	UpdatedAt  int64  `json:"update_at"`
-	EditedAt   int64  `json:"edit_at"`
-	DeletedAt  int64  `json:"delete_at"`
-	ReplyCount int64  `json:"reply_count"`
+	ID            string `json:"id"`
+	ChannelID     string `json:"channel_id"`
+	UserID        string `json:"user_id"`
+	RootID        string `json:"root_id"`
+	Message       string `json:"message"`
+	PendingPostID string `json:"pending_post_id"`
+	CreatedAt     int64  `json:"create_at"`
+	UpdatedAt     int64  `json:"update_at"`
+	EditedAt      int64  `json:"edit_at"`
+	DeletedAt     int64  `json:"delete_at"`
+	ReplyCount    int64  `json:"reply_count"`
 }
 
 func (p postResponse) domain() Message {
 	return Message{
 		ID: p.ID, ChannelID: p.ChannelID, UserID: p.UserID, RootID: p.RootID,
-		Text: p.Message, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+		Text: p.Message, CorrelationID: p.PendingPostID, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 		EditedAt: p.EditedAt, DeletedAt: p.DeletedAt, ReplyCount: p.ReplyCount,
 	}
 }

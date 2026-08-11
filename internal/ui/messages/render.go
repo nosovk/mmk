@@ -210,6 +210,17 @@ func RenderMattermostPlain(text string, limit int) string {
 	return WordWrap(text, limit)
 }
 
+func sanitizeFailureReason(reason string) string {
+	reason = sanitizeRemoteLabel(reason)
+	reason = strings.Join(strings.Fields(reason), " ")
+	const maxRunes = 160
+	runes := []rune(reason)
+	if len(runes) > maxRunes {
+		reason = string(runes[:maxRunes])
+	}
+	return reason
+}
+
 // wrapLine wraps a single line at word boundaries using lipgloss.Width.
 // Words wider than limit are hard-broken via ansi.Hardwrap so no output line
 // exceeds the limit. Leaving an overlong line intact would cause the

@@ -33,7 +33,7 @@ func TestClient_ChannelPostsRequestsPageBeforeAndReconstructsOrder(t *testing.T)
 		if _, ok := r.URL.Query()["include_deleted"]; ok {
 			t.Error("include_deleted must be absent")
 		}
-		_, _ = io.WriteString(w, `{"order":["new","old"],"posts":{"old":{"id":"old","channel_id":"channel-1","user_id":"u1","root_id":"root","message":"older","create_at":10,"update_at":11,"edit_at":12,"delete_at":13,"reply_count":4},"new":{"id":"new","channel_id":"channel-1","user_id":"u2","message":"newer","create_at":20}}}`)
+		_, _ = io.WriteString(w, `{"order":["new","old"],"posts":{"old":{"id":"old","channel_id":"channel-1","user_id":"u1","root_id":"root","message":"older","create_at":10,"update_at":11,"edit_at":12,"delete_at":13,"reply_count":4},"new":{"id":"new","channel_id":"channel-1","user_id":"u2","message":"newer","create_at":20,"pending_post_id":"opaque-correlation/id:1"}}}`)
 	}))
 	defer server.Close()
 	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
@@ -45,7 +45,7 @@ func TestClient_ChannelPostsRequestsPageBeforeAndReconstructsOrder(t *testing.T)
 		t.Fatal(err)
 	}
 	want := []Message{
-		{ID: "new", ChannelID: "channel-1", UserID: "u2", Text: "newer", CreatedAt: 20},
+		{ID: "new", ChannelID: "channel-1", UserID: "u2", Text: "newer", CreatedAt: 20, CorrelationID: "opaque-correlation/id:1"},
 		{ID: "old", ChannelID: "channel-1", UserID: "u1", RootID: "root", Text: "older", CreatedAt: 10, UpdatedAt: 11, EditedAt: 12, DeletedAt: 13, ReplyCount: 4},
 	}
 	if !reflect.DeepEqual(page.Messages, want) {

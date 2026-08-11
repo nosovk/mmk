@@ -68,28 +68,46 @@ import (
 var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case MattermostMessagesLoadedMsg:
-		if m.Request != a.activeHistoryRequest {
+		scope := a.mattermostScope(m.Request)
+		if scope == nil {
 			return nil, true
 		}
-		a.messagepane.SetLoading(false)
-		a.statusbar.SetSyncing(false)
+		scope.recentInFlight = false
+		models := a.modelsForMattermostScope(m.Request)
+		for _, mm := range models {
+			mm.SetLoading(false)
+		}
+		if m.Request == a.activeHistoryRequest {
+			a.statusbar.SetSyncing(false)
+		}
 		if m.Err == nil {
-			a.messagepane.ReconcileRecentPage(m.CachedIDs, m.AuthoritativeIDs, m.DeletedIDs, m.Messages, m.HasMore)
+			for _, mm := range models {
+				mm.ReconcileRecentPage(m.CachedIDs, m.AuthoritativeIDs, m.DeletedIDs, cloneMessageItems(m.Messages), m.HasMore)
+			}
 			a.mattermostHistoryExhausted[m.Request] = !m.HasMore
 		}
 		return nil, true
 
 	case MattermostOlderMessagesLoadedMsg:
 		delete(a.mattermostFetchingOlder, m.Request)
-		if m.Request != a.activeHistoryRequest {
+		if !a.hasMattermostScope(m.Request) {
 			return nil, true
 		}
-		a.messagepane.SetLoading(false)
-		if m.Err != nil || !a.messagepane.ContainsMessageID(m.AnchorID) {
+		models := a.modelsForMattermostScope(m.Request)
+		for _, mm := range models {
+			mm.SetLoading(false)
+		}
+		if m.Err != nil {
 			return nil, true
 		}
-		a.messagepane.ReconcileOlderPage(m.AnchorID, m.CachedIDs, m.AuthoritativeIDs, m.DeletedIDs, m.Messages, m.HasMore)
-		if !m.HasMore {
+		applied := false
+		for _, mm := range models {
+			if mm.ContainsMessageID(m.AnchorID) {
+				mm.ReconcileOlderPage(m.AnchorID, m.CachedIDs, m.AuthoritativeIDs, m.DeletedIDs, cloneMessageItems(m.Messages), m.HasMore)
+				applied = true
+			}
+		}
+		if applied && !m.HasMore {
 			a.mattermostHistoryExhausted[m.Request] = true
 		}
 		return nil, true
@@ -359,9 +377,9 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		a.threadCompose.SetActiveChannel(m.ID)
 		a.statusbar.SetChannel(m.Name)
 		a.statusbar.SetChannelType(m.Type)
-		historyCtx := a.resetMattermostHistoryGeneration(ids.ServerID(a.activeServerID))
-		request := HistoryRequest{ServerID: ids.ServerID(a.activeServerID), ChannelID: m.ID, Generation: a.historyGeneration}
-		a.activeHistoryRequest = request
+		scope := a.installFocusedMattermostScope(ids.ServerID(a.activeServerID), m.ID)
+		historyCtx := scope.ctx
+		request := scope.request
 		var cached []messages.MessageItem
 		if a.mattermostHistory != nil {
 			cached, _ = a.mattermostHistory.ReadCached(request, "")
@@ -378,8 +396,11 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		a.setFocusedWindowChannel(m.ID, m.Name, m.Type)
 		if a.mattermostHistory == nil {
 			a.messagepane.SetLoading(false)
+			scope.recentInFlight = false
 			return nil, false
 		}
+		scope.recentInFlight = len(cached) > 0
+		a.statusbar.SetSyncing(scope.recentInFlight)
 		service := a.mattermostHistory
 		cachedIDs := make([]string, len(cached))
 		for i := range cached {

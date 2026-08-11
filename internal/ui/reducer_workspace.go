@@ -193,10 +193,8 @@ func reduceServerSwitched(a *App, state ServerViewState) tea.Cmd {
 }
 
 func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.Cmd {
-	if a.features.kind == ContextMattermost {
-		a.resetMattermostHistoryGeneration(state.ServerID)
-	}
-	a.features = MattermostTask8Features()
+	wasMattermost := a.features.kind == ContextMattermost
+	a.features = MattermostTask10Features()
 	previousChannelID := ""
 	if preserveSelection {
 		previousChannelID = a.activeChannelID
@@ -209,6 +207,11 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	a.CloseThread()
 	a.clearSelections()
 	a.resetWindowTree()
+	if wasMattermost {
+		scope := a.newMattermostHistoryScope(state.ServerID, "")
+		a.mattermostWindowScopes[a.focusedWin] = scope
+		a.setFocusedMattermostScope(scope)
+	}
 	a.compose.Reset()
 	a.SetMode(ModeNormal)
 	a.compose.Blur()

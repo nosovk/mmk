@@ -23,21 +23,27 @@ import (
 )
 
 type MessageItem struct {
-	ID          string
-	CreatedAt   int64
-	RootID      string
-	Format      MessageFormat
-	TS          string
-	UserName    string
-	UserID      string
-	Text        string
-	Timestamp   string // formatted display time (e.g. "3:04 PM")
-	DateStr     string // date string for grouping (e.g. "2026-04-23")
-	ThreadTS    string
-	ReplyCount  int
-	Reactions   []ReactionItem
-	Attachments []Attachment
-	IsEdited    bool
+	ID                 string
+	CorrelationID      string
+	DeliveryState      DeliveryState
+	FailureReason      string
+	DeliveryServerID   string
+	DeliveryChannelID  string
+	DeliveryGeneration uint64
+	CreatedAt          int64
+	RootID             string
+	Format             MessageFormat
+	TS                 string
+	UserName           string
+	UserID             string
+	Text               string
+	Timestamp          string // formatted display time (e.g. "3:04 PM")
+	DateStr            string // date string for grouping (e.g. "2026-04-23")
+	ThreadTS           string
+	ReplyCount         int
+	Reactions          []ReactionItem
+	Attachments        []Attachment
+	IsEdited           bool
 	// Subtype mirrors Slack's `subtype` field on a message event.
 	// Currently we only act on "thread_broadcast" (a thread reply that
 	// was also sent to the channel) so we can render a label above it.
@@ -53,6 +59,14 @@ type MessageItem struct {
 	LegacyAttachments []blockkit.LegacyAttachment
 }
 
+type DeliveryState uint8
+
+const (
+	DeliverySent DeliveryState = iota
+	DeliveryPending
+	DeliveryFailed
+)
+
 type MessageFormat uint8
 
 const (
@@ -65,6 +79,10 @@ func (m MessageItem) MessageID() string {
 		return m.ID
 	}
 	return m.TS
+}
+
+func (m MessageItem) IsTransientDelivery() bool {
+	return m.DeliveryState == DeliveryPending || m.DeliveryState == DeliveryFailed
 }
 
 func (m MessageItem) EventTime() string {
@@ -785,7 +803,7 @@ func (m *Model) ReplaceMessagesPreservingPosition(msgs []MessageItem) {
 // captured set and remain untouched.
 func (m *Model) ReconcileRecentPage(cachedIDs, authoritativeIDs, deletedIDs []string, live []MessageItem, hasMore bool) {
 	if !hasMore {
-		m.ReplaceMessagesPreservingPosition(uniqueMessageItems(live))
+		m.ReplaceMessagesPreservingPosition(m.preserveTransientRows(uniqueMessageItems(live), authoritativeIDs, deletedIDs))
 		return
 	}
 	m.reconcileCapturedPage("", cachedIDs, authoritativeIDs, deletedIDs, live, false)
@@ -799,11 +817,15 @@ func (m *Model) ReconcileOlderPage(anchorID string, cachedIDs, authoritativeIDs,
 
 func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs, authoritativeIDs, deletedIDs []string, live []MessageItem, terminalOlder bool) {
 	remove := make(map[string]struct{}, len(cachedIDs)+len(authoritativeIDs)+len(deletedIDs)+len(live))
+	authoritativeCorrelations := make(map[string]struct{}, len(live))
 	for _, id := range cachedIDs {
 		remove[id] = struct{}{}
 	}
 	for _, item := range live {
 		remove[item.MessageID()] = struct{}{}
+		if item.CorrelationID != "" {
+			authoritativeCorrelations[item.CorrelationID] = struct{}{}
+		}
 	}
 	for _, id := range authoritativeIDs {
 		if anchorID != "" && id == anchorID {
@@ -837,7 +859,16 @@ func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs, authoritativeI
 	prefix := make([]MessageItem, 0, boundary)
 	suffix := make([]MessageItem, 0, len(m.messages)-boundary)
 	for i, item := range m.messages {
-		if _, drop := remove[item.MessageID()]; drop {
+		id := item.MessageID()
+		_, drop := remove[id]
+		if !drop && item.CorrelationID != "" {
+			_, drop = authoritativeCorrelations[item.CorrelationID]
+		}
+		if drop && item.IsTransientDelivery() && !slices.Contains(authoritativeIDs, id) && !slices.Contains(deletedIDs, id) {
+			_, matchedCorrelation := authoritativeCorrelations[item.CorrelationID]
+			drop = matchedCorrelation
+		}
+		if drop {
 			continue
 		}
 		if i < boundary {
@@ -847,7 +878,7 @@ func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs, authoritativeI
 		}
 	}
 	if terminalOlder {
-		prefix = nil
+		prefix = transientMessageItems(prefix)
 	}
 	page := uniqueMessageItems(live)
 	merged := make([]MessageItem, 0, len(prefix)+len(page)+len(suffix))
@@ -857,15 +888,70 @@ func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs, authoritativeI
 	m.ReplaceMessagesPreservingPosition(merged)
 }
 
+func (m *Model) preserveTransientRows(authoritative []MessageItem, authoritativeIDs, deletedIDs []string) []MessageItem {
+	known := make(map[string]struct{}, len(authoritative)+len(authoritativeIDs)+len(deletedIDs))
+	knownCorrelations := make(map[string]struct{}, len(authoritative))
+	for _, item := range authoritative {
+		if id := item.MessageID(); id != "" {
+			known[id] = struct{}{}
+		}
+		if item.CorrelationID != "" {
+			knownCorrelations[item.CorrelationID] = struct{}{}
+		}
+	}
+	for _, id := range authoritativeIDs {
+		known[id] = struct{}{}
+	}
+	for _, id := range deletedIDs {
+		known[id] = struct{}{}
+	}
+	merged := slices.Clone(authoritative)
+	for _, item := range m.messages {
+		if !item.IsTransientDelivery() {
+			continue
+		}
+		if item.CorrelationID != "" {
+			if _, exists := knownCorrelations[item.CorrelationID]; exists {
+				continue
+			}
+		}
+		if id := item.MessageID(); id != "" {
+			if _, exists := known[id]; exists {
+				continue
+			}
+			known[id] = struct{}{}
+		}
+		merged = append(merged, item)
+	}
+	return merged
+}
+
+func transientMessageItems(items []MessageItem) []MessageItem {
+	transient := make([]MessageItem, 0, len(items))
+	for _, item := range items {
+		if item.IsTransientDelivery() {
+			transient = append(transient, item)
+		}
+	}
+	return transient
+}
+
 func uniqueMessageItems(items []MessageItem) []MessageItem {
 	out := make([]MessageItem, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
+	seenCorrelations := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		id := item.MessageID()
 		if _, ok := seen[id]; ok {
 			continue
 		}
 		seen[id] = struct{}{}
+		if item.CorrelationID != "" {
+			if _, ok := seenCorrelations[item.CorrelationID]; ok {
+				continue
+			}
+			seenCorrelations[item.CorrelationID] = struct{}{}
+		}
 		out = append(out, item)
 	}
 	return out
@@ -907,6 +993,130 @@ func (m *Model) AppendMessage(msg MessageItem) {
 	// last index forces View() to re-snap yOffset to the bottom on the
 	// next render (because snappedSelection != selected).
 	m.selected = len(m.messages) - 1
+}
+
+// ReplaceLocalMessage replaces a Mattermost optimistic row by correlation ID
+// or local ID. Slack local replacement remains TS-based in SwapLocalSent.
+func (m *Model) ReplaceLocalMessage(identity string, authoritative MessageItem) bool {
+	if identity == "" {
+		return false
+	}
+	localIndex := -1
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		item := m.messages[i]
+		if (item.CorrelationID == identity || item.ID == identity) && item.IsTransientDelivery() {
+			localIndex = i
+			break
+		}
+	}
+	if localIndex < 0 {
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			item := m.messages[i]
+			if item.CorrelationID == identity || item.ID == identity {
+				localIndex = i
+				break
+			}
+		}
+	}
+	if localIndex < 0 {
+		return false
+	}
+	out := make([]MessageItem, 0, len(m.messages))
+	insertAt := localIndex
+	for i, item := range m.messages {
+		if i == localIndex || authoritative.MessageID() != "" && item.MessageID() == authoritative.MessageID() {
+			if i < insertAt {
+				insertAt = i
+			}
+			continue
+		}
+		out = append(out, item)
+	}
+	if insertAt > len(out) {
+		insertAt = len(out)
+	}
+	out = append(out, MessageItem{})
+	copy(out[insertAt+1:], out[insertAt:])
+	out[insertAt] = authoritative
+	m.messages = out
+	m.cache = nil
+	m.hasSnapped = false
+	m.dirty()
+	return true
+}
+
+func (m *Model) FindMessageByCorrelationID(correlationID string) (MessageItem, bool) {
+	if correlationID == "" {
+		return MessageItem{}, false
+	}
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].CorrelationID == correlationID {
+			return m.messages[i], true
+		}
+	}
+	return MessageItem{}, false
+}
+
+func (m *Model) UpdateMessageByCorrelationID(correlationID string, update func(*MessageItem)) bool {
+	if correlationID == "" || update == nil {
+		return false
+	}
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].CorrelationID != correlationID {
+			continue
+		}
+		update(&m.messages[i])
+		m.cache = nil
+		m.hasSnapped = false
+		m.dirty()
+		return true
+	}
+	return false
+}
+
+func (m *Model) MarkMessageFailed(correlationID, reason string) bool {
+	if correlationID == "" {
+		return false
+	}
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		item := &m.messages[i]
+		if item.CorrelationID != correlationID || item.DeliveryState != DeliveryPending {
+			continue
+		}
+		item.DeliveryState = DeliveryFailed
+		item.FailureReason = sanitizeFailureReason(reason)
+		m.cache = nil
+		m.hasSnapped = false
+		m.dirty()
+		return true
+	}
+	return false
+}
+
+func (m *Model) MarkMessagePending(correlationID string) bool {
+	return m.UpdateMessageByCorrelationID(correlationID, func(item *MessageItem) {
+		item.DeliveryState = DeliveryPending
+		item.FailureReason = ""
+	})
+}
+
+func (m *Model) MarkDeliveryScopeFailed(serverID, channelID string, generation uint64, reason string) bool {
+	updated := false
+	for i := range m.messages {
+		item := &m.messages[i]
+		if item.DeliveryState != DeliveryPending || item.DeliveryServerID != serverID || item.DeliveryChannelID != channelID || item.DeliveryGeneration != generation {
+			continue
+		}
+		item.DeliveryState = DeliveryFailed
+		item.FailureReason = sanitizeFailureReason(reason)
+		updated = true
+	}
+	if updated {
+		m.cache = nil
+		m.hasSnapped = false
+		m.dirty()
+	}
+	return updated
 }
 
 // SwapLocalSent replaces an optimistic placeholder identified by
@@ -2369,6 +2579,16 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		editedMark = " " + styles.Timestamp.Render("(edited)")
 	}
 
+	var deliveryLine string
+	if msg.Format == FormatMattermostPlain {
+		switch msg.DeliveryState {
+		case DeliveryPending:
+			deliveryLine = "\n" + styles.Timestamp.Render("[pending]")
+		case DeliveryFailed:
+			deliveryLine = "\n" + lipgloss.NewStyle().Foreground(styles.Error).Background(styles.Background).Render("[failed: press enter to retry]")
+		}
+	}
+
 	// Pre-attachment row count, so attachment rows can compute their
 	// absolute row index (used as the sixelRows key).
 	//
@@ -2547,7 +2767,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		attachmentLineCount = len(flat)
 	}
 
-	msgContent := broadcastLabel + line + editedMark + "\n" + text + bkBlock + attachmentLines + threadLine + reactionLine
+	msgContent := broadcastLabel + line + editedMark + "\n" + text + bkBlock + attachmentLines + threadLine + reactionLine + deliveryLine
 
 	// Translate per-pill specs into entry-relative reaction hit rects.
 	// reactionRowBase is the row index (within linesNormal) where the

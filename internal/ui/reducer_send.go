@@ -46,6 +46,10 @@
 package ui
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nosovk/mmk/internal/debuglog"
@@ -64,7 +68,33 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if !a.allows(FeatureSend) {
 			return nil, true
 		}
+		if a.features.kind == ContextMattermost {
+			return reduceMattermostSendMessage(a, m), true
+		}
 		return reduceSendMessage(a, m), true
+
+	case MattermostMessageSentMsg:
+		if !a.hasMattermostScope(m.Request.HistoryRequest()) {
+			return nil, true
+		}
+		for _, mm := range a.modelsForChannel(m.Request.ChannelID) {
+			mm.ReplaceLocalMessage(m.Request.CorrelationID, cloneMessageItem(m.Message))
+		}
+		return nil, true
+
+	case MattermostMessageSendFailedMsg:
+		if !a.hasMattermostScope(m.Request.HistoryRequest()) {
+			return nil, true
+		}
+		const reason = "message send failed"
+		updated := false
+		for _, mm := range a.modelsForChannel(m.Request.ChannelID) {
+			updated = mm.MarkMessageFailed(m.Request.CorrelationID, reason) || updated
+		}
+		if !updated {
+			return nil, true
+		}
+		return func() tea.Msg { return statusbar.SendFailedMsg{Reason: reason} }, true
 
 	case MessageSentMsg:
 		// The chat.postMessage HTTP response landed. If a
@@ -395,4 +425,84 @@ func reduceSendMessage(a *App, m SendMessageMsg) tea.Cmd {
 		}
 		return result
 	}
+}
+
+func reduceMattermostSendMessage(a *App, m SendMessageMsg) tea.Cmd {
+	request := a.activeHistoryRequest
+	if request.ChannelID == "" || m.ChannelID != request.ChannelID {
+		return nil
+	}
+	correlationID, err := a.mattermostCorrelationID()
+	if err != nil || correlationID == "" {
+		return func() tea.Msg { return statusbar.SendFailedMsg{Reason: "message send failed"} }
+	}
+	requestData := MattermostSendRequest{
+		ServerID:      request.ServerID,
+		ChannelID:     request.ChannelID,
+		Generation:    request.Generation,
+		Text:          m.Text,
+		CorrelationID: correlationID,
+	}
+	optimistic := messages.MessageItem{
+		ID:                 correlationID,
+		CorrelationID:      correlationID,
+		DeliveryState:      messages.DeliveryPending,
+		DeliveryServerID:   string(request.ServerID),
+		DeliveryChannelID:  request.ChannelID,
+		DeliveryGeneration: request.Generation,
+		CreatedAt:          time.Now().UnixMilli(),
+		Format:             messages.FormatMattermostPlain,
+		UserID:             a.currentUserID,
+		UserName:           a.userNameFor(a.currentUserID),
+		Text:               m.Text,
+		Timestamp:          a.nowFormatted(),
+	}
+	for _, mm := range a.modelsForChannel(request.ChannelID) {
+		mm.AppendMessage(cloneMessageItem(optimistic))
+	}
+	service := a.mattermostSend
+	ctx := a.activeHistoryContext
+	return func() tea.Msg { return service.Send(ctx, requestData) }
+}
+
+func generateMattermostCorrelationID() (string, error) {
+	var entropy [16]byte
+	if _, err := rand.Read(entropy[:]); err != nil {
+		return "", err
+	}
+	return "mmk-" + hex.EncodeToString(entropy[:]), nil
+}
+
+func (a *App) retrySelectedMattermostMessage() tea.Cmd {
+	item, ok := a.messagepane.SelectedMessage()
+	if !ok || item.Format != messages.FormatMattermostPlain || item.DeliveryState != messages.DeliveryFailed || item.CorrelationID == "" {
+		return nil
+	}
+	active := a.activeHistoryRequest
+	if active.ChannelID == "" || active.ChannelID != item.DeliveryChannelID {
+		return nil
+	}
+	request := MattermostSendRequest{
+		ServerID:      active.ServerID,
+		ChannelID:     active.ChannelID,
+		Generation:    active.Generation,
+		Text:          item.Text,
+		CorrelationID: item.CorrelationID,
+	}
+	updated := false
+	for _, mm := range a.modelsForChannel(request.ChannelID) {
+		updated = mm.UpdateMessageByCorrelationID(item.CorrelationID, func(row *messages.MessageItem) {
+			row.DeliveryState = messages.DeliveryPending
+			row.FailureReason = ""
+			row.DeliveryServerID = string(request.ServerID)
+			row.DeliveryChannelID = request.ChannelID
+			row.DeliveryGeneration = request.Generation
+		}) || updated
+	}
+	if !updated {
+		return nil
+	}
+	service := a.mattermostSend
+	ctx := a.activeHistoryContext
+	return func() tea.Msg { return service.Send(ctx, request) }
 }

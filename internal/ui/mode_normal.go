@@ -175,6 +175,11 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.FocusNext()
 
 	case key.Matches(msg, a.keys.Enter):
+		if a.focusedPanel == PanelMessages && a.features.kind == ContextMattermost {
+			if cmd := a.retrySelectedMattermostMessage(); cmd != nil {
+				return cmd
+			}
+		}
 		if a.focusedPanel == PanelMessages && !a.allows(FeatureThreads) {
 			return nil
 		}

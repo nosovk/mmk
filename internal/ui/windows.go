@@ -58,6 +58,7 @@ func (a *App) windowBounds() wintree.Rect {
 // Toasts "Not enough room" on refusal.
 func (a *App) splitWindow(dir wintree.Dir) tea.Cmd {
 	src := a.messagepane
+	srcWin := a.focusedWin
 	srcCh, _ := a.wins.Channel(a.focusedWin)
 	id, err := a.wins.Split(a.focusedWin, dir, a.windowBounds())
 	if err != nil {
@@ -75,27 +76,40 @@ func (a *App) splitWindow(dir wintree.Dir) tea.Cmd {
 		m.SetLoading(src.IsLoading())
 	}
 	a.winModels[id] = m
+	if a.features.kind == ContextMattermost {
+		a.retainMattermostWindowScope(srcWin, id)
+	}
 	a.focusedWin = id
 	a.messagepane = m
 	a.focusedPanel = PanelMessages
+	a.restoreFocusedMattermostScope()
 	return nil
 }
 
 // closeWindow closes the focused window; focus falls to its neighbor.
 // Toasts "Cannot close last window" instead of ever quitting.
 func (a *App) closeWindow() tea.Cmd {
+	closed := a.focusedWin
 	next, err := a.wins.Close(a.focusedWin)
 	if err != nil {
 		return toastWithClear(a, "Cannot close last window", 2*time.Second)
 	}
+	a.releaseMattermostWindowScope(closed)
 	a.syncWinModels()
 	return a.focusWindow(next)
 }
 
 // onlyWindow closes every window except the focused one.
 func (a *App) onlyWindow() {
+	keep := a.focusedWin
 	_ = a.wins.Only(a.focusedWin)
+	for id := range a.mattermostWindowScopes {
+		if id != keep {
+			a.releaseMattermostWindowScope(id)
+		}
+	}
 	a.syncWinModels()
+	a.restoreFocusedMattermostScope()
 }
 
 // cycleWindow focuses the next window in tree order (ctrl+w w).
@@ -137,6 +151,7 @@ func (a *App) focusWindow(id wintree.LeafID) tea.Cmd {
 	if ch, ok := a.wins.Channel(id); ok && ch.ID != "" && ch.ID != a.activeChannelID {
 		a.retargetActiveChannel(ch.ID, ch.Name, ch.Type)
 	}
+	a.restoreFocusedMattermostScope()
 	return nil
 }
 

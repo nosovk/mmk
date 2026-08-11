@@ -150,6 +150,7 @@ func (a *App) syncWinModels() {
 	}
 	for id := range a.winModels {
 		if !live[id] {
+			a.releaseMattermostWindowScope(id)
 			delete(a.winModels, id)
 			a.renderCache.dropWinPane(id)
 		}
@@ -159,6 +160,7 @@ func (a *App) syncWinModels() {
 // resetWindowTree rebuilds the tree + model store to a single empty
 // window (workspace switch).
 func (a *App) resetWindowTree() {
+	a.cancelAllMattermostWindowScopes()
 	wins, rootWin := wintree.New(wintree.Channel{})
 	a.wins = wins
 	a.focusedWin = rootWin

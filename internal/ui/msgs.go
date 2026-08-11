@@ -145,6 +145,21 @@ type (
 		ChannelID string
 		Text      string
 	}
+	MattermostSendRequest struct {
+		ServerID      ids.ServerID
+		ChannelID     string
+		Generation    uint64
+		Text          string
+		CorrelationID string
+	}
+	MattermostMessageSentMsg struct {
+		Request MattermostSendRequest
+		Message messages.MessageItem
+	}
+	MattermostMessageSendFailedMsg struct {
+		Request MattermostSendRequest
+		Reason  string
+	}
 	ThreadOpenedMsg struct {
 		ChannelID string
 		ThreadTS  string
@@ -456,6 +471,10 @@ type (
 	// 3 seconds via a CopiedClearMsg tick scheduled by the App.
 	ToastMsg struct{ Text string }
 )
+
+func (r MattermostSendRequest) HistoryRequest() HistoryRequest {
+	return HistoryRequest{ServerID: r.ServerID, ChannelID: r.ChannelID, Generation: r.Generation}
+}
 
 // autoScrollTickMsg is dispatched by tea.Tick while a drag is held near
 // the top or bottom edge of a pane. Each tick scrolls the pane one line

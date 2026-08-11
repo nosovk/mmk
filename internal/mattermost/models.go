@@ -136,17 +136,18 @@ func (k ChannelKind) IsDirect() bool {
 // Message is mmk's compact representation of a Mattermost post.
 // It is an application-domain model, not a Mattermost API wire DTO.
 type Message struct {
-	ID         string
-	ServerID   string
-	ChannelID  string
-	UserID     string
-	RootID     string
-	Text       string
-	CreatedAt  int64
-	UpdatedAt  int64
-	EditedAt   int64
-	DeletedAt  int64
-	ReplyCount int64
+	ID            string
+	ServerID      string
+	ChannelID     string
+	UserID        string
+	RootID        string
+	Text          string
+	CorrelationID string
+	CreatedAt     int64
+	UpdatedAt     int64
+	EditedAt      int64
+	DeletedAt     int64
+	ReplyCount    int64
 }
 
 // ChannelPostsOptions controls one Mattermost channel-history page.

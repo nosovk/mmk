@@ -290,6 +290,32 @@ type MessageService interface {
 	Permalink(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error)
 }
 
+// MattermostSendService is the scoped UI boundary for creating a
+// Mattermost channel post. It is separate from MessageService so the
+// Slack-shaped send contract remains unchanged.
+type MattermostSendService interface {
+	Send(context.Context, MattermostSendRequest) tea.Msg
+}
+
+type MattermostSendFunc func(context.Context, MattermostSendRequest) tea.Msg
+
+func NewMattermostSendService(send MattermostSendFunc) MattermostSendService {
+	return mattermostSendAdapter{send: send}
+}
+
+var noopMattermostSendService MattermostSendService = mattermostSendAdapter{}
+
+type mattermostSendAdapter struct {
+	send MattermostSendFunc
+}
+
+func (m mattermostSendAdapter) Send(ctx context.Context, request MattermostSendRequest) tea.Msg {
+	if m.send == nil {
+		return nil
+	}
+	return m.send(ctx, request)
+}
+
 // MessageServiceFuncs is the closure bundle accepted by
 // NewMessageService. Any field may be nil; the resulting service
 // no-ops that operation.

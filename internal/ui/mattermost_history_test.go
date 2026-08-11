@@ -11,6 +11,7 @@ import (
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/sidebar"
+	"github.com/nosovk/mmk/internal/ui/wintree"
 )
 
 type fakeUIHistory struct {
@@ -288,6 +289,30 @@ func TestMattermostHistoryResultsPreserveCacheOnFailureAndClearOnAuthoritativeEm
 	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: request, Messages: []messages.MessageItem{}, HasMore: false})
 	if len(a.messagepane.Messages()) != 0 || a.messagepane.IsLoading() {
 		t.Fatal("authoritative empty did not clear/finish")
+	}
+}
+
+func TestMattermostHistoryCorrelationReconciliationFansOutToSameChannelWindows(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.width = 200
+	a.height = 50
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	_, _ = a.Update(SendMessageMsg{ChannelID: "c1", Text: "pending"})
+	correlationID := a.messagepane.Messages()[0].CorrelationID
+	w1 := a.focusedWin
+	if cmd := a.splitWindow(wintree.SplitSideBySide); cmd != nil {
+		t.Fatal("split failed")
+	}
+	w2 := a.focusedWin
+	authoritative := messages.MessageItem{ID: "opaque/post:id", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "history authoritative"}
+	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: request, AuthoritativeIDs: []string{"opaque/post:id"}, Messages: []messages.MessageItem{authoritative}, HasMore: false})
+	for _, win := range []wintree.LeafID{w1, w2} {
+		rows := a.winModels[win].Messages()
+		if len(rows) != 1 || !reflect.DeepEqual(rows[0], authoritative) {
+			t.Fatalf("window %v rows=%#v want one authoritative row", win, rows)
+		}
 	}
 }
 
