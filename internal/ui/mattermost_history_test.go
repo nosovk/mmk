@@ -196,6 +196,26 @@ func TestMattermostRecentRemovesAuthoritativeTombstoneOutsideCapturedRange(t *te
 	}
 }
 
+func TestMattermostOlderInclusiveAnchorRemainsUnlessDeleted(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		deleted []string
+		want    []string
+	}{{"live", nil, []string{"older", "anchor", "new"}}, {"deleted", []string{"anchor"}, []string{"older", "new"}}} {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newMattermostHistoryApp(t, "s1")
+			a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+			_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+			request := a.activeHistoryRequest
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "cached"}, {ID: "anchor"}, {ID: "new"}})
+			_, _ = a.Update(MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: "anchor", CachedIDs: []string{"cached"}, AuthoritativeIDs: []string{"anchor", "older"}, DeletedIDs: tt.deleted, Messages: []messages.MessageItem{{ID: "older"}}, HasMore: true})
+			if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ids=%v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMattermostOlderDispatchAttachesCapturedCachedIDs(t *testing.T) {
 	a := newMattermostHistoryApp(t, "s1")
 	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "anchor"}}, "s1:c1:anchor": {{ID: "p1"}, {ID: "p3"}}}}

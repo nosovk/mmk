@@ -57,6 +57,7 @@ type (
 		Request          HistoryRequest
 		CachedIDs        []string
 		AuthoritativeIDs []string
+		DeletedIDs       []string
 		Messages         []messages.MessageItem
 		HasMore          bool
 		Err              error
@@ -66,6 +67,7 @@ type (
 		AnchorID         string
 		CachedIDs        []string
 		AuthoritativeIDs []string
+		DeletedIDs       []string
 		Messages         []messages.MessageItem
 		HasMore          bool
 		Err              error

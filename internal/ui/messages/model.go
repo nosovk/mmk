@@ -783,22 +783,22 @@ func (m *Model) ReplaceMessagesPreservingPosition(msgs []MessageItem) {
 // ReconcileRecentPage replaces the cached newest window captured at dispatch.
 // Older pages loaded while the request was in flight are not part of that
 // captured set and remain untouched.
-func (m *Model) ReconcileRecentPage(cachedIDs, authoritativeIDs []string, live []MessageItem, hasMore bool) {
+func (m *Model) ReconcileRecentPage(cachedIDs, authoritativeIDs, deletedIDs []string, live []MessageItem, hasMore bool) {
 	if !hasMore {
 		m.ReplaceMessagesPreservingPosition(uniqueMessageItems(live))
 		return
 	}
-	m.reconcileCapturedPage("", cachedIDs, authoritativeIDs, live, false)
+	m.reconcileCapturedPage("", cachedIDs, authoritativeIDs, deletedIDs, live, false)
 }
 
 // ReconcileOlderPage replaces exactly the cached segment captured when the
 // live request was dispatched, leaving all other loaded history untouched.
-func (m *Model) ReconcileOlderPage(anchorID string, cachedIDs, authoritativeIDs []string, live []MessageItem, hasMore bool) {
-	m.reconcileCapturedPage(anchorID, cachedIDs, authoritativeIDs, live, !hasMore)
+func (m *Model) ReconcileOlderPage(anchorID string, cachedIDs, authoritativeIDs, deletedIDs []string, live []MessageItem, hasMore bool) {
+	m.reconcileCapturedPage(anchorID, cachedIDs, authoritativeIDs, deletedIDs, live, !hasMore)
 }
 
-func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs, authoritativeIDs []string, live []MessageItem, terminalOlder bool) {
-	remove := make(map[string]struct{}, len(cachedIDs)+len(authoritativeIDs)+len(live))
+func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs, authoritativeIDs, deletedIDs []string, live []MessageItem, terminalOlder bool) {
+	remove := make(map[string]struct{}, len(cachedIDs)+len(authoritativeIDs)+len(deletedIDs)+len(live))
 	for _, id := range cachedIDs {
 		remove[id] = struct{}{}
 	}
@@ -806,6 +806,12 @@ func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs, authoritativeI
 		remove[item.MessageID()] = struct{}{}
 	}
 	for _, id := range authoritativeIDs {
+		if anchorID != "" && id == anchorID {
+			continue
+		}
+		remove[id] = struct{}{}
+	}
+	for _, id := range deletedIDs {
 		remove[id] = struct{}{}
 	}
 	boundary := len(m.messages)

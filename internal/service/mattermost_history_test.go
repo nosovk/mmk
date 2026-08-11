@@ -67,7 +67,7 @@ func TestMattermostHistoryFetchCachesExactPageAndResolvesUnknownAuthorsOnce(t *t
 	}
 }
 
-func TestMattermostHistoryAuthoritativeIDsDeduplicateAndIncludeAnchorTombstone(t *testing.T) {
+func TestMattermostHistorySeparatesInclusiveAnchorFromDeletedIDs(t *testing.T) {
 	db := setupMattermostHistoryDB(t)
 	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{OrderCount: 3, Messages: []mattermost.Message{{ID: "anchor", ChannelID: "c1"}, {ID: "deleted", ChannelID: "c1", DeletedAt: 2}, {ID: "older", ChannelID: "c1"}, {ID: "deleted", ChannelID: "c1", DeletedAt: 2}}}}
 	page, err := NewMattermostHistoryService("s1", client, db, 3).FetchOlder(context.Background(), "c1", "anchor")
@@ -77,12 +77,31 @@ func TestMattermostHistoryAuthoritativeIDsDeduplicateAndIncludeAnchorTombstone(t
 	if got, want := page.AuthoritativeIDs, []string{"anchor", "deleted", "older"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ids=%v want %v", got, want)
 	}
+	if got, want := page.DeletedIDs, []string{"deleted"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("deleted ids=%v want %v", got, want)
+	}
 	if got, want := historyIDs(page.Messages), []string{"older"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("presented=%v", got)
 	}
 	post, err := db.GetMattermostPost("s1", "deleted")
 	if err != nil || post.DeletedAt != 2 {
 		t.Fatalf("tombstone=%#v err=%v", post, err)
+	}
+}
+
+func TestMattermostHistoryDeletedInclusiveAnchorIsTombstone(t *testing.T) {
+	db := setupMattermostHistoryDB(t)
+	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{Messages: []mattermost.Message{{ID: "anchor", ChannelID: "c1", DeletedAt: 9}, {ID: "older", ChannelID: "c1"}}}}
+	page, err := NewMattermostHistoryService("s1", client, db, 20).FetchOlder(context.Background(), "c1", "anchor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := page.DeletedIDs, []string{"anchor"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("deleted=%v", got)
+	}
+	post, err := db.GetMattermostPost("s1", "anchor")
+	if err != nil || post.DeletedAt != 9 {
+		t.Fatalf("anchor tombstone=%#v err=%v", post, err)
 	}
 }
 
