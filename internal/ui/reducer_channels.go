@@ -74,7 +74,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.messagepane.SetLoading(false)
 		a.statusbar.SetSyncing(false)
 		if m.Err == nil {
-			a.messagepane.ReconcileRecentPage(m.CachedIDs, m.Messages)
+			a.messagepane.ReconcileRecentPage(m.CachedIDs, m.Messages, m.HasMore)
 			a.mattermostHistoryExhausted[m.Request] = !m.HasMore
 		}
 		return nil, true
@@ -88,7 +88,7 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.Err != nil || !a.messagepane.ContainsMessageID(m.AnchorID) {
 			return nil, true
 		}
-		a.messagepane.ReconcileOlderPage(m.AnchorID, m.CachedIDs, m.Messages)
+		a.messagepane.ReconcileOlderPage(m.AnchorID, m.CachedIDs, m.Messages, m.HasMore)
 		if !m.HasMore {
 			a.mattermostHistoryExhausted[m.Request] = true
 		}

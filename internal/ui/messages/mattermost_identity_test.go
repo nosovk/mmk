@@ -140,7 +140,7 @@ func TestReconcileRecentPagePreservesOlderPrefixAndReplacesAuthoritativeSuffix(t
 	m := New([]MessageItem{{ID: "old"}, {ID: "p1", Text: "cached 1"}, {ID: "missing"}, {ID: "p3", Text: "cached 3"}}, "general")
 	m.SelectByID("p1")
 	_ = m.View(8, 24)
-	m.ReconcileRecentPage([]string{"p1", "missing", "p3"}, []MessageItem{{ID: "p1", Text: "live 1"}, {ID: "p2", Text: "live 2"}, {ID: "p3", Text: "live 3"}})
+	m.ReconcileRecentPage([]string{"p1", "missing", "p3"}, []MessageItem{{ID: "p1", Text: "live 1"}, {ID: "p2", Text: "live 2"}, {ID: "p3", Text: "live 3"}}, true)
 	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"old", "p1", "p2", "p3"}) {
 		t.Fatalf("ids=%v", got)
 	}
@@ -155,7 +155,7 @@ func TestReconcileRecentPagePreservesOlderPrefixAndReplacesAuthoritativeSuffix(t
 
 func TestReconcileRecentPagePreservesOlderPagesLoadedWhileRecentInFlight(t *testing.T) {
 	m := New([]MessageItem{{ID: "older1"}, {ID: "older2"}, {ID: "cached1"}, {ID: "cached2"}}, "general")
-	m.ReconcileRecentPage([]string{"cached1", "cached2"}, []MessageItem{{ID: "cached1", Text: "updated"}, {ID: "live2"}})
+	m.ReconcileRecentPage([]string{"cached1", "cached2"}, []MessageItem{{ID: "cached1", Text: "updated"}, {ID: "live2"}}, true)
 	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"older1", "older2", "cached1", "live2"}) {
 		t.Fatalf("ids=%v", got)
 	}
@@ -165,7 +165,7 @@ func TestReconcileOlderPageReplacesCapturedSegmentBeforeAnchor(t *testing.T) {
 	m := New([]MessageItem{{ID: "older"}, {ID: "p1", Text: "cached"}, {ID: "p3"}, {ID: "anchor"}, {ID: "new"}}, "general")
 	m.SelectByID("anchor")
 	_ = m.View(8, 24)
-	m.ReconcileOlderPage("anchor", []string{"p1", "p3"}, []MessageItem{{ID: "p1", Text: "updated"}, {ID: "p2"}})
+	m.ReconcileOlderPage("anchor", []string{"p1", "p3"}, []MessageItem{{ID: "p1", Text: "updated"}, {ID: "p2"}}, true)
 	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"older", "p1", "p2", "anchor", "new"}) {
 		t.Fatalf("ids=%v", got)
 	}
@@ -175,6 +175,66 @@ func TestReconcileOlderPageReplacesCapturedSegmentBeforeAnchor(t *testing.T) {
 	selected, _ := m.SelectedMessage()
 	if selected.MessageID() != "anchor" {
 		t.Fatalf("selected=%q", selected.MessageID())
+	}
+}
+
+func TestReconcileRecentPageMovesGlobalLiveIDIntoAuthoritativeRange(t *testing.T) {
+	m := New([]MessageItem{{ID: "moved", Text: "stale prefix"}, {ID: "older"}, {ID: "cached1"}, {ID: "cached2"}}, "general")
+	m.ReconcileRecentPage([]string{"cached1", "cached2"}, []MessageItem{{ID: "cached1"}, {ID: "moved", Text: "live"}, {ID: "new"}}, true)
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"older", "cached1", "moved", "new"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	if m.Messages()[2].Text != "live" {
+		t.Fatalf("live content lost: %#v", m.Messages()[2])
+	}
+}
+
+func TestReconcileOlderPageMovesGlobalLiveIDIntoRange(t *testing.T) {
+	m := New([]MessageItem{{ID: "moved", Text: "stale prefix"}, {ID: "older"}, {ID: "cached"}, {ID: "anchor"}, {ID: "moved", Text: "stale suffix"}, {ID: "new"}}, "general")
+	m.ReconcileOlderPage("anchor", []string{"cached"}, []MessageItem{{ID: "moved", Text: "live"}, {ID: "page2"}}, true)
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"older", "moved", "page2", "anchor", "new"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	if m.Messages()[1].Text != "live" {
+		t.Fatalf("live content lost: %#v", m.Messages()[1])
+	}
+}
+
+func TestReconcileRecentTerminalReplacesEntireLoadedHistory(t *testing.T) {
+	m := New([]MessageItem{{ID: "older-loaded"}, {ID: "cached"}}, "general")
+	m.SelectByID("older-loaded")
+	m.ReconcileRecentPage([]string{"cached"}, []MessageItem{{ID: "live"}}, false)
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"live"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	selected, _ := m.SelectedMessage()
+	if selected.MessageID() != "live" {
+		t.Fatalf("fallback=%q", selected.MessageID())
+	}
+	m.ReconcileRecentPage([]string{"live"}, nil, false)
+	if len(m.Messages()) != 0 {
+		t.Fatalf("authoritative empty=%v", messageIDs(m.Messages()))
+	}
+}
+
+func TestReconcileOlderTerminalRemovesStalePrefix(t *testing.T) {
+	m := New([]MessageItem{{ID: "stale1"}, {ID: "stale2"}, {ID: "cached"}, {ID: "anchor"}, {ID: "new"}}, "general")
+	m.ReconcileOlderPage("anchor", []string{"cached"}, []MessageItem{{ID: "oldest"}, {ID: "next"}}, false)
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"oldest", "next", "anchor", "new"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	m = New([]MessageItem{{ID: "stale"}, {ID: "cached"}, {ID: "anchor"}, {ID: "new"}}, "general")
+	m.ReconcileOlderPage("anchor", []string{"cached"}, nil, false)
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"anchor", "new"}) {
+		t.Fatalf("empty ids=%v", got)
+	}
+}
+
+func TestReconcileOlderNonterminalPreservesUnrelatedOlderPrefix(t *testing.T) {
+	m := New([]MessageItem{{ID: "older"}, {ID: "cached"}, {ID: "anchor"}}, "general")
+	m.ReconcileOlderPage("anchor", []string{"cached"}, []MessageItem{{ID: "live"}}, true)
+	if got := messageIDs(m.Messages()); !reflect.DeepEqual(got, []string{"older", "live", "anchor"}) {
+		t.Fatalf("ids=%v", got)
 	}
 }
 

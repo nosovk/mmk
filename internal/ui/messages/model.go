@@ -776,68 +776,83 @@ func (m *Model) ReplaceMessagesPreservingPosition(msgs []MessageItem) {
 // ReconcileRecentPage replaces the cached newest window captured at dispatch.
 // Older pages loaded while the request was in flight are not part of that
 // captured set and remain untouched.
-func (m *Model) ReconcileRecentPage(cachedIDs []string, live []MessageItem) {
-	if len(cachedIDs) == 0 {
-		m.ReplaceMessagesPreservingPosition(live)
+func (m *Model) ReconcileRecentPage(cachedIDs []string, live []MessageItem, hasMore bool) {
+	if !hasMore {
+		m.ReplaceMessagesPreservingPosition(uniqueMessageItems(live))
 		return
 	}
-	m.reconcileCapturedPage("", cachedIDs, live)
+	m.reconcileCapturedPage("", cachedIDs, live, false)
 }
 
 // ReconcileOlderPage replaces exactly the cached segment captured when the
 // live request was dispatched, leaving all other loaded history untouched.
-func (m *Model) ReconcileOlderPage(anchorID string, cachedIDs []string, live []MessageItem) {
-	if len(cachedIDs) == 0 {
-		m.PrependMessages(live)
-		return
-	}
-	m.reconcileCapturedPage(anchorID, cachedIDs, live)
+func (m *Model) ReconcileOlderPage(anchorID string, cachedIDs []string, live []MessageItem, hasMore bool) {
+	m.reconcileCapturedPage(anchorID, cachedIDs, live, !hasMore)
 }
 
-func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs []string, live []MessageItem) {
-	replace := make(map[string]struct{}, len(cachedIDs))
+func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs []string, live []MessageItem, terminalOlder bool) {
+	remove := make(map[string]struct{}, len(cachedIDs)+len(live))
 	for _, id := range cachedIDs {
-		replace[id] = struct{}{}
+		remove[id] = struct{}{}
 	}
-	anchor := len(m.messages)
+	for _, item := range live {
+		remove[item.MessageID()] = struct{}{}
+	}
+	boundary := len(m.messages)
 	if anchorID != "" {
 		for i, item := range m.messages {
 			if item.MessageID() == anchorID {
-				anchor = i
+				boundary = i
+				break
+			}
+		}
+	} else if len(cachedIDs) > 0 {
+		captured := make(map[string]struct{}, len(cachedIDs))
+		for _, id := range cachedIDs {
+			captured[id] = struct{}{}
+		}
+		for i, item := range m.messages {
+			if _, ok := captured[item.MessageID()]; ok {
+				boundary = i
 				break
 			}
 		}
 	}
-	start := anchor
-	for start > 0 {
-		if _, ok := replace[m.messages[start-1].MessageID()]; !ok {
-			break
-		}
-		start--
-	}
-	merged := make([]MessageItem, 0, len(m.messages)-len(cachedIDs)+len(live))
-	merged = append(merged, m.messages[:start]...)
-	seen := make(map[string]struct{}, len(merged)+len(live))
-	for _, item := range merged {
-		seen[item.MessageID()] = struct{}{}
-	}
-	for _, item := range live {
-		if _, ok := seen[item.MessageID()]; !ok {
-			seen[item.MessageID()] = struct{}{}
-			merged = append(merged, item)
-		}
-	}
-	for _, item := range m.messages[start:] {
-		if _, drop := replace[item.MessageID()]; drop {
+	prefix := make([]MessageItem, 0, boundary)
+	suffix := make([]MessageItem, 0, len(m.messages)-boundary)
+	for i, item := range m.messages {
+		if _, drop := remove[item.MessageID()]; drop {
 			continue
 		}
-		if _, ok := seen[item.MessageID()]; ok {
-			continue
+		if i < boundary {
+			prefix = append(prefix, item)
+		} else {
+			suffix = append(suffix, item)
 		}
-		seen[item.MessageID()] = struct{}{}
-		merged = append(merged, item)
 	}
+	if terminalOlder {
+		prefix = nil
+	}
+	page := uniqueMessageItems(live)
+	merged := make([]MessageItem, 0, len(prefix)+len(page)+len(suffix))
+	merged = append(merged, prefix...)
+	merged = append(merged, page...)
+	merged = append(merged, suffix...)
 	m.ReplaceMessagesPreservingPosition(merged)
+}
+
+func uniqueMessageItems(items []MessageItem) []MessageItem {
+	out := make([]MessageItem, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		id := item.MessageID()
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (m *Model) ContainsMessageID(id string) bool {

@@ -153,6 +153,37 @@ func TestMattermostRecentResultPreservesOlderPageLoadedWhileInFlight(t *testing.
 	}
 }
 
+func TestMattermostTerminalRecentRemovesOlderPageLoadedWhileInFlight(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "cached"}}}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	a.messagepane.PrependMessages([]messages.MessageItem{{ID: "older"}})
+	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: request, CachedIDs: []string{"cached"}, Messages: []messages.MessageItem{{ID: "live"}}, HasMore: false})
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"live"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	if !a.mattermostHistoryExhausted[request] {
+		t.Fatal("terminal recent not exhausted")
+	}
+}
+
+func TestMattermostTerminalOlderRemovesStalePrefixAndExhausts(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "stale"}, {ID: "cached"}, {ID: "anchor"}, {ID: "new"}})
+	a.mattermostFetchingOlder[request] = true
+	_, _ = a.Update(MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: "anchor", CachedIDs: []string{"cached"}, Messages: []messages.MessageItem{{ID: "oldest"}}, HasMore: false})
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"oldest", "anchor", "new"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	if !a.mattermostHistoryExhausted[request] || a.mattermostFetchingOlder[request] {
+		t.Fatal("terminal older state incorrect")
+	}
+}
+
 func TestMattermostOlderDispatchAttachesCapturedCachedIDs(t *testing.T) {
 	a := newMattermostHistoryApp(t, "s1")
 	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "anchor"}}, "s1:c1:anchor": {{ID: "p1"}, {ID: "p3"}}}}
