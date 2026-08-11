@@ -770,33 +770,43 @@ func (m *Model) ReplaceMessagesPreservingPosition(msgs []MessageItem) {
 			m.hasSnapped = true
 		}
 	}
+	if m.hasSelection && m.cache != nil {
+		_, _, startOK := m.resolveAnchor(m.selRange.Start)
+		_, _, endOK := m.resolveAnchor(m.selRange.End)
+		if !startOK || !endOK {
+			m.ClearSelection()
+		}
+	}
 	m.dirty()
 }
 
 // ReconcileRecentPage replaces the cached newest window captured at dispatch.
 // Older pages loaded while the request was in flight are not part of that
 // captured set and remain untouched.
-func (m *Model) ReconcileRecentPage(cachedIDs []string, live []MessageItem, hasMore bool) {
+func (m *Model) ReconcileRecentPage(cachedIDs, authoritativeIDs []string, live []MessageItem, hasMore bool) {
 	if !hasMore {
 		m.ReplaceMessagesPreservingPosition(uniqueMessageItems(live))
 		return
 	}
-	m.reconcileCapturedPage("", cachedIDs, live, false)
+	m.reconcileCapturedPage("", cachedIDs, authoritativeIDs, live, false)
 }
 
 // ReconcileOlderPage replaces exactly the cached segment captured when the
 // live request was dispatched, leaving all other loaded history untouched.
-func (m *Model) ReconcileOlderPage(anchorID string, cachedIDs []string, live []MessageItem, hasMore bool) {
-	m.reconcileCapturedPage(anchorID, cachedIDs, live, !hasMore)
+func (m *Model) ReconcileOlderPage(anchorID string, cachedIDs, authoritativeIDs []string, live []MessageItem, hasMore bool) {
+	m.reconcileCapturedPage(anchorID, cachedIDs, authoritativeIDs, live, !hasMore)
 }
 
-func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs []string, live []MessageItem, terminalOlder bool) {
-	remove := make(map[string]struct{}, len(cachedIDs)+len(live))
+func (m *Model) reconcileCapturedPage(anchorID string, cachedIDs, authoritativeIDs []string, live []MessageItem, terminalOlder bool) {
+	remove := make(map[string]struct{}, len(cachedIDs)+len(authoritativeIDs)+len(live))
 	for _, id := range cachedIDs {
 		remove[id] = struct{}{}
 	}
 	for _, item := range live {
 		remove[item.MessageID()] = struct{}{}
+	}
+	for _, id := range authoritativeIDs {
+		remove[id] = struct{}{}
 	}
 	boundary := len(m.messages)
 	if anchorID != "" {
@@ -2855,6 +2865,9 @@ func (m *Model) resolveAnchor(a selection.Anchor) (absLine, col int, ok bool) {
 	}
 	e := m.cache[idx]
 	if a.Line < 0 || a.Line >= e.height {
+		return 0, 0, false
+	}
+	if a.Line >= len(e.linesPlain) || a.Col < 0 || a.Col >= len(e.linesPlain[a.Line].Bytes) {
 		return 0, 0, false
 	}
 	return m.entryOffsets[idx] + a.Line, a.Col, true

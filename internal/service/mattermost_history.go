@@ -26,8 +26,9 @@ type MattermostHistoryMessage struct {
 }
 
 type MattermostHistoryPage struct {
-	Messages []MattermostHistoryMessage
-	HasMore  bool
+	Messages         []MattermostHistoryMessage
+	AuthoritativeIDs []string
+	HasMore          bool
 }
 
 type MattermostHistoryService struct {
@@ -120,6 +121,15 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 		return MattermostHistoryPage{}, fmt.Errorf("cache Mattermost history: %w", err)
 	}
 	presented := make([]MattermostHistoryMessage, 0, len(page.Messages))
+	authoritativeIDs := make([]string, 0, len(page.Messages))
+	seenAuthoritative := make(map[string]struct{}, len(page.Messages))
+	for _, message := range page.Messages {
+		if _, seen := seenAuthoritative[message.ID]; seen {
+			continue
+		}
+		seenAuthoritative[message.ID] = struct{}{}
+		authoritativeIDs = append(authoritativeIDs, message.ID)
+	}
 	for i := len(page.Messages) - 1; i >= 0; i-- {
 		message := page.Messages[i]
 		if message.DeletedAt != 0 || beforeID != "" && message.ID == beforeID {
@@ -131,7 +141,7 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 		}
 		presented = append(presented, MattermostHistoryMessage{Message: message, UserName: name})
 	}
-	return MattermostHistoryPage{Messages: presented, HasMore: orderCount == s.perPage}, nil
+	return MattermostHistoryPage{Messages: presented, AuthoritativeIDs: authoritativeIDs, HasMore: orderCount == s.perPage}, nil
 }
 
 func cachePost(m mattermost.Message) cache.MattermostPost {

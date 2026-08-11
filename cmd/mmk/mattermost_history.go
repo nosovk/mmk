@@ -30,12 +30,12 @@ func (s mattermostUIHistoryService) ReadCached(request ui.HistoryRequest, before
 
 func (s mattermostUIHistoryService) FetchRecent(ctx context.Context, request ui.HistoryRequest) ui.MattermostMessagesLoadedMsg {
 	page, err := s.fetch(ctx, request, "")
-	return ui.MattermostMessagesLoadedMsg{Request: request, Messages: mattermostHistoryItems(page.Messages), HasMore: page.HasMore, Err: err}
+	return ui.MattermostMessagesLoadedMsg{Request: request, AuthoritativeIDs: page.AuthoritativeIDs, Messages: mattermostHistoryItems(page.Messages), HasMore: page.HasMore, Err: err}
 }
 
 func (s mattermostUIHistoryService) FetchOlder(ctx context.Context, request ui.HistoryRequest, before string) ui.MattermostOlderMessagesLoadedMsg {
 	page, err := s.fetch(ctx, request, before)
-	return ui.MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: before, Messages: mattermostHistoryItems(page.Messages), HasMore: page.HasMore, Err: err}
+	return ui.MattermostOlderMessagesLoadedMsg{Request: request, AnchorID: before, AuthoritativeIDs: page.AuthoritativeIDs, Messages: mattermostHistoryItems(page.Messages), HasMore: page.HasMore, Err: err}
 }
 
 func (s mattermostUIHistoryService) fetch(ctx context.Context, request ui.HistoryRequest, before string) (service.MattermostHistoryPage, error) {

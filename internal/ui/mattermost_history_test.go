@@ -184,6 +184,18 @@ func TestMattermostTerminalOlderRemovesStalePrefixAndExhausts(t *testing.T) {
 	}
 }
 
+func TestMattermostRecentRemovesAuthoritativeTombstoneOutsideCapturedRange(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "deleted"}, {ID: "older"}, {ID: "cached"}})
+	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: request, CachedIDs: []string{"cached"}, AuthoritativeIDs: []string{"live", "deleted"}, Messages: []messages.MessageItem{{ID: "live"}}, HasMore: true})
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"older", "live"}) {
+		t.Fatalf("ids=%v", got)
+	}
+}
+
 func TestMattermostOlderDispatchAttachesCapturedCachedIDs(t *testing.T) {
 	a := newMattermostHistoryApp(t, "s1")
 	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "anchor"}}, "s1:c1:anchor": {{ID: "p1"}, {ID: "p3"}}}}

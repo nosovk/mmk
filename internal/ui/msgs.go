@@ -54,19 +54,21 @@ type (
 		Generation uint64
 	}
 	MattermostMessagesLoadedMsg struct {
-		Request   HistoryRequest
-		CachedIDs []string
-		Messages  []messages.MessageItem
-		HasMore   bool
-		Err       error
+		Request          HistoryRequest
+		CachedIDs        []string
+		AuthoritativeIDs []string
+		Messages         []messages.MessageItem
+		HasMore          bool
+		Err              error
 	}
 	MattermostOlderMessagesLoadedMsg struct {
-		Request   HistoryRequest
-		AnchorID  string
-		CachedIDs []string
-		Messages  []messages.MessageItem
-		HasMore   bool
-		Err       error
+		Request          HistoryRequest
+		AnchorID         string
+		CachedIDs        []string
+		AuthoritativeIDs []string
+		Messages         []messages.MessageItem
+		HasMore          bool
+		Err              error
 	}
 	ChannelSelectedMsg struct {
 		ID   string
