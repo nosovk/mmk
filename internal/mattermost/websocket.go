@@ -138,9 +138,9 @@ func (c *Client) webSocketDialer() (*websocket.Dialer, error) {
 	}
 	dialer.Proxy = transport.Proxy
 	dialer.NetDialContext = transport.DialContext
-	dialer.NetDialTLSContext = transport.DialTLSContext
 	if transport.TLSClientConfig != nil {
 		dialer.TLSClientConfig = transport.TLSClientConfig.Clone()
+		dialer.TLSClientConfig.NextProtos = nil
 	}
 	return &dialer, nil
 }

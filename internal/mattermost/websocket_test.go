@@ -2,6 +2,7 @@ package mattermost
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net"
@@ -263,6 +264,48 @@ func TestWebSocketUsesHTTPClientCookieJar(t *testing.T) {
 	err = waitWebSocket(t, done, "cookie test cancellation")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled after authenticated cookie request", err)
+	}
+}
+
+func TestWebSocketUsesHTTP11WithHTTP2CapableTLSTransport(t *testing.T) {
+	authenticated := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err == nil {
+			close(authenticated)
+			<-r.Context().Done()
+		}
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	tlsConfig := transport.TLSClientConfig.Clone()
+	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
+	transport.DialTLSContext = (&tls.Dialer{Config: tlsConfig}).DialContext
+	client, err := NewClient(server.URL, "test-token", WithHTTPClient(&http.Client{Transport: transport}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- client.RunWebSocket(ctx, func(Event) {}) }()
+	select {
+	case <-authenticated:
+	case err := <-done:
+		t.Fatalf("RunWebSocket returned before TLS authentication: %v", err)
+	case <-time.After(webSocketTestTimeout):
+		t.Fatal("timed out waiting for TLS WebSocket authentication")
+	}
+	cancel()
+	if err := waitWebSocket(t, done, "TLS WebSocket cancellation"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
 
