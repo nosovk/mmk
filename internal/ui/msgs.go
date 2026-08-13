@@ -80,6 +80,7 @@ type (
 	}
 	MattermostMessagesLoadedMsg struct {
 		Request          HistoryRequest
+		Sequence         uint64
 		CachedIDs        []string
 		AuthoritativeIDs []string
 		DeletedIDs       []string

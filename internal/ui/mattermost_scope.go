@@ -16,6 +16,7 @@ type mattermostHistoryScope struct {
 	recentInFlight bool
 	fetchInFlight  bool
 	refreshPending bool
+	recentSequence uint64
 }
 
 func (a *App) newMattermostHistoryScope(serverID ids.ServerID, channelID string) *mattermostHistoryScope {

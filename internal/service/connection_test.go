@@ -108,7 +108,7 @@ func TestReconnectRunsReconciliationAfterReady(t *testing.T) {
 		},
 		func(ctx context.Context, onReady func(), onEvent func(mattermost.Event)) error {
 			onReady()
-			if !reflect.DeepEqual(sequence, []string{"connecting", "connected", "offline", "reconnecting", "wait", "reconcile", "connected"}) {
+			if !reflect.DeepEqual(sequence, []string{"connecting", "connected", "offline", "reconnecting", "wait", "connected", "reconcile"}) {
 				t.Fatalf("sequence while socket remains active = %v", sequence)
 			}
 			cancel()
@@ -338,6 +338,43 @@ func TestReconnectCancellationFromOfflineStopsCallbacks(t *testing.T) {
 	}
 }
 
+func TestReconnectCancellationFromConnectedSkipsReconciliation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &scriptedConnectionClient{attempts: []func(context.Context, func(), func(mattermost.Event)) error{
+		func(_ context.Context, onReady func(), _ func(mattermost.Event)) error {
+			onReady()
+			return errSocket
+		},
+		func(ctx context.Context, onReady func(), _ func(mattermost.Event)) error {
+			onReady()
+			return ctx.Err()
+		},
+	}}
+	reconciles := 0
+	connected := 0
+	manager := validConnectionManager(client)
+	manager.OnState = func(state mattermost.ConnectionState) {
+		if state == mattermost.ConnectionStateConnected {
+			connected++
+			if connected == 2 {
+				cancel()
+			}
+		}
+	}
+	manager.Reconcile = func(context.Context) error {
+		reconciles++
+		return nil
+	}
+
+	err := manager.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if reconciles != 0 {
+		t.Fatalf("reconciles = %d, want 0", reconciles)
+	}
+}
+
 func TestReconnectCancellationFromOnErrorStopsCallbacks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &scriptedConnectionClient{attempts: []func(context.Context, func(), func(mattermost.Event)) error{
@@ -503,7 +540,7 @@ func TestReconciliationFailureDoesNotStopConnectedSocket(t *testing.T) {
 	}
 	want := []string{
 		"connecting", "connected", "offline", "error", "reconnecting",
-		"reconcile", "error", "connected", "socket-still-open",
+		"connected", "reconcile", "error", "socket-still-open",
 	}
 	if !reflect.DeepEqual(sequence, want) {
 		t.Fatalf("sequence = %v, want %v", sequence, want)

@@ -668,6 +668,63 @@ func TestMattermostReconciledHistoryFailureMergesCachedFallbackNonAuthoritativel
 	}
 }
 
+func TestMattermostReconciledHistorySupersedesOlderRecentFetchResult(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	scope := a.mattermostScope(request)
+	olderFetch := a.fetchRecentMattermostHistory(scope)
+
+	_, _ = a.Update(MattermostReconciledHistoryMsg{
+		ServerID: "s1", ChannelID: "c1", Generation: a.selectionGeneration,
+		AuthoritativeIDs: []string{"new"}, Messages: []messages.MessageItem{{ID: "new"}},
+	})
+	_, _ = a.Update(olderFetch())
+
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"new"}) {
+		t.Fatalf("older recent fetch overwrote reconciliation: %v", got)
+	}
+}
+
+func TestMattermostReconciledHistorySupersedesOlderInitialFetchResult(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, initial := a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	older, ok := findRecentLoadedMsg(initial)
+	if !ok {
+		t.Fatal("initial recent result absent")
+	}
+
+	_, _ = a.Update(MattermostReconciledHistoryMsg{
+		ServerID: "s1", ChannelID: "c1", Generation: a.selectionGeneration,
+		AuthoritativeIDs: []string{"new"}, Messages: []messages.MessageItem{{ID: "new"}},
+	})
+	_, _ = a.Update(older)
+
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"new"}) {
+		t.Fatalf("older initial fetch overwrote reconciliation: %v", got)
+	}
+}
+
+func TestMattermostReconciledHistoryCompletesLoadingState(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	if !a.messagepane.IsLoading() {
+		t.Fatal("cold initial fetch did not start loading")
+	}
+
+	_, _ = a.Update(MattermostReconciledHistoryMsg{
+		ServerID: "s1", ChannelID: "c1", Generation: a.selectionGeneration,
+		AuthoritativeIDs: []string{"new"}, Messages: []messages.MessageItem{{ID: "new"}},
+	})
+
+	if a.messagepane.IsLoading() || mattermostSyncingVisible(a) {
+		t.Fatalf("reconciliation left loading state: loading=%v syncing=%v", a.messagepane.IsLoading(), mattermostSyncingVisible(a))
+	}
+}
+
 func TestMattermostServerActivationQueuesInitialChannelHistory(t *testing.T) {
 	a := NewApp()
 	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})

@@ -53,13 +53,13 @@ func (m *ConnectionManager) Run(ctx context.Context) error {
 			recovered := hasConnected
 			hasConnected = true
 			failedAttempts = 0
-			if recovered {
+			if ctx.Err() == nil {
+				m.OnState(mattermost.ConnectionStateConnected)
+			}
+			if recovered && ctx.Err() == nil {
 				if err := m.Reconcile(ctx); err != nil && ctx.Err() == nil {
 					m.OnError(err)
 				}
-			}
-			if ctx.Err() == nil {
-				m.OnState(mattermost.ConnectionStateConnected)
 			}
 		}, m.OnEvent, m.OnError)
 		if ctxErr := ctx.Err(); ctxErr != nil {

@@ -124,6 +124,25 @@ func TestStartupWaitIncludesConnectionManagers(t *testing.T) {
 	}
 }
 
+func TestStartupCancellationInterruptsInitialSnapshotPersistence(t *testing.T) {
+	client := newStartupConnectionClient("u1")
+	store := &cancellationAwareSnapshotStore{started: make(chan struct{})}
+	startup := startConnectionTestStartup(t, map[string]*startupConnectionClient{"s1": client}, mattermostStartupDeps{Cache: store})
+
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		startup.Cancel()
+		t.Fatal("initial snapshot persistence did not use context-aware replacement")
+	}
+	startup.Cancel()
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := startup.WaitContext(waitCtx); err != nil {
+		t.Fatalf("WaitContext error = %v", err)
+	}
+}
+
 func TestStartupEventCallbackReturnsPromptlyAndWaitTracksWorker(t *testing.T) {
 	client := newStartupConnectionClient("u1")
 	callbackReturned := make(chan struct{})

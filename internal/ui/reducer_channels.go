@@ -87,6 +87,9 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if scope == nil {
 			return nil, true
 		}
+		if m.Sequence != 0 && m.Sequence != scope.recentSequence {
+			return nil, true
+		}
 		scope.recentInFlight = false
 		scope.fetchInFlight = false
 		models := a.modelsForMattermostScope(m.Request)
@@ -108,7 +111,20 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.ServerID != ids.ServerID(a.activeServerID) || m.ChannelID != a.activeChannelID || m.Generation != a.selectionGeneration || request.ServerID != m.ServerID || request.ChannelID != m.ChannelID || !a.hasMattermostScope(request) {
 			return nil, true
 		}
-		return applyMattermostRecentPage(a, request, nil, m.AuthoritativeIDs, m.DeletedIDs, m.Messages, m.HasMore, m.Err), true
+		scope := a.mattermostScope(request)
+		scope.recentSequence++
+		scope.recentInFlight = false
+		scope.fetchInFlight = false
+		for _, model := range a.modelsForMattermostScope(request) {
+			model.SetLoading(false)
+		}
+		a.statusbar.SetSyncing(false)
+		errorCmd := applyMattermostRecentPage(a, request, nil, m.AuthoritativeIDs, m.DeletedIDs, m.Messages, m.HasMore, m.Err)
+		if scope.refreshPending {
+			scope.refreshPending = false
+			return tea.Batch(errorCmd, a.fetchRecentMattermostHistory(scope)), true
+		}
+		return errorCmd, true
 
 	case MattermostOlderMessagesLoadedMsg:
 		delete(a.mattermostFetchingOlder, m.Request)
@@ -352,6 +368,7 @@ func applyMattermostRecentPage(a *App, request HistoryRequest, cachedIDs, author
 func (a *App) fetchRecentMattermostHistory(scope *mattermostHistoryScope) tea.Cmd {
 	scope.recentInFlight = true
 	scope.fetchInFlight = true
+	sequence := startMattermostRecentSequence(scope)
 	service := a.mattermostHistory
 	request := scope.request
 	ctx := scope.ctx
@@ -366,9 +383,15 @@ func (a *App) fetchRecentMattermostHistory(scope *mattermostHistoryScope) tea.Cm
 	}
 	return func() tea.Msg {
 		msg := service.FetchRecent(ctx, request)
+		msg.Sequence = sequence
 		msg.CachedIDs = cachedIDs
 		return msg
 	}
+}
+
+func startMattermostRecentSequence(scope *mattermostHistoryScope) uint64 {
+	scope.recentSequence++
+	return scope.recentSequence
 }
 
 // retargetActiveChannel points the App's active-channel context
@@ -437,11 +460,9 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		a.statusbar.SetChannel(m.Name)
 		a.statusbar.SetChannelType(m.Type)
 		scope := a.installFocusedMattermostScope(ids.ServerID(a.activeServerID), m.ID)
-		historyCtx := scope.ctx
-		request := scope.request
 		var cached []messages.MessageItem
 		if a.mattermostHistory != nil {
-			cached, _ = a.mattermostHistory.ReadCached(request, "")
+			cached, _ = a.mattermostHistory.ReadCached(scope.request, "")
 		}
 		if len(cached) > 0 {
 			a.messagepane.SetLoading(false)
@@ -460,14 +481,18 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		}
 		scope.recentInFlight = len(cached) > 0
 		scope.fetchInFlight = true
+		sequence := startMattermostRecentSequence(scope)
 		a.statusbar.SetSyncing(scope.recentInFlight)
 		service := a.mattermostHistory
+		historyCtx := scope.ctx
+		request := scope.request
 		cachedIDs := make([]string, len(cached))
 		for i := range cached {
 			cachedIDs[i] = cached[i].MessageID()
 		}
 		return tea.Batch(spinnerTickCmd(), func() tea.Msg {
 			msg := service.FetchRecent(historyCtx, request)
+			msg.Sequence = sequence
 			msg.CachedIDs = cachedIDs
 			return msg
 		}), true

@@ -414,6 +414,32 @@ func (f *fakeMattermostSnapshotStore) ReplaceMattermostBootstrapSnapshot(snapsho
 	return f.ApplyMattermostBootstrapSnapshot(snapshot)
 }
 
+func (f *fakeMattermostSnapshotStore) ReplaceMattermostBootstrapSnapshotContext(_ context.Context, snapshot cache.MattermostBootstrapSnapshot) error {
+	return f.ApplyMattermostBootstrapSnapshot(snapshot)
+}
+
+type cancellationAwareSnapshotStore struct {
+	started chan struct{}
+}
+
+func (s *cancellationAwareSnapshotStore) LoadMattermostBootstrapSnapshot(string) (cache.MattermostBootstrapSnapshot, error) {
+	return cache.MattermostBootstrapSnapshot{}, sql.ErrNoRows
+}
+
+func (s *cancellationAwareSnapshotStore) ApplyMattermostBootstrapSnapshot(cache.MattermostBootstrapSnapshot) error {
+	return nil
+}
+
+func (s *cancellationAwareSnapshotStore) ReplaceMattermostBootstrapSnapshot(cache.MattermostBootstrapSnapshot) error {
+	return errors.New("non-context snapshot replacement used")
+}
+
+func (s *cancellationAwareSnapshotStore) ReplaceMattermostBootstrapSnapshotContext(ctx context.Context, _ cache.MattermostBootstrapSnapshot) error {
+	close(s.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 type fakeMattermostSecrets struct {
 	tokens map[string]string
 	errs   map[string]error
