@@ -21,7 +21,10 @@ type ItemState uint8
 
 const (
 	ItemStateLoading ItemState = iota
+	ItemStateConnecting
 	ItemStateReady
+	ItemStateOffline
+	ItemStateReconnecting
 	ItemStateError
 )
 
@@ -190,6 +193,7 @@ func (m Model) View(height int) string {
 		}
 
 		initials := item.Initials
+		initials += connectionMarker(item.State)
 		if item.HasUnread && i != m.selected {
 			initials = initials + styles.PresenceOnline.Render("●")
 		}
@@ -213,6 +217,23 @@ func (m Model) View(height int) string {
 		Render(content)
 
 	return rail
+}
+
+func connectionMarker(state ItemState) string {
+	switch state {
+	case ItemStateConnecting:
+		return "~"
+	case ItemStateReady:
+		return "+"
+	case ItemStateOffline:
+		return "-"
+	case ItemStateReconnecting:
+		return "*"
+	case ItemStateError:
+		return "!"
+	default:
+		return ""
+	}
 }
 
 // ClickAt returns the workspace item rendered at rail-local row y,

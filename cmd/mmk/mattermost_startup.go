@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/config"
+	"github.com/nosovk/mmk/internal/debuglog"
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/mattermost"
 	"github.com/nosovk/mmk/internal/service"
@@ -24,6 +26,8 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	runCtx, stopRun := context.WithCancel(context.Background())
 	defer stopRun()
 	app := ui.NewApp()
+	activeSelection := newMattermostActiveSelection()
+	app.SetSelectionObserver(activeSelection.Store)
 	app.SetHelpFooter("Mattermost")
 	app.SetTypingEnabled(false)
 	app.SetThemeItems(nil)
@@ -48,15 +52,28 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 		pendingMu.Unlock()
 		program.Send(msg)
 	}
+	eventSend := func(ctx context.Context, msg tea.Msg) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		send(msg)
+		return ctx.Err()
+	}
 	startup, err := startMattermost(runCtx, mattermostStartupDeps{
 		Registry: registry,
 		Secrets:  mattermost.NewOSSecretStore(),
 		NewClient: func(server mattermost.Server, token string) (mattermostStartupClient, error) {
 			return mattermost.NewClient(server.URL, token)
 		},
-		Cache: db,
-		Send:  send,
-		Clock: time.Now,
+		Cache:                   db,
+		Send:                    send,
+		Clock:                   time.Now,
+		ActiveSelection:         activeSelection.Load,
+		ActiveSelectionSnapshot: activeSelection.LoadSnapshot,
+		OnEvent: mattermostProductionEventHandler(db, eventSend, activeSelection.Load, func(err error) {
+			debuglog.WS("Mattermost realtime event error: %v", err)
+		}),
+		OnConnectionState: mattermostConnectionStateSender(send),
 	})
 	if err != nil {
 		return err
@@ -90,6 +107,21 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	return err
 }
 
+func mattermostConnectionStateSender(send func(tea.Msg)) func(ids.ServerID, mattermost.ConnectionState) {
+	return func(serverID ids.ServerID, state mattermost.ConnectionState) {
+		railState := workspace.ItemStateConnecting
+		switch state {
+		case mattermost.ConnectionStateConnected:
+			railState = workspace.ItemStateReady
+		case mattermost.ConnectionStateOffline:
+			railState = workspace.ItemStateOffline
+		case mattermost.ConnectionStateReconnecting:
+			railState = workspace.ItemStateReconnecting
+		}
+		send(ui.ServerConnectionStateMsg{ServerID: serverID, State: railState})
+	}
+}
+
 func applyPendingMattermostMessages(app *ui.App, pending []tea.Msg) {
 	for _, msg := range pending {
 		switch value := msg.(type) {
@@ -110,7 +142,7 @@ func applyPendingMattermostMessages(app *ui.App, pending []tea.Msg) {
 			} else {
 				app.QueueInitCmd(cmd)
 			}
-		case ui.ServerStateMsg:
+		case ui.ServerStateMsg, ui.ServerConnectionStateMsg:
 			_, _ = app.Update(msg)
 		}
 	}
@@ -149,12 +181,17 @@ type mattermostSecretReader interface {
 }
 
 type mattermostStartupDeps struct {
-	Registry  config.ServerRegistry
-	Secrets   mattermostSecretReader
-	NewClient func(mattermost.Server, string) (mattermostStartupClient, error)
-	Cache     mattermostSnapshotStore
-	Send      func(tea.Msg)
-	Clock     func() time.Time
+	Registry                config.ServerRegistry
+	Secrets                 mattermostSecretReader
+	NewClient               func(mattermost.Server, string) (mattermostStartupClient, error)
+	Cache                   mattermostSnapshotStore
+	Send                    func(tea.Msg)
+	Clock                   func() time.Time
+	ActiveSelection         func() (ids.ServerID, string)
+	ActiveSelectionSnapshot func() (ids.ServerID, string, uint64)
+	OnEvent                 func(context.Context, ids.ServerID, mattermost.Event)
+	OnConnectionState       func(ids.ServerID, mattermost.ConnectionState)
+	ConnectionWait          func(context.Context, time.Duration) error
 }
 
 type mattermostRailMsg struct {
@@ -170,6 +207,7 @@ type mattermostServerContext struct {
 
 type mattermostStartupClient interface {
 	service.ServerBootstrapClient
+	RunWebSocket(context.Context, func(), func(mattermost.Event), func(error)) error
 	ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error)
 	CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error)
 }
@@ -185,21 +223,22 @@ func wireMattermostRuntime(app mattermostRuntimeApp, runCtx context.Context, sta
 }
 
 type mattermostStartup struct {
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
-	contexts map[ids.ServerID]mattermostServerContext
-	initial  ids.ServerID
-	claimed  bool
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	done            chan struct{}
+	remaining       atomic.Int64
+	mu              sync.RWMutex
+	contexts        map[ids.ServerID]mattermostServerContext
+	reconcileStates sync.Map
+	initial         ids.ServerID
+	claimed         bool
 }
 
 func (s *mattermostStartup) Cancel() { s.cancel() }
-func (s *mattermostStartup) Wait()   { s.wg.Wait() }
+func (s *mattermostStartup) Wait()   { <-s.done }
 func (s *mattermostStartup) WaitContext(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() { s.wg.Wait(); close(done) }()
 	select {
-	case <-done:
+	case <-s.done:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -213,8 +252,17 @@ func startMattermost(parent context.Context, deps mattermostStartupDeps) (*matte
 	if deps.Clock == nil {
 		deps.Clock = time.Now
 	}
+	if deps.ActiveSelection == nil {
+		deps.ActiveSelection = func() (ids.ServerID, string) { return "", "" }
+	}
+	if deps.OnEvent == nil {
+		deps.OnEvent = func(context.Context, ids.ServerID, mattermost.Event) {}
+	}
+	if deps.OnConnectionState == nil {
+		deps.OnConnectionState = func(ids.ServerID, mattermost.ConnectionState) {}
+	}
 	ctx, cancel := context.WithCancel(parent)
-	startup := &mattermostStartup{cancel: cancel, contexts: make(map[ids.ServerID]mattermostServerContext, len(deps.Registry.Servers))}
+	startup := &mattermostStartup{cancel: cancel, done: make(chan struct{}), contexts: make(map[ids.ServerID]mattermostServerContext, len(deps.Registry.Servers))}
 	if len(deps.Registry.Servers) > 0 {
 		startup.initial = ids.ServerID(deps.Registry.Servers[0].ID)
 	}
@@ -246,18 +294,51 @@ func startMattermost(parent context.Context, deps mattermostStartupDeps) (*matte
 		deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateReady})
 	}
 
+	workerCount := len(deps.Registry.Servers) * 3
+	startup.wg.Add(workerCount)
+	startup.remaining.Store(int64(workerCount))
+	if workerCount == 0 {
+		close(startup.done)
+	}
 	for _, configured := range deps.Registry.Servers {
 		configured := configured
-		startup.wg.Add(1)
+		serverID := ids.ServerID(configured.ID)
+		dispatcher := newMattermostEventDispatcher(serverID, deps.OnEvent)
+		reconcileDispatcher := newMattermostReconcileDispatcher(func(ctx context.Context) error {
+			reconcileCache, ok := deps.Cache.(mattermostReconcileStore)
+			if !ok {
+				return errors.New("Mattermost reconciliation cache unavailable")
+			}
+			return startup.reconcile(ctx, serverID, mattermostReconcileDeps{
+				Cache: reconcileCache, Send: deps.Send, Clock: deps.Clock, ActiveSelection: deps.ActiveSelection, ActiveSelectionSnapshot: deps.ActiveSelectionSnapshot,
+			})
+		}, func(err error) {
+			debuglog.WS("Mattermost server=%s reconciliation error: %v", serverID, err)
+		})
 		go func() {
-			defer startup.wg.Done()
-			startup.refreshServer(ctx, deps, configured)
+			defer startup.workerDone()
+			dispatcher.Run(ctx)
+		}()
+		go func() {
+			defer startup.workerDone()
+			reconcileDispatcher.Run(ctx)
+		}()
+		go func() {
+			defer startup.workerDone()
+			startup.refreshServer(ctx, deps, configured, dispatcher, reconcileDispatcher)
 		}()
 	}
 	return startup, nil
 }
 
-func (s *mattermostStartup) refreshServer(ctx context.Context, deps mattermostStartupDeps, configured config.MattermostServer) {
+func (s *mattermostStartup) workerDone() {
+	s.wg.Done()
+	if s.remaining.Add(-1) == 0 {
+		close(s.done)
+	}
+}
+
+func (s *mattermostStartup) refreshServer(ctx context.Context, deps mattermostStartupDeps, configured config.MattermostServer, dispatcher *mattermostEventDispatcher, reconcileDispatcher *mattermostReconcileDispatcher) {
 	serverID := ids.ServerID(configured.ID)
 	token, err := deps.Secrets.Get(ctx, configured.ID)
 	if err != nil {
@@ -292,6 +373,75 @@ func (s *mattermostStartup) refreshServer(ctx context.Context, deps mattermostSt
 		deps.Send(ui.ServerReadyMsg{Server: mattermostServerViewState(snapshot, initial)})
 	}
 	deps.Send(ui.ServerStateMsg{ServerID: serverID, State: workspace.ItemStateReady})
+	s.runConnectionManager(ctx, serverID, client, deps, dispatcher, reconcileDispatcher)
+}
+
+func (s *mattermostStartup) runConnectionManager(ctx context.Context, serverID ids.ServerID, client mattermostStartupClient, deps mattermostStartupDeps, dispatcher *mattermostEventDispatcher, reconcileDispatcher *mattermostReconcileDispatcher) {
+	manager := service.ConnectionManager{
+		Client: client,
+		OnEvent: func(event mattermost.Event) {
+			dispatcher.Enqueue(event)
+		},
+		OnState: func(state mattermost.ConnectionState) {
+			debuglog.WS("Mattermost server=%s state=%s", serverID, state)
+			deps.OnConnectionState(serverID, state)
+		},
+		Reconcile: func(context.Context) error {
+			reconcileDispatcher.Enqueue()
+			return nil
+		},
+		OnError: func(err error) {
+			debuglog.WS("Mattermost server=%s connection error: %v", serverID, err)
+		},
+		Wait: deps.ConnectionWait,
+	}
+	if err := manager.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		debuglog.WS("Mattermost server=%s connection manager stopped: %v", serverID, err)
+	}
+}
+
+type mattermostSelectionValue struct {
+	serverID   ids.ServerID
+	channelID  string
+	generation uint64
+}
+
+type mattermostActiveSelection struct {
+	value atomic.Pointer[mattermostSelectionValue]
+}
+
+func newMattermostActiveSelection() *mattermostActiveSelection {
+	selection := &mattermostActiveSelection{}
+	selection.Store("", "")
+	return selection
+}
+
+func (s *mattermostActiveSelection) Store(serverID ids.ServerID, channelID string) {
+	current := s.value.Load()
+	generation := uint64(0)
+	if current != nil {
+		generation = current.generation
+		if current.serverID != serverID || current.channelID != channelID {
+			generation++
+		}
+	}
+	s.value.Store(&mattermostSelectionValue{serverID: serverID, channelID: channelID, generation: generation})
+}
+
+func (s *mattermostActiveSelection) LoadSnapshot() (ids.ServerID, string, uint64) {
+	selection := s.value.Load()
+	if selection == nil {
+		return "", "", 0
+	}
+	return selection.serverID, selection.channelID, selection.generation
+}
+
+func (s *mattermostActiveSelection) Load() (ids.ServerID, string) {
+	selection := s.value.Load()
+	if selection == nil {
+		return "", ""
+	}
+	return selection.serverID, selection.channelID
 }
 
 func (s *mattermostStartup) setClient(serverID ids.ServerID, client mattermostStartupClient) {

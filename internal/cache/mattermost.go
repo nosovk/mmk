@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -55,16 +56,17 @@ type MattermostChannelMembership struct {
 }
 
 type MattermostPost struct {
-	ID         string
-	ChannelID  string
-	UserID     string
-	RootID     string
-	Text       string
-	CreatedAt  int64
-	UpdatedAt  int64
-	EditedAt   int64
-	DeletedAt  int64
-	ReplyCount int64
+	ID            string
+	ChannelID     string
+	UserID        string
+	RootID        string
+	Text          string
+	CorrelationID string
+	CreatedAt     int64
+	UpdatedAt     int64
+	EditedAt      int64
+	DeletedAt     int64
+	ReplyCount    int64
 }
 
 // MattermostBootstrapSnapshot is raw cache bootstrap data, not a UI snapshot.
@@ -83,6 +85,19 @@ type MattermostBootstrapSnapshot struct {
 
 type mattermostExecer interface {
 	Exec(string, ...any) (sql.Result, error)
+}
+
+type mattermostContextExec struct {
+	ctx  context.Context
+	exec mattermostContextExecer
+}
+
+func (e mattermostContextExec) Exec(query string, args ...any) (sql.Result, error) {
+	return e.exec.ExecContext(e.ctx, query, args...)
+}
+
+type mattermostContextExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
 func (db *DB) UpsertMattermostServer(server MattermostServer) error {
@@ -487,45 +502,60 @@ func (db *DB) ApplyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnaps
 }
 
 func (db *DB) ReplaceMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnapshot) error {
-	return db.applyMattermostBootstrapSnapshot(snapshot, true)
+	return db.ReplaceMattermostBootstrapSnapshotContext(context.Background(), snapshot)
 }
 
 func (db *DB) applyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnapshot, replace bool) error {
+	return db.applyMattermostBootstrapSnapshotContext(context.Background(), snapshot, replace)
+}
+
+func (db *DB) ReplaceMattermostBootstrapSnapshotContext(ctx context.Context, snapshot MattermostBootstrapSnapshot) error {
+	return db.applyMattermostBootstrapSnapshotContext(ctx, snapshot, true)
+}
+
+func (db *DB) applyMattermostBootstrapSnapshotContext(ctx context.Context, snapshot MattermostBootstrapSnapshot, replace bool) error {
 	serverID := snapshot.Server.ID
 	if snapshot.CurrentUser.ID != snapshot.Server.CurrentUserID {
 		return errors.New("Mattermost snapshot current user must match server current_user_id")
 	}
-	tx, err := db.conn.Begin()
+	if db.mattermostBeforeWrite != nil {
+		db.mattermostBeforeWrite()
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("beginning Mattermost snapshot: %w", ctxErr)
+		}
 		return fmt.Errorf("beginning Mattermost snapshot: %w", err)
 	}
 	fail := func(err error) error {
 		_ = tx.Rollback()
 		return err
 	}
-	if err := upsertMattermostServer(tx, snapshot.Server); err != nil {
+	exec := mattermostContextExec{ctx: ctx, exec: tx}
+	if err := upsertMattermostServer(exec, snapshot.Server); err != nil {
 		return fail(err)
 	}
 	for _, user := range snapshot.Users {
-		if err := upsertMattermostUser(tx, serverID, user); err != nil {
+		if err := upsertMattermostUser(exec, serverID, user); err != nil {
 			return fail(err)
 		}
 	}
-	if err := upsertMattermostUser(tx, serverID, snapshot.CurrentUser); err != nil {
+	if err := upsertMattermostUser(exec, serverID, snapshot.CurrentUser); err != nil {
 		return fail(err)
 	}
 	for _, team := range snapshot.Teams {
-		if err := upsertMattermostTeam(tx, serverID, team); err != nil {
+		if err := upsertMattermostTeam(exec, serverID, team); err != nil {
 			return fail(err)
 		}
 	}
 	for _, channel := range snapshot.Channels {
-		if err := upsertMattermostChannel(tx, serverID, channel); err != nil {
+		if err := upsertMattermostChannel(exec, serverID, channel); err != nil {
 			return fail(err)
 		}
 	}
 	for _, membership := range snapshot.Memberships {
-		if err := upsertMattermostChannelMembership(tx, serverID, membership); err != nil {
+		if err := upsertMattermostChannelMembership(exec, serverID, membership); err != nil {
 			return fail(err)
 		}
 	}
@@ -537,9 +567,9 @@ func (db *DB) applyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnaps
 	for _, channelID := range channelIDs {
 		var err error
 		if replace {
-			err = replaceMattermostChannelUserIDs(tx, serverID, channelID, snapshot.ChannelUsers[channelID])
+			err = replaceMattermostChannelUserIDs(exec, serverID, channelID, snapshot.ChannelUsers[channelID])
 		} else {
-			err = upsertMattermostChannelUserIDs(tx, serverID, channelID, snapshot.ChannelUsers[channelID])
+			err = upsertMattermostChannelUserIDs(exec, serverID, channelID, snapshot.ChannelUsers[channelID])
 		}
 		if err != nil {
 			return fail(err)
@@ -550,24 +580,24 @@ func (db *DB) applyMattermostBootstrapSnapshot(snapshot MattermostBootstrapSnaps
 			if _, ok := snapshot.ChannelUsers[channel.ID]; ok {
 				continue
 			}
-			if err := replaceMattermostChannelUserIDs(tx, serverID, channel.ID, nil); err != nil {
+			if err := replaceMattermostChannelUserIDs(exec, serverID, channel.ID, nil); err != nil {
 				return fail(err)
 			}
 		}
-		if _, err := tx.Exec(`UPDATE mattermost_teams SET is_active = CASE WHEN id IN (`+placeholders(len(snapshot.Teams))+`) THEN 1 ELSE 0 END WHERE server_id = ?`, append(teamIDArgs(snapshot.Teams), serverID)...); err != nil {
+		if _, err := exec.Exec(`UPDATE mattermost_teams SET is_active = CASE WHEN id IN (`+placeholders(len(snapshot.Teams))+`) THEN 1 ELSE 0 END WHERE server_id = ?`, append(teamIDArgs(snapshot.Teams), serverID)...); err != nil {
 			return fail(err)
 		}
-		if _, err := tx.Exec(`UPDATE mattermost_channels SET is_active = CASE WHEN id IN (`+placeholders(len(snapshot.Channels))+`) THEN 1 ELSE 0 END WHERE server_id = ?`, append(channelIDArgs(snapshot.Channels), serverID)...); err != nil {
+		if _, err := exec.Exec(`UPDATE mattermost_channels SET is_active = CASE WHEN id IN (`+placeholders(len(snapshot.Channels))+`) THEN 1 ELSE 0 END WHERE server_id = ?`, append(channelIDArgs(snapshot.Channels), serverID)...); err != nil {
 			return fail(err)
 		}
 		if len(snapshot.Memberships) == 0 {
-			if _, err := tx.Exec(`DELETE FROM mattermost_channel_memberships WHERE server_id = ? AND user_id = ?`, serverID, snapshot.Server.CurrentUserID); err != nil {
+			if _, err := exec.Exec(`DELETE FROM mattermost_channel_memberships WHERE server_id = ? AND user_id = ?`, serverID, snapshot.Server.CurrentUserID); err != nil {
 				return fail(err)
 			}
-		} else if _, err := tx.Exec(`DELETE FROM mattermost_channel_memberships WHERE server_id = ? AND user_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Memberships))+`)`, append([]any{serverID, snapshot.Server.CurrentUserID}, membershipIDArgs(snapshot.Memberships)...)...); err != nil {
+		} else if _, err := exec.Exec(`DELETE FROM mattermost_channel_memberships WHERE server_id = ? AND user_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Memberships))+`)`, append([]any{serverID, snapshot.Server.CurrentUserID}, membershipIDArgs(snapshot.Memberships)...)...); err != nil {
 			return fail(err)
 		}
-		if _, err := tx.Exec(`DELETE FROM mattermost_channel_users WHERE server_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Channels))+`)`, append([]any{serverID}, channelIDArgs(snapshot.Channels)...)...); err != nil {
+		if _, err := exec.Exec(`DELETE FROM mattermost_channel_users WHERE server_id = ? AND channel_id NOT IN (`+placeholders(len(snapshot.Channels))+`)`, append([]any{serverID}, channelIDArgs(snapshot.Channels)...)...); err != nil {
 			return fail(err)
 		}
 	}
@@ -676,19 +706,74 @@ func membershipIDArgs(items []MattermostChannelMembership) []any {
 }
 
 func (db *DB) UpsertMattermostPost(serverID string, post MattermostPost) error {
-	return upsertMattermostPost(db.conn, serverID, post)
+	return db.UpsertMattermostPostContext(context.Background(), serverID, post)
+}
+
+func (db *DB) UpsertMattermostPostContext(ctx context.Context, serverID string, post MattermostPost) error {
+	if db.mattermostBeforeWrite != nil {
+		db.mattermostBeforeWrite()
+	}
+	return upsertMattermostPostContext(ctx, db.conn, serverID, post)
+}
+
+// UpsertMattermostRealtimePostContext persists a trusted server's realtime post
+// even when the authoritative channel bootstrap has not arrived yet.
+func (db *DB) UpsertMattermostRealtimePostContext(ctx context.Context, serverID string, post MattermostPost) error {
+	if err := validateMattermostPost(serverID, post); err != nil {
+		return err
+	}
+	if db.mattermostBeforeWrite != nil {
+		db.mattermostBeforeWrite()
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning Mattermost realtime post upsert: %w", err)
+	}
+	fail := func(err error) error {
+		_ = tx.Rollback()
+		return err
+	}
+	var trustedServerID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM mattermost_servers WHERE id = ?`, serverID).Scan(&trustedServerID); err != nil {
+		return fail(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO mattermost_channels
+		(server_id, id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at, is_active)
+		VALUES (?, ?, NULL, '', '', 'direct', 0, 0, 0, 0)
+		ON CONFLICT(server_id, id) DO NOTHING`, serverID, post.ChannelID); err != nil {
+		return fail(fmt.Errorf("creating Mattermost realtime channel placeholder: %w", err))
+	}
+	if err := upsertMattermostPostContext(ctx, tx, serverID, post); err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing Mattermost realtime post upsert: %w", err)
+	}
+	return nil
 }
 
 func upsertMattermostPost(exec mattermostExecer, serverID string, post MattermostPost) error {
+	return upsertMattermostPostContext(context.Background(), mattermostExecerContext{exec}, serverID, post)
+}
+
+type mattermostExecerContext struct {
+	mattermostExecer
+}
+
+func (e mattermostExecerContext) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+	return e.Exec(query, args...)
+}
+
+func upsertMattermostPostContext(ctx context.Context, exec mattermostContextExecer, serverID string, post MattermostPost) error {
 	if err := validateMattermostPost(serverID, post); err != nil {
 		return err
 	}
 	// Keep the merge inside one SQLite statement so concurrent writers serialize
 	// on the row. Newer revisions update supplied fields; equal revisions merge
 	// commutatively, with max timestamps/counters and deletion dominance.
-	_, err := exec.Exec(`INSERT INTO mattermost_posts
-		(server_id, id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := exec.ExecContext(ctx, `INSERT INTO mattermost_posts
+		(server_id, id, channel_id, user_id, root_id, text, correlation_id, created_at, updated_at, edited_at, deleted_at, reply_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(server_id, id) DO UPDATE SET
 		channel_id=CASE
 			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)
@@ -706,6 +791,10 @@ func upsertMattermostPost(exec mattermostExecer, serverID string, post Mattermos
 			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)
 				THEN CASE WHEN excluded.text <> '' THEN excluded.text ELSE mattermost_posts.text END
 			ELSE max(mattermost_posts.text, excluded.text) END,
+		correlation_id=CASE
+			WHEN max(excluded.created_at, excluded.updated_at, excluded.deleted_at) > max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)
+				THEN CASE WHEN excluded.correlation_id <> '' THEN excluded.correlation_id ELSE mattermost_posts.correlation_id END
+			ELSE max(mattermost_posts.correlation_id, excluded.correlation_id) END,
 		created_at=max(mattermost_posts.created_at, excluded.created_at),
 		updated_at=max(mattermost_posts.updated_at, excluded.updated_at),
 		edited_at=max(mattermost_posts.edited_at, excluded.edited_at),
@@ -715,7 +804,7 @@ func upsertMattermostPost(exec mattermostExecer, serverID string, post Mattermos
 			ELSE max(mattermost_posts.reply_count, excluded.reply_count) END
 		WHERE max(excluded.created_at, excluded.updated_at, excluded.deleted_at) >=
 		      max(mattermost_posts.created_at, mattermost_posts.updated_at, mattermost_posts.deleted_at)`,
-		serverID, post.ID, post.ChannelID, post.UserID, post.RootID, post.Text,
+		serverID, post.ID, post.ChannelID, post.UserID, post.RootID, post.Text, post.CorrelationID,
 		post.CreatedAt, post.UpdatedAt, post.EditedAt, post.DeletedAt, post.ReplyCount)
 	return wrapMattermostError("upserting post", err)
 }
@@ -727,18 +816,26 @@ func (db *DB) UpsertMattermostPosts(serverID string, posts []MattermostPost) err
 // UpsertMattermostHistory stores one fetched page and its resolved authors in
 // a single transaction.
 func (db *DB) UpsertMattermostHistory(serverID string, posts []MattermostPost, users []MattermostUser) error {
-	tx, err := db.conn.Begin()
+	return db.UpsertMattermostHistoryContext(context.Background(), serverID, posts, users)
+}
+
+func (db *DB) UpsertMattermostHistoryContext(ctx context.Context, serverID string, posts []MattermostPost, users []MattermostUser) error {
+	if db.mattermostBeforeWrite != nil {
+		db.mattermostBeforeWrite()
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning Mattermost post upsert: %w", err)
 	}
+	exec := mattermostContextExec{ctx: ctx, exec: tx}
 	for _, post := range posts {
-		if err := upsertMattermostPost(tx, serverID, post); err != nil {
+		if err := upsertMattermostPost(exec, serverID, post); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 	}
 	for _, user := range users {
-		if err := upsertMattermostUser(tx, serverID, user); err != nil {
+		if err := upsertMattermostUser(exec, serverID, user); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -751,9 +848,9 @@ func (db *DB) UpsertMattermostHistory(serverID string, posts []MattermostPost, u
 
 func (db *DB) GetMattermostPost(serverID, postID string) (MattermostPost, error) {
 	var post MattermostPost
-	err := db.conn.QueryRow(`SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count
+	err := db.conn.QueryRow(`SELECT id, channel_id, user_id, root_id, text, correlation_id, created_at, updated_at, edited_at, deleted_at, reply_count
 		FROM mattermost_posts WHERE server_id = ? AND id = ?`, serverID, postID).
-		Scan(&post.ID, &post.ChannelID, &post.UserID, &post.RootID, &post.Text,
+		Scan(&post.ID, &post.ChannelID, &post.UserID, &post.RootID, &post.Text, &post.CorrelationID,
 			&post.CreatedAt, &post.UpdatedAt, &post.EditedAt, &post.DeletedAt, &post.ReplyCount)
 	return post, wrapMattermostError("getting post", err)
 }
@@ -765,7 +862,7 @@ func (db *DB) ListMattermostChannelPosts(serverID, channelID string, limit int, 
 	if limit <= 0 {
 		return nil, errors.New("Mattermost post limit must be positive")
 	}
-	inner := `SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count
+	inner := `SELECT id, channel_id, user_id, root_id, text, correlation_id, created_at, updated_at, edited_at, deleted_at, reply_count
 		FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND root_id = '' AND deleted_at = 0`
 	args := []any{serverID, channelID}
 	if beforePostID != "" {
@@ -794,7 +891,7 @@ func (db *DB) ListMattermostChannelTimeline(serverID, channelID string, limit in
 	if limit <= 0 {
 		return nil, errors.New("Mattermost post limit must be positive")
 	}
-	inner := `SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count
+	inner := `SELECT id, channel_id, user_id, root_id, text, correlation_id, created_at, updated_at, edited_at, deleted_at, reply_count
 		FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND deleted_at = 0`
 	args := []any{serverID, channelID}
 	if beforePostID != "" {
@@ -815,7 +912,7 @@ func (db *DB) ListMattermostThreadPosts(serverID, channelID, rootPostID string) 
 	if err := requireMattermostIDs(serverID, channelID, rootPostID); err != nil {
 		return nil, err
 	}
-	return db.queryMattermostPosts(`SELECT id, channel_id, user_id, root_id, text, created_at, updated_at, edited_at, deleted_at, reply_count
+	return db.queryMattermostPosts(`SELECT id, channel_id, user_id, root_id, text, correlation_id, created_at, updated_at, edited_at, deleted_at, reply_count
 		FROM mattermost_posts WHERE server_id = ? AND channel_id = ? AND deleted_at = 0 AND (id = ? OR root_id = ?)
 		ORDER BY created_at, id`, serverID, channelID, rootPostID, rootPostID)
 }
@@ -857,7 +954,7 @@ func (db *DB) queryMattermostPosts(query string, args ...any) ([]MattermostPost,
 	posts := []MattermostPost{}
 	for rows.Next() {
 		var post MattermostPost
-		if err := rows.Scan(&post.ID, &post.ChannelID, &post.UserID, &post.RootID, &post.Text,
+		if err := rows.Scan(&post.ID, &post.ChannelID, &post.UserID, &post.RootID, &post.Text, &post.CorrelationID,
 			&post.CreatedAt, &post.UpdatedAt, &post.EditedAt, &post.DeletedAt, &post.ReplyCount); err != nil {
 			return nil, fmt.Errorf("scanning Mattermost post: %w", err)
 		}

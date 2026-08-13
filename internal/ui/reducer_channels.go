@@ -67,12 +67,28 @@ import (
 
 var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
+	case MattermostHistoryRefreshMsg:
+		request := a.activeHistoryRequest
+		if request.ServerID != m.ServerID || request.ChannelID != m.ChannelID {
+			return nil, true
+		}
+		scope := a.mattermostScope(request)
+		if scope == nil || a.mattermostHistory == nil {
+			return nil, true
+		}
+		if scope.fetchInFlight {
+			scope.refreshPending = true
+			return nil, true
+		}
+		return a.fetchRecentMattermostHistory(scope), true
+
 	case MattermostMessagesLoadedMsg:
 		scope := a.mattermostScope(m.Request)
 		if scope == nil {
 			return nil, true
 		}
 		scope.recentInFlight = false
+		scope.fetchInFlight = false
 		models := a.modelsForMattermostScope(m.Request)
 		for _, mm := range models {
 			mm.SetLoading(false)
@@ -80,13 +96,19 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if m.Request == a.activeHistoryRequest {
 			a.statusbar.SetSyncing(false)
 		}
-		if m.Err == nil {
-			for _, mm := range models {
-				mm.ReconcileRecentPage(m.CachedIDs, m.AuthoritativeIDs, m.DeletedIDs, cloneMessageItems(m.Messages), m.HasMore)
-			}
-			a.mattermostHistoryExhausted[m.Request] = !m.HasMore
+		errorCmd := applyMattermostRecentPage(a, m.Request, m.CachedIDs, m.AuthoritativeIDs, m.DeletedIDs, m.Messages, m.HasMore, m.Err)
+		if scope.refreshPending {
+			scope.refreshPending = false
+			return tea.Batch(errorCmd, a.fetchRecentMattermostHistory(scope)), true
 		}
-		return nil, true
+		return errorCmd, true
+
+	case MattermostReconciledHistoryMsg:
+		request := a.activeHistoryRequest
+		if m.ServerID != ids.ServerID(a.activeServerID) || m.ChannelID != a.activeChannelID || m.Generation != a.selectionGeneration || request.ServerID != m.ServerID || request.ChannelID != m.ChannelID || !a.hasMattermostScope(request) {
+			return nil, true
+		}
+		return applyMattermostRecentPage(a, request, nil, m.AuthoritativeIDs, m.DeletedIDs, m.Messages, m.HasMore, m.Err), true
 
 	case MattermostOlderMessagesLoadedMsg:
 		delete(a.mattermostFetchingOlder, m.Request)
@@ -312,6 +334,43 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+func applyMattermostRecentPage(a *App, request HistoryRequest, cachedIDs, authoritativeIDs, deletedIDs []string, items []messages.MessageItem, hasMore bool, err error) tea.Cmd {
+	models := a.modelsForMattermostScope(request)
+	if err == nil {
+		for _, model := range models {
+			model.ReconcileRecentPage(cachedIDs, authoritativeIDs, deletedIDs, cloneMessageItems(items), hasMore)
+		}
+		a.mattermostHistoryExhausted[request] = !hasMore
+		return nil
+	}
+	for _, model := range models {
+		model.ReconcileRecentPage(nil, nil, nil, cloneMessageItems(items), true)
+	}
+	return func() tea.Msg { return ToastMsg{Text: "Mattermost history refresh failed; showing cached messages"} }
+}
+
+func (a *App) fetchRecentMattermostHistory(scope *mattermostHistoryScope) tea.Cmd {
+	scope.recentInFlight = true
+	scope.fetchInFlight = true
+	service := a.mattermostHistory
+	request := scope.request
+	ctx := scope.ctx
+	var cachedIDs []string
+	models := a.modelsForMattermostScope(request)
+	if len(models) > 0 {
+		items := models[0].Messages()
+		cachedIDs = make([]string, len(items))
+		for i := range items {
+			cachedIDs[i] = items[i].MessageID()
+		}
+	}
+	return func() tea.Msg {
+		msg := service.FetchRecent(ctx, request)
+		msg.CachedIDs = cachedIDs
+		return msg
+	}
+}
+
 // retargetActiveChannel points the App's active-channel context
 // (activeChannelID, typing throttle, compose targets, statusbar) at
 // the given channel and fires the async membership fetch. Factored
@@ -400,6 +459,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 		scope.recentInFlight = len(cached) > 0
+		scope.fetchInFlight = true
 		a.statusbar.SetSyncing(scope.recentInFlight)
 		service := a.mattermostHistory
 		cachedIDs := make([]string, len(cached))

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/config"
 	"github.com/nosovk/mmk/internal/ids"
@@ -174,8 +175,22 @@ func TestMattermostStartupRetainsHistoryCapableClientPerServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.After(time.Second)
+	for {
+		startup.mu.RLock()
+		retained := startup.contexts["s1"].client
+		startup.mu.RUnlock()
+		if retained != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for retained client")
+		default:
+		}
+	}
+	startup.Cancel()
 	startup.Wait()
-	defer startup.Cancel()
 	startup.mu.RLock()
 	retained := startup.contexts["s1"].client
 	startup.mu.RUnlock()
@@ -203,6 +218,46 @@ func TestApplyPendingMattermostMessagesQueuesCachedHistoryLifecycleForInit(t *te
 	}
 	if cmd := app.Init(); cmd == nil {
 		t.Fatal("live verification command was not queued for program Init")
+	}
+}
+
+func TestApplyPendingMattermostMessagesAppliesConnectionStatesThroughAppUpdate(t *testing.T) {
+	app := ui.NewApp()
+	items := []workspace.WorkspaceItem{
+		{ID: "s1", Name: "One", Initials: "ON", State: workspace.ItemStateReady},
+		{ID: "s2", Name: "Two", Initials: "TW", State: workspace.ItemStateReady},
+	}
+	applyPendingMattermostMessages(app, []tea.Msg{
+		mattermostRailMsg{Items: items},
+		ui.ServerReadyMsg{Server: ui.ServerViewState{ServerID: "s1"}},
+		ui.ServerReadyMsg{Server: ui.ServerViewState{ServerID: "s2"}},
+		ui.ServerConnectionStateMsg{ServerID: "s1", State: workspace.ItemStateOffline},
+		ui.ServerConnectionStateMsg{ServerID: "s1", State: workspace.ItemStateReconnecting},
+		ui.ServerConnectionStateMsg{ServerID: "s1", State: workspace.ItemStateReady},
+		ui.ServerConnectionStateMsg{ServerID: "s2", State: workspace.ItemStateOffline},
+	})
+	_, _ = app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	view := ansi.Strip(app.View().Content)
+	if !strings.Contains(view, "ON+") || !strings.Contains(view, "TW-") {
+		t.Fatalf("pending connection states not scoped/finalized in rail: %q", view)
+	}
+}
+
+func TestPendingConnectionStatesDoNotMakeCachedServerUnusable(t *testing.T) {
+	startup := reconciliationStartup(reconciliationBootstrapClient(), service.ServerSnapshot{
+		Server: mattermost.Server{ID: "s1", Name: "One"},
+		Sections: []service.ChannelSection{{Channels: []service.ChannelEntry{{
+			Channel: mattermost.Channel{ID: "c1", Kind: mattermost.ChannelKindPublic},
+		}}}},
+	})
+	app := ui.NewApp()
+	applyPendingMattermostMessages(app, []tea.Msg{
+		mattermostRailMsg{Items: []workspace.WorkspaceItem{{ID: "s1", Name: "One", Initials: "ON"}}},
+		ui.ServerReadyMsg{Server: startup.viewState("s1")},
+		ui.ServerConnectionStateMsg{ServerID: "s1", State: workspace.ItemStateOffline},
+	})
+	if msg := startup.switchMsg("s1"); msg == nil {
+		t.Fatal("offline cached server became unswitchable")
 	}
 }
 
@@ -382,12 +437,22 @@ func (blockingBootstrapClient) ChannelPosts(context.Context, string, mattermost.
 	return mattermost.MessagePage{}, errors.New("unused history")
 }
 
+func (blockingBootstrapClient) RunWebSocket(ctx context.Context, _ func(), _ func(mattermost.Event), _ func(error)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (blockingBootstrapClient) CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error) {
 	return mattermost.Message{}, errors.New("unused send")
 }
 
 func (fixedBlockingBootstrapClient) ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error) {
 	return mattermost.MessagePage{}, errors.New("unused history")
+}
+
+func (fixedBlockingBootstrapClient) RunWebSocket(ctx context.Context, _ func(), _ func(mattermost.Event), _ func(error)) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (fixedBlockingBootstrapClient) CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error) {

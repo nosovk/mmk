@@ -15,6 +15,7 @@ package ui
 
 import (
 	"image"
+	"sync"
 	"time"
 
 	"github.com/nosovk/mmk/internal/cache"
@@ -26,6 +27,30 @@ import (
 	"github.com/nosovk/mmk/internal/ui/sidebar"
 	"github.com/nosovk/mmk/internal/ui/workspace"
 )
+
+// UpdateApplied is an idempotent completion signal for callers that must wait
+// until App.Update and its deferred observers have finished processing a msg.
+type UpdateApplied struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func NewUpdateApplied() *UpdateApplied {
+	return &UpdateApplied{done: make(chan struct{})}
+}
+
+func (a *UpdateApplied) Done() <-chan struct{} {
+	if a == nil {
+		return nil
+	}
+	return a.done
+}
+
+func (a *UpdateApplied) MarkApplied() {
+	if a != nil {
+		a.once.Do(func() { close(a.done) })
+	}
+}
 
 // EmojiImageReadyMsg re-exports emoji.EmojiImageReadyMsg so reducers
 // can refer to it without an extra import. Dispatched when a previously
@@ -61,6 +86,20 @@ type (
 		Messages         []messages.MessageItem
 		HasMore          bool
 		Err              error
+	}
+	MattermostReconciledHistoryMsg struct {
+		ServerID         ids.ServerID
+		ChannelID        string
+		Generation       uint64
+		AuthoritativeIDs []string
+		DeletedIDs       []string
+		Messages         []messages.MessageItem
+		HasMore          bool
+		Err              error
+	}
+	MattermostHistoryRefreshMsg struct {
+		ServerID  ids.ServerID
+		ChannelID string
 	}
 	MattermostOlderMessagesLoadedMsg struct {
 		Request          HistoryRequest
@@ -318,7 +357,8 @@ type (
 		Server ServerViewState
 	}
 	ServerRefreshedMsg struct {
-		Server ServerViewState
+		Server  ServerViewState
+		Applied *UpdateApplied
 	}
 	ServerSwitchedMsg struct {
 		Server ServerViewState
@@ -327,6 +367,10 @@ type (
 		ServerID ids.ServerID
 		State    workspace.ItemState
 		Err      error
+	}
+	ServerConnectionStateMsg struct {
+		ServerID ids.ServerID
+		State    workspace.ItemState
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.

@@ -83,6 +83,10 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return nil, true
 
+	case ServerConnectionStateMsg:
+		a.workspaceRail.SetState(string(m.ServerID), m.State, nil)
+		return nil, true
+
 	case WorkspaceReadyMsg:
 		return reduceWorkspaceReady(a, m), true
 
@@ -185,7 +189,37 @@ func reduceServerRefreshed(a *App, state ServerViewState) tea.Cmd {
 	if string(state.ServerID) != a.activeServerID {
 		return nil
 	}
-	return activateServer(a, state, true)
+	a.sidebar.SetSectionsProvider(state.SectionsProvider)
+	readState := state.ReadState
+	a.sidebar.SetReadStateReader(func() map[string]cache.ReadState { return readState })
+	a.SetChannels(state.Channels)
+	a.channelFinder.SetItems(state.FinderItems)
+	a.SetUserNames(state.UserNames)
+	a.SetCurrentUserID(state.UserID)
+	a.workspaceRail.SetUnread(a.activeServerID, state.HasUnread)
+
+	for _, channel := range state.Channels {
+		if channel.ID == a.activeChannelID {
+			a.sidebar.SelectByID(channel.ID)
+			a.sidebar.SetActiveChannelID(channel.ID)
+			return nil
+		}
+	}
+	if len(state.Channels) == 0 {
+		a.activeChannelID = ""
+		a.installFocusedMattermostScope(state.ServerID, "")
+		a.sidebar.SetActiveChannelID("")
+		a.messagepane.SetLoading(false)
+		a.messagepane.SetMessages(nil)
+		a.CloseThread()
+		a.clearSelections()
+		return nil
+	}
+
+	target := state.Channels[0]
+	cmd, _ := reduceChannelSelected(a, ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type})
+	a.sidebar.SelectByID(target.ID)
+	return cmd
 }
 
 func reduceServerSwitched(a *App, state ServerViewState) tea.Cmd {
@@ -227,6 +261,7 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	a.SetUserGroups(nil)
 	a.SetCurrentUserID(state.UserID)
 	a.activeServerID = string(state.ServerID)
+	a.activeChannelID = ""
 	a.workspaceRail.SelectByID(a.activeServerID)
 	a.workspaceRail.SetUnread(a.activeServerID, state.HasUnread)
 	if state.Theme != "" {

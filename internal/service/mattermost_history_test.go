@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/nosovk/mmk/internal/cache"
@@ -162,12 +163,23 @@ func TestMattermostHistoryFetchFailureIsDistinctAndDoesNotEraseCache(t *testing.
 	db := setupMattermostHistoryDB(t)
 	_ = db.UpsertMattermostPost("s1", cache.MattermostPost{ID: "cached", ChannelID: "c1", CreatedAt: 1})
 	svc := NewMattermostHistoryService("s1", &fakeMattermostHistoryClient{err: errors.New("offline")}, db, 20)
-	if _, err := svc.FetchRecent(context.Background(), "c1"); err == nil {
-		t.Fatal("expected fetch error")
+	page, err := svc.FetchRecent(context.Background(), "c1")
+	if err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("err=%v want live fetch error", err)
 	}
-	page, err := svc.ReadCached("c1", "")
-	if err != nil || !reflect.DeepEqual(historyIDs(page.Messages), []string{"cached"}) {
-		t.Fatalf("cached=%#v err=%v", page, err)
+	if !reflect.DeepEqual(historyIDs(page.Messages), []string{"cached"}) {
+		t.Fatalf("cached fallback=%#v", page)
+	}
+}
+
+func TestMattermostHistoryFetchFailureWithoutCacheReturnsEmptyPageAndError(t *testing.T) {
+	db := setupMattermostHistoryDB(t)
+	page, err := NewMattermostHistoryService("s1", &fakeMattermostHistoryClient{err: errors.New("offline")}, db, 20).FetchRecent(context.Background(), "c1")
+	if err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("err=%v want live fetch error", err)
+	}
+	if len(page.Messages) != 0 {
+		t.Fatalf("messages=%#v want empty fallback", page.Messages)
 	}
 }
 
@@ -229,6 +241,38 @@ func TestMattermostHistoryCancellationDuringAuthorLookupAbortsWithoutCachingPage
 	if _, err := db.GetMattermostPost("s1", "p1"); err == nil {
 		t.Fatal("canceled page was cached")
 	}
+}
+
+func TestMattermostHistoryPassesContextToCacheWrite(t *testing.T) {
+	store := &contextRecordingHistoryStore{writeEntered: make(chan struct{})}
+	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{Messages: []mattermost.Message{{ID: "p1", ChannelID: "c1"}}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewMattermostHistoryService("s1", client, store, 20).FetchRecent(ctx, "c1")
+		done <- err
+	}()
+	<-store.writeEntered
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type contextRecordingHistoryStore struct {
+	writeEntered chan struct{}
+}
+
+func (*contextRecordingHistoryStore) ListMattermostChannelTimeline(string, string, int, string) ([]cache.MattermostPost, error) {
+	return nil, nil
+}
+func (*contextRecordingHistoryStore) ListMattermostUsers(string) ([]cache.MattermostUser, error) {
+	return nil, nil
+}
+func (s *contextRecordingHistoryStore) UpsertMattermostHistoryContext(ctx context.Context, _ string, _ []cache.MattermostPost, _ []cache.MattermostUser) error {
+	close(s.writeEntered)
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func setupMattermostHistoryDB(t *testing.T) *cache.DB {

@@ -109,6 +109,10 @@ type JoinChannelFunc func(channelID ids.ChannelID, channelName string) tea.Msg
 // the WorkspaceContext). Always called regardless of FromHistory.
 type ChannelVisitRecorder func(channelID ids.ChannelID)
 
+// SelectionObserver receives the active server/channel pair after an App
+// update applies a selection change. It runs synchronously on the UI loop.
+type SelectionObserver func(serverID ids.ServerID, channelID string)
+
 // ChannelLookupFunc returns metadata for a channel that the App has
 // in its navigation history. Used by navigateBack / navigateForward
 // to skip stale entries (channels the user has left, archived, or

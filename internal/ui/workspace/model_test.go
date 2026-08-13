@@ -27,6 +27,23 @@ func TestServerRailPreservesOrderDuplicateNamesAndStateByID(t *testing.T) {
 	}
 }
 
+func TestServerRailRepresentsRealtimeConnectionStates(t *testing.T) {
+	m := New([]WorkspaceItem{{ID: "s1", Name: "One", Initials: "ON", State: ItemStateLoading}}, 0)
+	for _, state := range []ItemState{ItemStateConnecting, ItemStateReady, ItemStateOffline, ItemStateReconnecting} {
+		m.SetState("s1", state, nil)
+		items := m.Items()
+		if items[0].State != state || items[0].Error != "" {
+			t.Fatalf("state=%v item=%#v", state, items[0])
+		}
+		if view := m.View(10); !strings.Contains(view, connectionMarker(state)) {
+			t.Fatalf("state=%v view=%q missing marker %q", state, view, connectionMarker(state))
+		}
+		if got, ok := m.ClickAt(1); !ok || got.ID != "s1" {
+			t.Fatalf("state=%v made server unswitchable: item=%#v ok=%v", state, got, ok)
+		}
+	}
+}
+
 func TestWorkspaceRailView(t *testing.T) {
 	m := New([]WorkspaceItem{
 		{ID: "T1", Name: "Acme Corp", Initials: "AC", HasUnread: false},

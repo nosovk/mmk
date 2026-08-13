@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMattermostCRUDScopesRemoteIDsByServerAndCascadesOnlyDeletedServer(t *testing.T) {
@@ -797,6 +799,141 @@ func TestMattermostPostCachePreservesEditedAt(t *testing.T) {
 	}
 }
 
+func TestMattermostPostCachePreservesCorrelationID(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "opaque/correlation:id"
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1", CorrelationID: want}); err != nil {
+		t.Fatal(err)
+	}
+	post, err := db.GetMattermostPost("s1", "p1")
+	if err != nil || post.CorrelationID != want {
+		t.Fatalf("post=%#v err=%v", post, err)
+	}
+}
+
+func TestMattermostPostContextWriteCancelsWhileDatabaseLocked(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "cache.db")
+	db, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.UpsertMattermostServer(MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	locker, err := sql.Open("sqlite", appendPragmas(dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	if _, err := locker.Exec(`BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Exec(`ROLLBACK`)
+
+	attempted := make(chan struct{})
+	db.mattermostBeforeWrite = func() { close(attempted) }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- db.UpsertMattermostPostContext(ctx, "s1", MattermostPost{ID: "p1", ChannelID: "c1"})
+	}()
+	<-attempted
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("context write did not cancel promptly")
+	}
+}
+
+func TestMattermostSnapshotContextReplacementCancelsWhileDatabaseLocked(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "cache.db")
+	db, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	locker, err := sql.Open("sqlite", appendPragmas(dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	if _, err := locker.Exec(`BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Exec(`ROLLBACK`)
+	attempted := make(chan struct{})
+	db.mattermostBeforeWrite = func() { close(attempted) }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- db.ReplaceMattermostBootstrapSnapshotContext(ctx, MattermostBootstrapSnapshot{
+			Server: MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}, CurrentUser: MattermostUser{ID: "u1"},
+		})
+	}()
+	<-attempted
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("snapshot replacement did not cancel promptly")
+	}
+}
+
+func TestMattermostHistoryContextWriteCancelsWhileDatabaseLocked(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "cache.db")
+	db, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	locker, err := sql.Open("sqlite", appendPragmas(dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	if _, err := locker.Exec(`BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Exec(`ROLLBACK`)
+	attempted := make(chan struct{})
+	db.mattermostBeforeWrite = func() { close(attempted) }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- db.UpsertMattermostHistoryContext(ctx, "s1", []MattermostPost{{ID: "p1", ChannelID: "c1"}}, nil)
+	}()
+	<-attempted
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("history write did not cancel promptly")
+	}
+}
+
 func TestMattermostMarkDeletedWinsAtEqualRevision(t *testing.T) {
 	db := setupMattermostDB(t)
 	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
@@ -916,6 +1053,83 @@ func TestMattermostServerDeleteCascadesAllChildCategories(t *testing.T) {
 		if count != 0 {
 			t.Errorf("%s retained %d rows", table, count)
 		}
+	}
+}
+
+func TestMattermostRealtimePostCreatesHiddenPlaceholderAndAuthoritativeSnapshotEnrichesIt(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostUser("s1", MattermostUser{ID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	post := MattermostPost{ID: "p1", ChannelID: "unknown-channel", UserID: "u2", Text: "realtime", CreatedAt: 10}
+	if err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", post); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := db.GetMattermostPost("s1", post.ID)
+	if err != nil || !reflect.DeepEqual(stored, post) {
+		t.Fatalf("post=%#v err=%v", stored, err)
+	}
+	placeholder, err := db.GetMattermostChannel("s1", post.ChannelID)
+	var placeholderActive bool
+	if scanErr := db.conn.QueryRow(`SELECT is_active FROM mattermost_channels WHERE server_id = ? AND id = ?`, "s1", post.ChannelID).Scan(&placeholderActive); scanErr != nil {
+		t.Fatal(scanErr)
+	}
+	if err != nil || placeholder.Kind != "direct" || placeholderActive {
+		t.Fatalf("placeholder=%#v err=%v", placeholder, err)
+	}
+	snapshot, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range snapshot.Channels {
+		if channel.ID == post.ChannelID {
+			t.Fatal("inactive realtime placeholder appeared in bootstrap snapshot")
+		}
+	}
+
+	authoritative := MattermostBootstrapSnapshot{
+		Server:      MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1", LastSyncedAt: 20},
+		CurrentUser: MattermostUser{ID: "u1"},
+		Teams:       []MattermostTeam{{ID: "t1", UpdatedAt: 20}},
+		Channels:    []MattermostChannel{{ID: post.ChannelID, TeamID: "t1", Name: "town-square", DisplayName: "Town Square", Kind: "public", UpdatedAt: 20}},
+	}
+	if err := db.ReplaceMattermostBootstrapSnapshot(authoritative); err != nil {
+		t.Fatal(err)
+	}
+	channel, err := db.GetMattermostChannel("s1", post.ChannelID)
+	var channelActive bool
+	if scanErr := db.conn.QueryRow(`SELECT is_active FROM mattermost_channels WHERE server_id = ? AND id = ?`, "s1", post.ChannelID).Scan(&channelActive); scanErr != nil {
+		t.Fatal(scanErr)
+	}
+	if err != nil || channel.Name != "town-square" || channel.DisplayName != "Town Square" || channel.Kind != "public" || !channelActive {
+		t.Fatalf("enriched channel=%#v err=%v", channel, err)
+	}
+	if _, err := db.GetMattermostPost("s1", post.ID); err != nil {
+		t.Fatalf("authoritative replacement removed realtime post: %v", err)
+	}
+}
+
+func TestMattermostRealtimePostRequiresTrustedExistingServer(t *testing.T) {
+	db := setupMattermostDB(t)
+	err := db.UpsertMattermostRealtimePostContext(context.Background(), "missing", MattermostPost{ID: "p1", ChannelID: "c1"})
+	if err == nil {
+		t.Fatal("missing trusted server accepted")
+	}
+	if _, err := db.GetMattermostChannel("missing", "c1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("placeholder lookup err=%v want sql.ErrNoRows", err)
+	}
+}
+
+func TestMattermostRealtimePostContextCancellationRollsBackPlaceholder(t *testing.T) {
+	db := setupMattermostDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := db.UpsertMattermostRealtimePostContext(ctx, "s1", MattermostPost{ID: "p1", ChannelID: "unknown"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+	if _, err := db.GetMattermostChannel("s1", "unknown"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("placeholder persisted after cancellation: %v", err)
 	}
 }
 

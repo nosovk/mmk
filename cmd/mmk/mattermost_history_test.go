@@ -22,6 +22,11 @@ func (c *contextHistoryClient) ChannelPosts(ctx context.Context, _ string, _ mat
 	return mattermost.MessagePage{}, ctx.Err()
 }
 
+func (c *contextHistoryClient) RunWebSocket(ctx context.Context, _ func(), _ func(mattermost.Event), _ func(error)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func TestMattermostHistoryItemsCarryTransportCorrelationWithoutPersistence(t *testing.T) {
 	source := []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "opaque/post:id", CorrelationID: "opaque/correlation:id", Text: "body"}, UserName: "alice"}}
 	want := []messages.MessageItem{{ID: "opaque/post:id", CorrelationID: "opaque/correlation:id", Format: messages.FormatMattermostPlain, UserName: "alice", Text: "body"}}

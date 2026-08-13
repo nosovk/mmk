@@ -155,8 +155,10 @@ type App struct {
 	renderCache *panelRenderCache
 
 	// Current context
-	activeChannelID string
-	activeServerID  string // workspace whose data is currently loaded into the side panels
+	activeChannelID     string
+	activeServerID      string // workspace whose data is currently loaded into the side panels
+	selectionGeneration uint64
+	selectionObserver   SelectionObserver
 
 	// windowTitle is the cached terminal-window-title string, recomputed
 	// by notifyReadStateChanged on every read-state mutation and read by
@@ -614,6 +616,18 @@ func (a *App) QueueInitCmd(cmd tea.Cmd) {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if refresh, ok := msg.(ServerRefreshedMsg); ok && refresh.Applied != nil {
+		defer refresh.Applied.MarkApplied()
+	}
+	previousServerID, previousChannelID := a.activeServerID, a.activeChannelID
+	defer func() {
+		if a.selectionObserver != nil && (a.activeServerID != previousServerID || a.activeChannelID != previousChannelID) {
+			a.selectionGeneration++
+			a.selectionObserver(ids.ServerID(a.activeServerID), a.activeChannelID)
+		} else if a.activeServerID != previousServerID || a.activeChannelID != previousChannelID {
+			a.selectionGeneration++
+		}
+	}()
 	var cmds []tea.Cmd
 
 	// Phase 4 reducer chain (extension point — see internal/ui/reducers.go).
@@ -2504,6 +2518,15 @@ func (a *App) nowFormatted() string {
 // ActiveChannelID returns the ID of the currently viewed channel.
 func (a *App) ActiveChannelID() string {
 	return a.activeChannelID
+}
+
+// SetSelectionObserver installs a synchronous observer for applied selection
+// changes. The callback is invoked immediately with the current pair.
+func (a *App) SetSelectionObserver(observer SelectionObserver) {
+	a.selectionObserver = observer
+	if observer != nil {
+		observer(ids.ServerID(a.activeServerID), a.activeChannelID)
+	}
 }
 
 // SetWorkspaceSwitcher sets the callback used to switch workspaces.

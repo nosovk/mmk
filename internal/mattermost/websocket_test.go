@@ -59,6 +59,10 @@ func TestWebSocketConnectsAuthenticatesDecodesAndToleratesUnknownEvents(t *testi
 			return
 		}
 		close(authenticated)
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			serverErrors <- err
+			return
+		}
 
 		if err := conn.WriteJSON(map[string]any{"event": "future_event", "data": map[string]any{"value": true}}); err != nil {
 			serverErrors <- err
@@ -80,7 +84,7 @@ func TestWebSocketConnectsAuthenticatesDecodesAndToleratesUnknownEvents(t *testi
 	t.Cleanup(cancel)
 	events := make(chan Event, 1)
 	done := make(chan error, 1)
-	go func() { done <- client.RunWebSocket(ctx, func(event Event) { events <- event }) }()
+	go func() { done <- client.RunWebSocket(ctx, func() {}, func(event Event) { events <- event }, nil) }()
 
 	waitWebSocket(t, authenticated, "authentication challenge")
 	got := waitWebSocket(t, events, "posted event")
@@ -99,6 +103,326 @@ func TestWebSocketConnectsAuthenticatesDecodesAndToleratesUnknownEvents(t *testi
 	}
 }
 
+func TestWebSocketContinuesAfterMalformedPostedFrame(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"broken"`}})
+		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"channel-1","message":"valid"}`}})
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.URL, "test-token", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan Event, 1)
+	diagnostics := make(chan error, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- client.RunWebSocket(ctx, func() {}, func(event Event) { events <- event }, func(err error) { diagnostics <- err })
+	}()
+
+	if err := waitWebSocket(t, diagnostics, "malformed frame diagnostic"); err == nil || strings.Contains(err.Error(), "broken") {
+		t.Fatalf("diagnostic=%v", err)
+	}
+	got := waitWebSocket(t, events, "valid event after malformed frame")
+	want := PostedEvent{Message: Message{ID: "post-1", ChannelID: "channel-1", Text: "valid"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("event=%#v want %#v", got, want)
+	}
+	cancel()
+	if err := waitWebSocket(t, done, "cancellation"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
+	}
+}
+
+func TestWebSocketStopsAfterConsecutiveMalformedFrameBudget(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			return
+		}
+		for range maxConsecutiveMalformedWebSocketFrames {
+			_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": "sentinel-malformed-payload"}})
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClient(server.URL, "test-token", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics := make(chan error, maxConsecutiveMalformedWebSocketFrames)
+	err = client.RunWebSocket(context.Background(), func() {}, func(Event) {}, func(err error) { diagnostics <- err })
+	if err == nil || !strings.Contains(err.Error(), "malformed frame budget") || strings.Contains(err.Error(), "sentinel") {
+		t.Fatalf("error=%v", err)
+	}
+	if len(diagnostics) != maxConsecutiveMalformedWebSocketFrames {
+		t.Fatalf("diagnostics=%d want %d", len(diagnostics), maxConsecutiveMalformedWebSocketFrames)
+	}
+}
+
+func TestWebSocketValidUnknownEventResetsMalformedFrameBudget(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			return
+		}
+		for range maxConsecutiveMalformedWebSocketFrames - 1 {
+			_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": "bad"}})
+		}
+		_ = conn.WriteJSON(map[string]any{"event": "future_event", "data": map[string]any{"ok": true}})
+		for range maxConsecutiveMalformedWebSocketFrames - 1 {
+			_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": "bad"}})
+		}
+		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"c1"}`}})
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClient(server.URL, "test-token", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan Event, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- client.RunWebSocket(ctx, func() {}, func(event Event) { events <- event }, func(error) {})
+	}()
+	waitWebSocket(t, events, "valid event after budget resets")
+	cancel()
+	if err := waitWebSocket(t, done, "cancellation"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestWebSocketSignalsReadyAfterAuthentication(t *testing.T) {
+	authenticated := make(chan struct{})
+	sendAck := make(chan struct{})
+	sendEvent := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		close(authenticated)
+		<-sendAck
+		_ = conn.WriteJSON(map[string]any{"status": "OK", "seq_reply": 1})
+		<-sendEvent
+		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"channel-1","user_id":"user-1","message":"hello","create_at":10}`}})
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.URL, "test-token", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ready := make(chan struct{}, 2)
+	events := make(chan Event, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- client.RunWebSocket(ctx, func() { ready <- struct{}{} }, func(event Event) { events <- event }, nil)
+	}()
+
+	waitWebSocket(t, authenticated, "authentication challenge")
+	select {
+	case <-ready:
+		t.Fatal("ready callback fired before authentication acknowledgement")
+	default:
+	}
+	close(sendAck)
+	waitWebSocket(t, ready, "ready callback")
+	close(sendEvent)
+	waitWebSocket(t, events, "event after ready callback")
+	select {
+	case <-ready:
+		t.Fatal("ready callback fired more than once")
+	default:
+	}
+	cancel()
+	if err := waitWebSocket(t, done, "cancellation"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	select {
+	case <-ready:
+		t.Fatal("ready callback fired again during shutdown")
+	default:
+	}
+}
+
+func TestWebSocketRejectsAuthenticationAcknowledgementAndDoesNotDeliverPreAuthEvent(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"pre-auth","channel_id":"c1"}`}})
+		_ = conn.WriteJSON(map[string]any{
+			"status": "FAIL", "seq_reply": 1,
+			"error": map[string]any{"message": "sentinel-raw-auth-error", "detailed_error": "sentinel-token"},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.URL, "sentinel-token", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := atomic.Bool{}
+	delivered := atomic.Bool{}
+	err = client.RunWebSocket(context.Background(), func() { ready.Store(true) }, func(Event) { delivered.Store(true) }, nil)
+	if err == nil || !strings.Contains(err.Error(), "authenticate Mattermost WebSocket") {
+		t.Fatalf("error=%v want authentication error", err)
+	}
+	if strings.Contains(err.Error(), "sentinel-token") || strings.Contains(err.Error(), "sentinel-raw-auth-error") {
+		t.Fatalf("authentication error exposed secret or raw response: %v", err)
+	}
+	if ready.Load() || delivered.Load() {
+		t.Fatalf("ready=%v delivered=%v want both false", ready.Load(), delivered.Load())
+	}
+}
+
+func TestWebSocketCancellationWhileWaitingForAuthenticationAcknowledgement(t *testing.T) {
+	challengeRead := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		close(challengeRead)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.URL, "test-token", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- client.RunWebSocket(ctx, func() {}, func(Event) {}, nil) }()
+	waitWebSocket(t, challengeRead, "authentication challenge")
+	cancel()
+	if err := waitWebSocket(t, done, "authentication acknowledgement cancellation"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
+	}
+}
+
+func TestWebSocketDoesNotSignalReadyWhenDialFails(t *testing.T) {
+	client, err := NewClient("http://127.0.0.1:0", "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := atomic.Bool{}
+
+	err = client.RunWebSocket(context.Background(), func() { ready.Store(true) }, func(Event) {}, nil)
+	if err == nil {
+		t.Fatal("error = nil, want dial error")
+	}
+	if ready.Load() {
+		t.Fatal("ready callback fired after dial failure")
+	}
+}
+
+func TestWebSocketDoesNotSignalReadyWhenAuthenticationWriteFails(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	baseDial := transport.DialContext
+	if baseDial == nil {
+		baseDial = (&net.Dialer{}).DialContext
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := baseDial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return &failingAuthConn{Conn: conn}, nil
+	}
+	client, err := NewClient(server.URL, "test-token", WithHTTPClient(&http.Client{Transport: transport}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := atomic.Bool{}
+
+	err = client.RunWebSocket(context.Background(), func() { ready.Store(true) }, func(Event) {}, nil)
+	if err == nil || !strings.Contains(err.Error(), "authenticate Mattermost WebSocket") {
+		t.Fatalf("error = %v, want authentication error", err)
+	}
+	if ready.Load() {
+		t.Fatal("ready callback fired after authentication failure")
+	}
+}
+
+func TestWebSocketRejectsNilCallbacks(t *testing.T) {
+	client, err := NewClient("https://chat.example.com", "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := client.RunWebSocket(context.Background(), nil, func(Event) {}, nil); err == nil || !strings.Contains(err.Error(), "ready callback") {
+		t.Fatalf("nil readiness callback error = %v, want validation error", err)
+	}
+	if err := client.RunWebSocket(context.Background(), func() {}, nil, nil); err == nil || !strings.Contains(err.Error(), "event handler") {
+		t.Fatalf("nil event callback error = %v, want validation error", err)
+	}
+}
+
 func TestWebSocketRespondsToPing(t *testing.T) {
 	pong := make(chan struct{})
 	serverErrors := make(chan error, 1)
@@ -111,6 +435,10 @@ func TestWebSocketRespondsToPing(t *testing.T) {
 		}
 		defer conn.Close()
 		if _, _, err := conn.ReadMessage(); err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
 			serverErrors <- err
 			return
 		}
@@ -145,7 +473,7 @@ func TestWebSocketRespondsToPing(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- client.RunWebSocket(ctx, func(Event) {}) }()
+	go func() { done <- client.RunWebSocket(ctx, func() {}, func(Event) {}, nil) }()
 	waitWebSocket(t, pong, "pong")
 	cancel()
 	if err := waitWebSocket(t, done, "cancellation"); !errors.Is(err, context.Canceled) {
@@ -165,6 +493,9 @@ func TestWebSocketCancellationUnblocksRead(t *testing.T) {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
 		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			return
+		}
 		close(connected)
 		<-r.Context().Done()
 	}))
@@ -176,7 +507,7 @@ func TestWebSocketCancellationUnblocksRead(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- client.RunWebSocket(ctx, func(Event) {}) }()
+	go func() { done <- client.RunWebSocket(ctx, func() {}, func(Event) {}, nil) }()
 	waitWebSocket(t, connected, "connection")
 	cancel()
 	if err := waitWebSocket(t, done, "cancellation"); !errors.Is(err, context.Canceled) {
@@ -195,6 +526,9 @@ func TestWebSocketRejectsOversizedMessage(t *testing.T) {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
 		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			return
+		}
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"event":"posted","data":{"post":"{\"id\":\"post-1\",\"channel_id\":\"channel-1\",\"message\":\"`+strings.Repeat("x", maxSuccessBodyBytes)+`\"}"}}`))
 	}))
 	t.Cleanup(server.Close)
@@ -204,7 +538,7 @@ func TestWebSocketRejectsOversizedMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	delivered := atomic.Bool{}
-	err = client.RunWebSocket(context.Background(), func(Event) { delivered.Store(true) })
+	err = client.RunWebSocket(context.Background(), func() {}, func(Event) { delivered.Store(true) }, nil)
 	if !errors.Is(err, websocket.ErrReadLimit) {
 		t.Fatalf("error = %v, want websocket.ErrReadLimit", err)
 	}
@@ -223,7 +557,7 @@ func TestWebSocketRejectsUnsupportedHTTPTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = client.RunWebSocket(context.Background(), func(Event) {})
+	err = client.RunWebSocket(context.Background(), func() {}, func(Event) {}, nil)
 	if err == nil || !strings.Contains(err.Error(), "HTTP transport") {
 		t.Fatalf("error = %v, want unsupported HTTP transport setup error", err)
 	}
@@ -242,10 +576,14 @@ func TestWebSocketUsesHTTPClientCookieJar(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		if _, _, err := conn.ReadMessage(); err == nil {
-			close(authenticated)
-			<-r.Context().Done()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
 		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			return
+		}
+		close(authenticated)
+		<-r.Context().Done()
 	}))
 	t.Cleanup(server.Close)
 
@@ -258,7 +596,7 @@ func TestWebSocketUsesHTTPClientCookieJar(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- client.RunWebSocket(ctx, func(Event) {}) }()
+	go func() { done <- client.RunWebSocket(ctx, func() {}, func(Event) {}, nil) }()
 	waitWebSocket(t, authenticated, "cookie-authenticated WebSocket")
 	cancel()
 	err = waitWebSocket(t, done, "cookie test cancellation")
@@ -276,10 +614,14 @@ func TestWebSocketUsesHTTP11WithHTTP2CapableTLSTransport(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		if _, _, err := conn.ReadMessage(); err == nil {
-			close(authenticated)
-			<-r.Context().Done()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
 		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			return
+		}
+		close(authenticated)
+		<-r.Context().Done()
 	}))
 	server.EnableHTTP2 = true
 	server.StartTLS()
@@ -295,7 +637,7 @@ func TestWebSocketUsesHTTP11WithHTTP2CapableTLSTransport(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- client.RunWebSocket(ctx, func(Event) {}) }()
+	go func() { done <- client.RunWebSocket(ctx, func() {}, func(Event) {}, nil) }()
 	select {
 	case <-authenticated:
 	case err := <-done:
@@ -340,7 +682,7 @@ func TestWebSocketCancellationInterruptsAuthenticationWrite(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- client.RunWebSocket(ctx, func(Event) {}) }()
+	go func() { done <- client.RunWebSocket(ctx, func() {}, func(Event) {}, nil) }()
 	waitWebSocket(t, connected, "WebSocket handshake")
 	cancel()
 	if err := waitWebSocket(t, done, "authentication cancellation"); !errors.Is(err, context.Canceled) {
@@ -370,6 +712,18 @@ type blockingAuthConn struct {
 	once      sync.Once
 }
 
+type failingAuthConn struct {
+	net.Conn
+	writes atomic.Int32
+}
+
+func (c *failingAuthConn) Write(p []byte) (int, error) {
+	if c.writes.Add(1) == 1 {
+		return c.Conn.Write(p)
+	}
+	return 0, errors.New("forced authentication write failure")
+}
+
 func (c *blockingAuthConn) Write(p []byte) (int, error) {
 	if c.writes.Add(1) == 1 {
 		return c.Conn.Write(p)
@@ -390,4 +744,8 @@ func waitWebSocket[T any](t *testing.T, ch <-chan T, description string) T {
 		var zero T
 		return zero
 	}
+}
+
+func writeWebSocketAuthOK(conn *websocket.Conn) error {
+	return conn.WriteJSON(map[string]any{"status": "OK", "seq_reply": 1})
 }

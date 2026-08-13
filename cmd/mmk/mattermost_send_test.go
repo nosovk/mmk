@@ -208,6 +208,10 @@ func (*recordingMattermostSendClient) UsersByGroupChannelIDs(context.Context, []
 func (*recordingMattermostSendClient) ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error) {
 	return mattermost.MessagePage{}, errors.New("unused history")
 }
+func (*recordingMattermostSendClient) RunWebSocket(ctx context.Context, _ func(), _ func(mattermost.Event), _ func(error)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
 
 func mattermostSendStartup(contexts map[ids.ServerID]mattermostServerContext) *mattermostStartup {
 	if contexts == nil {

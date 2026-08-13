@@ -1,14 +1,18 @@
 # mmk Implementation Status
 
-Last updated: 2026-08-11
+Last updated: 2026-08-13
 
 ## Mattermost Migration
 
 - [x] Task 8: server rail, team-grouped sidebar, server switching, unread presentation, and capability gates
 - [x] Task 9: cache-first read-only Mattermost channel timeline, exact REST page ordering, opaque post IDs, author resolution, and older-history pagination
-- [ ] Mattermost compose/send remains disabled until Task 10
+- [x] Task 10: Mattermost compose/send with optimistic delivery and correlation-based reconciliation
+- [x] Task 11: Mattermost realtime event decoding and post delivery
+- [x] Task 12: authenticated per-server WebSocket reconnect, server-scoped connection state, non-destructive metadata reconciliation, active-channel recent-history catch-up, realtime post persistence, REST-failure cache fallback, and hidden unknown-channel placeholders
 
 Mattermost history renders cached roots and replies before the Bubble Tea program starts when startup data is already available, then schedules live verification through `Init`. Recent verification preserves a reader's selected post and viewport anchor unless they are following the newest post. Older pagination prepends each cached page immediately, advances the opaque anchor across offline retries, and treats only a live terminal page as exhausted. Requests carry a cancelable server/channel/selection generation; stale UI results are dropped and per-generation pagination maps are cleared. Response fullness uses the bounded raw Mattermost `order` count, duplicate IDs are first-wins, author enrichment is best-effort with user-ID fallback, and remote display names are stripped of terminal control sequences at render time.
+
+Task 12 waits for Mattermost's explicit authentication acknowledgement before declaring a WebSocket connected or delivering events. Each configured server reconnects independently with capped jittered exponential backoff and remains switchable from cached state while offline. Recovered connections replace authoritative metadata without resetting an active channel's draft, thread, split layout, history scope, selection, or viewport when that channel remains available; if it disappears, the UI selects a safe fallback while preserving unrelated transient workspace state. The reconnect history fetch sends its exact page to the Bubble Tea loop in a server/channel/selection-generation-scoped reconciliation message, which reuses the normal recent-page merge path and drops results after any intervening selection change. Realtime posts are persisted under the trusted connection server ID. If their channel is not yet known, the cache creates an inactive direct-kind placeholder in the same transaction; active bootstrap reads hide it, and a later authoritative snapshot enriches/reactivates the same row without deleting the post. When active-channel REST refresh fails, the history service returns the cached page with the error, and the reducer merges those messages non-authoritatively, reports the failure, and skips authoritative ID/deletion/exhaustion reconciliation.
 
 ## What's Working
 

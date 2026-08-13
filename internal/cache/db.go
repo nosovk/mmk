@@ -12,6 +12,9 @@ import (
 
 type DB struct {
 	conn *sql.DB
+	// mattermostBeforeWrite is a package-private deterministic test seam. It is
+	// nil in production and runs immediately before a context-aware write wait.
+	mattermostBeforeWrite func()
 	// ftsDisabled is set when the FTS5 migration fails (e.g. the
 	// sqlite driver was built without FTS5); search degrades to LIKE
 	// queries instead of failing startup.

@@ -17,7 +17,7 @@ type mattermostHistoryClient interface {
 type mattermostHistoryStore interface {
 	ListMattermostChannelTimeline(string, string, int, string) ([]cache.MattermostPost, error)
 	ListMattermostUsers(string) ([]cache.MattermostUser, error)
-	UpsertMattermostHistory(string, []cache.MattermostPost, []cache.MattermostUser) error
+	UpsertMattermostHistoryContext(context.Context, string, []cache.MattermostPost, []cache.MattermostUser) error
 }
 
 type MattermostHistoryMessage struct {
@@ -73,7 +73,15 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 	}
 	page, err := s.client.ChannelPosts(ctx, channelID, mattermost.ChannelPostsOptions{Page: 0, PerPage: s.perPage, Before: beforeID})
 	if err != nil {
-		return MattermostHistoryPage{}, fmt.Errorf("fetch Mattermost history: %w", err)
+		liveErr := fmt.Errorf("fetch Mattermost history: %w", err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return MattermostHistoryPage{}, liveErr
+		}
+		cached, cacheErr := s.ReadCached(channelID, beforeID)
+		if cacheErr != nil {
+			return MattermostHistoryPage{}, errors.Join(liveErr, fmt.Errorf("read cached Mattermost history fallback: %w", cacheErr))
+		}
+		return cached, liveErr
 	}
 	orderCount := page.OrderCount
 	if orderCount == 0 && len(page.Messages) > 0 {
@@ -118,7 +126,7 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 		cacheUsers[i] = cacheUserRecord(user)
 		names[user.ID] = user.DisplayName()
 	}
-	if err := s.store.UpsertMattermostHistory(s.serverID, posts, cacheUsers); err != nil {
+	if err := s.store.UpsertMattermostHistoryContext(ctx, s.serverID, posts, cacheUsers); err != nil {
 		return MattermostHistoryPage{}, fmt.Errorf("cache Mattermost history: %w", err)
 	}
 	presented := make([]MattermostHistoryMessage, 0, len(page.Messages))
@@ -150,7 +158,7 @@ func (s *MattermostHistoryService) fetch(ctx context.Context, channelID, beforeI
 }
 
 func cachePost(m mattermost.Message) cache.MattermostPost {
-	return cache.MattermostPost{ID: m.ID, ChannelID: m.ChannelID, UserID: m.UserID, RootID: m.RootID, Text: m.Text, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt, EditedAt: m.EditedAt, DeletedAt: m.DeletedAt, ReplyCount: m.ReplyCount}
+	return cache.MattermostPost{ID: m.ID, ChannelID: m.ChannelID, UserID: m.UserID, RootID: m.RootID, Text: m.Text, CorrelationID: m.CorrelationID, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt, EditedAt: m.EditedAt, DeletedAt: m.DeletedAt, ReplyCount: m.ReplyCount}
 }
 
 func cacheUserRecord(u mattermost.User) cache.MattermostUser {
@@ -168,7 +176,7 @@ func presentCachedMattermostPosts(posts []cache.MattermostPost, names map[string
 		if name == "" {
 			name = post.UserID
 		}
-		out = append(out, MattermostHistoryMessage{Message: mattermost.Message{ID: post.ID, ChannelID: post.ChannelID, UserID: post.UserID, RootID: post.RootID, Text: post.Text, CreatedAt: post.CreatedAt, UpdatedAt: post.UpdatedAt, EditedAt: post.EditedAt, DeletedAt: post.DeletedAt, ReplyCount: post.ReplyCount}, UserName: name})
+		out = append(out, MattermostHistoryMessage{Message: mattermost.Message{ID: post.ID, ChannelID: post.ChannelID, UserID: post.UserID, RootID: post.RootID, Text: post.Text, CorrelationID: post.CorrelationID, CreatedAt: post.CreatedAt, UpdatedAt: post.UpdatedAt, EditedAt: post.EditedAt, DeletedAt: post.DeletedAt, ReplyCount: post.ReplyCount}, UserName: name})
 	}
 	return out
 }

@@ -14,6 +14,8 @@ type mattermostHistoryScope struct {
 	cancel         context.CancelFunc
 	refs           int
 	recentInFlight bool
+	fetchInFlight  bool
+	refreshPending bool
 }
 
 func (a *App) newMattermostHistoryScope(serverID ids.ServerID, channelID string) *mattermostHistoryScope {

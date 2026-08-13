@@ -33,6 +33,122 @@ func (f *fakeUIHistory) FetchRecent(ctx context.Context, request HistoryRequest)
 	return MattermostMessagesLoadedMsg{Request: request}
 }
 
+func TestMattermostHistoryRefreshRequestUsesActiveScope(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{}}
+	a.SetMattermostHistoryService(h)
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	active := a.activeHistoryRequest
+	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: active})
+
+	for _, msg := range []MattermostHistoryRefreshMsg{
+		{ServerID: "s2", ChannelID: "c1"},
+		{ServerID: "s1", ChannelID: "c2"},
+	} {
+		_, cmd := a.Update(msg)
+		if cmd != nil {
+			t.Fatalf("mismatched refresh %#v returned a command", msg)
+		}
+	}
+
+	_, cmd := a.Update(MattermostHistoryRefreshMsg{ServerID: "s1", ChannelID: "c1"})
+	if cmd == nil {
+		t.Fatal("active refresh did not return a command")
+	}
+	runHistoryCmd(cmd)
+	if got := h.recent[len(h.recent)-1]; got != active {
+		t.Fatalf("refresh request=%#v want active %#v", got, active)
+	}
+}
+
+func TestMattermostHistoryRefreshWaitsForColdInitialFetch(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{}}
+	a.SetMattermostHistoryService(h)
+	_, initial := a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+
+	_, refresh := a.Update(MattermostHistoryRefreshMsg{ServerID: "s1", ChannelID: "c1"})
+	if refresh != nil {
+		t.Fatal("refresh ran concurrently with cold initial fetch")
+	}
+	if scope := a.mattermostScope(request); scope == nil || !scope.refreshPending {
+		t.Fatal("refresh was not queued behind cold initial fetch")
+	}
+
+	msg, ok := findRecentLoadedMsg(initial)
+	if !ok {
+		t.Fatal("initial recent result absent")
+	}
+	_, followup := a.Update(msg)
+	if followup == nil {
+		t.Fatal("queued refresh did not run after initial fetch")
+	}
+}
+
+func TestMattermostHistoryRefreshBurstCoalescesWithoutLosingFinalRefresh(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{}}
+	a.SetMattermostHistoryService(h)
+	_, initial := a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+
+	for range 3 {
+		if _, cmd := a.Update(MattermostHistoryRefreshMsg{ServerID: "s1", ChannelID: "c1"}); cmd != nil {
+			t.Fatal("burst refresh ran concurrently")
+		}
+	}
+	first, ok := findRecentLoadedMsg(initial)
+	if !ok {
+		t.Fatal("initial recent result absent")
+	}
+	_, followup := a.Update(first)
+	if followup == nil {
+		t.Fatal("burst did not schedule one follow-up")
+	}
+	if _, cmd := a.Update(MattermostHistoryRefreshMsg{ServerID: "s1", ChannelID: "c1"}); cmd != nil {
+		t.Fatal("final refresh ran concurrently with follow-up")
+	}
+	second, ok := findRecentLoadedMsg(followup)
+	if !ok {
+		t.Fatal("follow-up result absent")
+	}
+	_, final := a.Update(second)
+	if final == nil {
+		t.Fatal("refresh arriving during follow-up was lost")
+	}
+	third, ok := findRecentLoadedMsg(final)
+	if !ok || third.Request != request {
+		t.Fatalf("final refresh=%#v present=%v", third, ok)
+	}
+}
+
+func TestMattermostHistoryRefreshErrorCompletesCoalescingAndRunsFollowup(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{}}
+	a.SetMattermostHistoryService(h)
+	_, initial := a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	_, _ = a.Update(MattermostHistoryRefreshMsg{ServerID: "s1", ChannelID: "c1"})
+	failed, ok := findRecentLoadedMsg(initial)
+	if !ok {
+		t.Fatal("initial recent result absent")
+	}
+	failed.Err = errors.New("offline")
+	_, followup := a.Update(failed)
+	if followup == nil {
+		t.Fatal("error completion lost queued follow-up")
+	}
+	msg, ok := findRecentLoadedMsg(followup)
+	if !ok || msg.Request != request {
+		t.Fatalf("follow-up=%#v present=%v", msg, ok)
+	}
+	scope := a.mattermostScope(request)
+	if scope == nil || !scope.fetchInFlight || !scope.recentInFlight || scope.refreshPending {
+		t.Fatalf("scope after follow-up=%#v", scope)
+	}
+}
+
 func TestMattermostHistorySelectionCancelsPreviousGenerationAndBoundsState(t *testing.T) {
 	a := newMattermostHistoryApp(t, "s1")
 	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{}}
@@ -83,7 +199,6 @@ func TestMattermostServerActivationImmediatelyInvalidatesOldRecentAndOlderResult
 	}{
 		{"switched zero", ServerSwitchedMsg{Server: ServerViewState{ServerID: "s2"}}},
 		{"switched channels", ServerSwitchedMsg{Server: ServerViewState{ServerID: "s2", Channels: testMattermostChannels()}}},
-		{"refreshed channels", ServerRefreshedMsg{Server: ServerViewState{ServerID: "s1", Channels: testMattermostChannels()}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			a := newMattermostHistoryApp(t, "s1")
@@ -292,6 +407,49 @@ func TestMattermostHistoryResultsPreserveCacheOnFailureAndClearOnAuthoritativeEm
 	}
 }
 
+func TestMattermostRecentFailureAppliesCachedFallbackWithoutAuthoritativeReconciliation(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "older"}, {ID: "selected", Text: strings.Repeat("selected ", 20)}, {ID: "stale-live"}})
+	a.messagepane.SelectByID("selected")
+	_ = a.messagepane.View(8, 24)
+	beforeOffset := a.messagepane.YOffset()
+
+	_, _ = a.Update(MattermostMessagesLoadedMsg{
+		Request:          request,
+		CachedIDs:        []string{"stale-live"},
+		AuthoritativeIDs: []string{"cached-post"},
+		DeletedIDs:       []string{"older", "selected", "stale-live"},
+		Messages:         []messages.MessageItem{{ID: "cached-post", Text: "from realtime cache"}, {ID: "cached-post", Text: "duplicate"}},
+		Err:              errors.New("offline"),
+	})
+
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"older", "selected", "stale-live", "cached-post"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	selected, _ := a.messagepane.SelectedMessage()
+	if selected.MessageID() != "selected" {
+		t.Fatalf("selected=%q", selected.MessageID())
+	}
+	_ = a.messagepane.View(8, 24)
+	if a.messagepane.YOffset() == 0 && beforeOffset != 0 {
+		t.Fatalf("viewport reset: before=%d after=%d", beforeOffset, a.messagepane.YOffset())
+	}
+}
+
+func TestMattermostRecentFailureWithoutCachedFallbackLeavesMessagesUnchanged(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "existing"}})
+	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: a.activeHistoryRequest, Err: errors.New("offline")})
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"existing"}) {
+		t.Fatalf("ids=%v", got)
+	}
+}
+
 func TestMattermostHistoryCorrelationReconciliationFansOutToSameChannelWindows(t *testing.T) {
 	a := newMattermostHistoryApp(t, "s1")
 	a.width = 200
@@ -421,6 +579,95 @@ func TestMattermostRecentLiveReplacementPreservesScrolledSelection(t *testing.T)
 	}
 }
 
+func TestMattermostReconciledHistoryAppliesToCurrentActiveScopeAndPreservesState(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "older"}, {ID: "selected", Text: strings.Repeat("selected ", 20)}, {ID: "stale"}})
+	a.messagepane.SelectByID("selected")
+	_ = a.messagepane.View(8, 24)
+	beforeOffset := a.messagepane.YOffset()
+
+	_, _ = a.Update(MattermostReconciledHistoryMsg{
+		ServerID:         "s1",
+		ChannelID:        "c1",
+		Generation:       a.selectionGeneration,
+		AuthoritativeIDs: []string{"selected", "missed-1", "missed-2", "missed-3", "stale"},
+		DeletedIDs:       []string{"stale"},
+		Messages: []messages.MessageItem{
+			{ID: "selected", Text: strings.Repeat("updated ", 20)},
+			{ID: "missed-1", Text: strings.Repeat("missed one ", 20)},
+			{ID: "missed-2", Text: strings.Repeat("missed two ", 20)},
+			{ID: "missed-3", Text: strings.Repeat("missed three ", 20)},
+		},
+		HasMore: true,
+	})
+
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"older", "selected", "missed-1", "missed-2", "missed-3"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	selected, _ := a.messagepane.SelectedMessage()
+	if selected.MessageID() != "selected" {
+		t.Fatalf("selected=%q", selected.MessageID())
+	}
+	_ = a.messagepane.View(8, 24)
+	if a.messagepane.YOffset() == 0 && beforeOffset != 0 {
+		t.Fatalf("viewport reset: before=%d after=%d", beforeOffset, a.messagepane.YOffset())
+	}
+	if a.mattermostHistoryExhausted[request] {
+		t.Fatal("nonterminal reconciled page exhausted active history")
+	}
+}
+
+func TestMattermostReconciledHistoryDropsResultAfterChannelSwitch(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	staleGeneration := a.selectionGeneration
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c2", Name: "Two"})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "current"}})
+
+	_, _ = a.Update(MattermostReconciledHistoryMsg{
+		ServerID:   "s1",
+		ChannelID:  "c1",
+		Generation: staleGeneration,
+		Messages:   []messages.MessageItem{{ID: "stale"}},
+		HasMore:    false,
+	})
+
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"current"}) {
+		t.Fatalf("stale reconciliation applied: %v", got)
+	}
+}
+
+func TestMattermostReconciledHistoryFailureMergesCachedFallbackNonAuthoritatively(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "retained"}, {ID: "stale"}})
+
+	_, _ = a.Update(MattermostReconciledHistoryMsg{
+		ServerID:         "s1",
+		ChannelID:        "c1",
+		Generation:       a.selectionGeneration,
+		AuthoritativeIDs: []string{"cached"},
+		DeletedIDs:       []string{"retained", "stale"},
+		Messages:         []messages.MessageItem{{ID: "cached"}},
+		HasMore:          false,
+		Err:              errors.New("offline"),
+	})
+
+	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"retained", "stale", "cached"}) {
+		t.Fatalf("ids=%v", got)
+	}
+	if a.mattermostHistoryExhausted[request] {
+		t.Fatal("failed reconciled page applied exhaustion")
+	}
+}
+
 func TestMattermostServerActivationQueuesInitialChannelHistory(t *testing.T) {
 	a := NewApp()
 	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
@@ -431,6 +678,83 @@ func TestMattermostServerActivationQueuesInitialChannelHistory(t *testing.T) {
 	msg := cmd()
 	if _, ok := findHistoryChannelSelected(msg); !ok {
 		t.Fatalf("command=%T did not contain ChannelSelectedMsg", msg)
+	}
+}
+
+func TestMattermostServerRefreshPreservesActiveChannelTransientState(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
+	request := a.activeHistoryRequest
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "p1"}, {ID: "p2"}})
+	a.messagepane.SelectByID("p1")
+	a.compose.SetValue("draft")
+	a.SetMode(ModeInsert)
+	a.threadVisible = true
+	a.threadPanel.SetThread(messages.MessageItem{ID: "thread-root"}, nil, "c1", "thread-root")
+	a.width, a.height = 200, 50
+	if cmd := a.splitWindow(wintree.SplitSideBySide); cmd != nil {
+		t.Fatal("split failed")
+	}
+	winsBefore := append([]wintree.LeafID(nil), a.wins.Leaves()...)
+	focusedBefore := a.focusedWin
+	selectedBefore, _ := a.messagepane.SelectedMessage()
+
+	_, cmd := a.Update(ServerRefreshedMsg{Server: ServerViewState{
+		ServerID: "s1", ServerName: "Renamed", Channels: []sidebar.ChannelItem{{ID: "c1", Name: "One renamed"}, {ID: "c2", Name: "Two"}},
+		UserNames: map[string]string{"u1": "Updated User"},
+	}})
+	if cmd != nil {
+		t.Fatal("same-channel refresh queued channel activation")
+	}
+	selected, _ := a.messagepane.SelectedMessage()
+	if a.activeChannelID != "c1" || a.activeHistoryRequest != request || !reflect.DeepEqual(historyItemIDs(a.messagepane.Messages()), []string{"p1", "p2"}) || selected.MessageID() != selectedBefore.MessageID() {
+		t.Fatalf("history changed: channel=%q request=%#v ids=%v selected=%q", a.activeChannelID, a.activeHistoryRequest, historyItemIDs(a.messagepane.Messages()), selected.MessageID())
+	}
+	if a.compose.Value() != "draft" || a.mode != ModeInsert || !a.threadVisible {
+		t.Fatalf("transient state changed: draft=%q mode=%v thread=%v", a.compose.Value(), a.mode, a.threadVisible)
+	}
+	if !reflect.DeepEqual(a.wins.Leaves(), winsBefore) || a.focusedWin != focusedBefore {
+		t.Fatalf("window tree changed: leaves=%v focused=%v", a.wins.Leaves(), a.focusedWin)
+	}
+	if got := a.sidebar.Items(); len(got) != 2 || got[0].Name != "One renamed" || a.userNames["u1"] != "Updated User" {
+		t.Fatalf("authoritative metadata not refreshed: channels=%#v users=%#v", got, a.userNames)
+	}
+}
+
+func TestMattermostServerRefreshRemovedChannelSelectsFallbackWithoutResettingWindowTreeOrDraft(t *testing.T) {
+	a := newMattermostHistoryApp(t, "s1")
+	a.SetMattermostHistoryService(&fakeUIHistory{cached: map[string][]messages.MessageItem{}})
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c2", Name: "Two"})
+	a.compose.SetValue("draft")
+	a.threadVisible = true
+	a.threadPanel.SetThread(messages.MessageItem{ID: "root"}, nil, "c2", "root")
+	a.width, a.height = 200, 50
+	if cmd := a.splitWindow(wintree.SplitSideBySide); cmd != nil {
+		t.Fatal("split failed")
+	}
+	winsBefore := append([]wintree.LeafID(nil), a.wins.Leaves()...)
+	observed := ""
+	a.SetSelectionObserver(func(_ ids.ServerID, channelID string) { observed = channelID })
+	applied := NewUpdateApplied()
+
+	_, cmd := a.Update(ServerRefreshedMsg{Server: ServerViewState{ServerID: "s1", Channels: []sidebar.ChannelItem{{ID: "c1", Name: "One"}}}, Applied: applied})
+	if a.activeChannelID != "c1" || observed != "c1" {
+		t.Fatalf("fallback not applied before acknowledgement: active=%q observed=%q", a.activeChannelID, observed)
+	}
+	select {
+	case <-applied.Done():
+	default:
+		t.Fatal("refresh not acknowledged")
+	}
+	if cmd == nil {
+		t.Fatal("fallback did not schedule history fetch")
+	}
+	if a.compose.Value() != "draft" || a.threadVisible {
+		t.Fatalf("fallback reset wrong transient state: draft=%q thread=%v", a.compose.Value(), a.threadVisible)
+	}
+	if !reflect.DeepEqual(a.wins.Leaves(), winsBefore) {
+		t.Fatalf("fallback reset window tree: before=%v after=%v", winsBefore, a.wins.Leaves())
 	}
 }
 
@@ -493,4 +817,22 @@ func findOlderLoadedMsg(cmd tea.Cmd) (MattermostOlderMessagesLoadedMsg, bool) {
 		}
 	}
 	return MattermostOlderMessagesLoadedMsg{}, false
+}
+
+func findRecentLoadedMsg(cmd tea.Cmd) (MattermostMessagesLoadedMsg, bool) {
+	if cmd == nil {
+		return MattermostMessagesLoadedMsg{}, false
+	}
+	msg := cmd()
+	if loaded, ok := msg.(MattermostMessagesLoadedMsg); ok {
+		return loaded, true
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, next := range batch {
+			if loaded, ok := findRecentLoadedMsg(next); ok {
+				return loaded, true
+			}
+		}
+	}
+	return MattermostMessagesLoadedMsg{}, false
 }
