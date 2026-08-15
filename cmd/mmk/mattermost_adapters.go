@@ -50,7 +50,7 @@ func mattermostCacheSnapshot(snapshot service.ServerSnapshot, observedAt time.Ti
 				continue
 			}
 			seenChannels[channel.ID] = struct{}{}
-			raw.Channels = append(raw.Channels, cache.MattermostChannel{ID: channel.ID, TeamID: channel.TeamID, Name: channel.Name, DisplayName: channel.DisplayName, Kind: channel.Kind.String(), TotalMsgCount: channel.TotalMsgCount, UpdatedAt: channel.UpdatedAt, DeletedAt: channel.DeletedAt})
+			raw.Channels = append(raw.Channels, cache.MattermostChannel{ID: channel.ID, TeamID: channel.TeamID, Name: channel.Name, DisplayName: channel.DisplayName, Kind: channel.Kind.String(), TotalMsgCount: channel.TotalMsgCount, LastPostAt: channel.LastPostAt, UpdatedAt: channel.UpdatedAt, DeletedAt: channel.DeletedAt})
 			if entry.Membership != nil {
 				membership := entry.Membership
 				raw.Memberships = append(raw.Memberships, cache.MattermostChannelMembership{ChannelID: membership.ChannelID, UserID: membership.UserID, MsgCount: membership.MsgCount, MentionCount: membership.MentionCount, LastViewedAt: membership.LastViewedAt, UpdatedAt: membership.UpdatedAt})
@@ -83,7 +83,7 @@ func mattermostServiceSnapshot(raw cache.MattermostBootstrapSnapshot) (service.S
 		if err != nil {
 			return service.ServerSnapshot{}, err
 		}
-		channels[i] = mattermost.Channel{ID: channel.ID, ServerID: server.ID, TeamID: channel.TeamID, Name: channel.Name, DisplayName: channel.DisplayName, Kind: kind, TotalMsgCount: channel.TotalMsgCount, UpdatedAt: channel.UpdatedAt, DeletedAt: channel.DeletedAt}
+		channels[i] = mattermost.Channel{ID: channel.ID, ServerID: server.ID, TeamID: channel.TeamID, Name: channel.Name, DisplayName: channel.DisplayName, Kind: kind, TotalMsgCount: channel.TotalMsgCount, LastPostAt: channel.LastPostAt, UpdatedAt: channel.UpdatedAt, DeletedAt: channel.DeletedAt}
 	}
 	memberships := make(map[string]mattermost.ChannelMembership, len(raw.Memberships))
 	for _, membership := range raw.Memberships {

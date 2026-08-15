@@ -341,6 +341,7 @@ type (
 	// adapters until the Slack runtime is removed in Task 15.
 	ServerViewState struct {
 		ServerID         ids.ServerID
+		Revision         uint64
 		ServerName       string
 		Theme            string
 		SidebarWidth     int

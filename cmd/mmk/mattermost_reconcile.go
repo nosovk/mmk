@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 )
 
 type mattermostReconcileStore interface {
-	ReplaceMattermostBootstrapSnapshotContext(context.Context, cache.MattermostBootstrapSnapshot) error
+	mattermostAuthoritativeSnapshotStore
 	ListMattermostChannelTimeline(string, string, int, string) ([]cache.MattermostPost, error)
 	ListMattermostUsers(string) ([]cache.MattermostUser, error)
 	UpsertMattermostHistoryContext(context.Context, string, []cache.MattermostPost, []cache.MattermostUser) error
@@ -32,9 +33,23 @@ type mattermostReconcileDeps struct {
 
 var errMattermostReconciliationSuperseded = errors.New("Mattermost reconciliation superseded")
 
+type mattermostAppliedPost struct {
+	ID             string
+	ChannelID      string
+	CreatedAt      int64
+	ActivelyViewed bool
+}
+
+type mattermostReconcileJournal struct {
+	epoch uint64
+	posts map[string]mattermostAppliedPost
+}
+
 type mattermostReconcileState struct {
 	apply      sync.Mutex
+	runtime    sync.Mutex
 	generation uint64
+	inFlight   *mattermostReconcileJournal
 }
 
 type mattermostReconcileDispatcher struct {
@@ -71,7 +86,8 @@ func (d *mattermostReconcileDispatcher) Run(ctx context.Context) {
 			return
 		}
 		if d.takePending() {
-			if err := d.reconcile(ctx); err != nil && ctx.Err() == nil && !errors.Is(err, errMattermostReconciliationSuperseded) && d.diagnostic != nil {
+			err := d.reconcile(ctx)
+			if err != nil && ctx.Err() == nil && !errors.Is(err, errMattermostReconciliationSuperseded) && d.diagnostic != nil {
 				d.diagnostic(err)
 			}
 			continue
@@ -110,8 +126,10 @@ func (s *mattermostStartup) reconcile(ctx context.Context, serverID ids.ServerID
 	state.apply.Lock()
 	state.generation++
 	generation := state.generation
+	state.runtime.Lock()
+	state.inFlight = &mattermostReconcileJournal{epoch: generation, posts: make(map[string]mattermostAppliedPost)}
+	state.runtime.Unlock()
 	state.apply.Unlock()
-
 	s.mu.RLock()
 	serverContext, ok := s.contexts[serverID]
 	s.mu.RUnlock()
@@ -121,20 +139,49 @@ func (s *mattermostStartup) reconcile(ctx context.Context, serverID ids.ServerID
 
 	snapshot, err := service.BootstrapServer(ctx, serverContext.client, serverContext.server)
 	if err != nil {
+		clearMattermostReconcileJournal(state, generation)
 		return fmt.Errorf("bootstrap Mattermost reconciliation for server %q: %w", serverID, err)
 	}
 
 	state.apply.Lock()
 	defer state.apply.Unlock()
 	if state.generation != generation {
+		clearMattermostReconcileJournal(state, generation)
 		return errMattermostReconciliationSuperseded
 	}
-	if err := deps.Cache.ReplaceMattermostBootstrapSnapshotContext(ctx, mattermostCacheSnapshot(snapshot, deps.Clock())); err != nil {
+	state.runtime.Lock()
+	if state.inFlight == nil || state.inFlight.epoch != generation {
+		state.runtime.Unlock()
+		return errMattermostReconciliationSuperseded
+	}
+	journal := state.inFlight
+	snapshot, err = persistMattermostAuthoritativeSnapshot(ctx, snapshot, deps.Cache, deps.Clock())
+	if err != nil {
+		state.inFlight = nil
+		state.runtime.Unlock()
 		return fmt.Errorf("persist Mattermost reconciliation for server %q: %w", serverID, err)
 	}
-	s.setSnapshot(serverID, snapshot)
+	s.mu.Lock()
+	serverContext, ok = s.contexts[serverID]
+	if !ok {
+		s.mu.Unlock()
+		state.inFlight = nil
+		state.runtime.Unlock()
+		return errors.New("Mattermost server context unavailable")
+	}
+	snapshot = rebaseMattermostJournal(snapshot, journal.posts)
+	snapshot = replayMattermostLocalReads(snapshot, serverContext.localReadOverlays)
+	serverContext.localReadOverlays = make(map[string]mattermostLocalReadOverlay)
+	serverContext.snapshot = snapshot
+	serverContext.usable = true
+	serverContext.revision++
+	s.contexts[serverID] = serverContext
+	serverState := mattermostServerViewState(snapshot, false, serverContext.revision)
+	state.inFlight = nil
+	s.mu.Unlock()
+	state.runtime.Unlock()
 	applied := ui.NewUpdateApplied()
-	deps.Send(ui.ServerRefreshedMsg{Server: mattermostServerViewState(snapshot, false), Applied: applied})
+	deps.Send(ui.ServerRefreshedMsg{Server: serverState, Applied: applied})
 	select {
 	case <-applied.Done():
 	case <-ctx.Done():
@@ -168,6 +215,37 @@ func (s *mattermostStartup) reconcile(ctx context.Context, serverID ids.ServerID
 func (s *mattermostStartup) reconcileState(serverID ids.ServerID) *mattermostReconcileState {
 	state, _ := s.reconcileStates.LoadOrStore(serverID, &mattermostReconcileState{})
 	return state.(*mattermostReconcileState)
+}
+
+func clearMattermostReconcileJournal(state *mattermostReconcileState, epoch uint64) {
+	state.runtime.Lock()
+	if state.inFlight != nil && state.inFlight.epoch == epoch {
+		state.inFlight = nil
+	}
+	state.runtime.Unlock()
+}
+
+func rebaseMattermostJournal(snapshot service.ServerSnapshot, posts map[string]mattermostAppliedPost) service.ServerSnapshot {
+	ordered := make([]mattermostAppliedPost, 0, len(posts))
+	for _, post := range posts {
+		ordered = append(ordered, post)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].CreatedAt != ordered[j].CreatedAt {
+			return ordered[i].CreatedAt < ordered[j].CreatedAt
+		}
+		return ordered[i].ID < ordered[j].ID
+	})
+	for _, post := range ordered {
+		entry, ok := mattermostSnapshotChannel(snapshot, post.ChannelID)
+		if !ok || mattermostChannelCoversPost(entry.Channel, post.CreatedAt) {
+			continue
+		}
+		updateMattermostSnapshotChannel(&snapshot, post.ChannelID, func(entry service.ChannelEntry) service.ChannelEntry {
+			return service.ChannelWithNewPost(entry, post.ActivelyViewed)
+		})
+	}
+	return snapshot
 }
 
 func validateMattermostReconcileDeps(deps mattermostReconcileDeps) error {

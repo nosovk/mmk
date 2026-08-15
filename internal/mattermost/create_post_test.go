@@ -130,6 +130,18 @@ func TestClient_CreatePostRejectsInvalidAuthoritativeIdentity(t *testing.T) {
 	}
 }
 
+func TestClient_CreatePostRequiresPositiveCreateAt(t *testing.T) {
+	for _, createdAt := range []int64{0, -1} {
+		t.Run(fmt.Sprintf("create_at_%d", createdAt), func(t *testing.T) {
+			client := newJSONMattermostClient(t, fmt.Sprintf(`{"id":"post-1","channel_id":"channel-1","create_at":%d}`, createdAt))
+			_, err := client.CreatePost(context.Background(), CreatePostRequest{ChannelID: "channel-1", Message: "hello", CorrelationID: "correlation-1"})
+			if err == nil || !strings.Contains(err.Error(), "create_at") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestClient_CreatePostNormalizesAndValidatesAuthoritativePendingPostID(t *testing.T) {
 	const submitted = "mmk-submitted-correlation"
 	for _, tc := range []struct {
@@ -143,7 +155,7 @@ func TestClient_CreatePostNormalizesAndValidatesAuthoritativePendingPostID(t *te
 		{name: "mismatched", responsePendingID: "mmk-unrelated-correlation", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			body := fmt.Sprintf(`{"id":"post-1","channel_id":"channel-1","pending_post_id":%q}`, tc.responsePendingID)
+			body := fmt.Sprintf(`{"id":"post-1","channel_id":"channel-1","create_at":1,"pending_post_id":%q}`, tc.responsePendingID)
 			client := newJSONMattermostClient(t, body)
 			message, err := client.CreatePost(context.Background(), CreatePostRequest{ChannelID: "channel-1", Message: "hello", CorrelationID: submitted})
 			if tc.wantErr {

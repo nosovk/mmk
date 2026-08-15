@@ -316,6 +316,39 @@ func (m mattermostSendAdapter) Send(ctx context.Context, request MattermostSendR
 	return m.send(ctx, request)
 }
 
+type MattermostReadRequest struct {
+	ServerID          ids.ServerID
+	ChannelID         string
+	PreviousServerID  ids.ServerID
+	PreviousChannelID string
+}
+
+// MattermostReadService owns the provider-specific channel-view transition.
+// View returns the optimistic retained state synchronously and a command for
+// the serialized REST correction.
+type MattermostReadService interface {
+	View(MattermostReadRequest) (ServerViewState, tea.Cmd)
+}
+
+type MattermostReadFunc func(MattermostReadRequest) (ServerViewState, tea.Cmd)
+
+func NewMattermostReadService(view MattermostReadFunc) MattermostReadService {
+	return mattermostReadAdapter{view: view}
+}
+
+var noopMattermostReadService MattermostReadService = mattermostReadAdapter{}
+
+type mattermostReadAdapter struct {
+	view MattermostReadFunc
+}
+
+func (m mattermostReadAdapter) View(request MattermostReadRequest) (ServerViewState, tea.Cmd) {
+	if m.view == nil {
+		return ServerViewState{}, nil
+	}
+	return m.view(request)
+}
+
 // MessageServiceFuncs is the closure bundle accepted by
 // NewMessageService. Any field may be nil; the resulting service
 // no-ops that operation.

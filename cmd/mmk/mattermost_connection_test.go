@@ -98,6 +98,46 @@ func TestStartupForwardsEventsWithServerIdentity(t *testing.T) {
 	}
 }
 
+func TestUnreadStartupProductionBindingAppliesImmediatePostedEvent(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1")
+	client := newStartupConnectionClient("u1")
+	client.teams = []mattermost.Team{{ID: "t1"}}
+	client.channels = []mattermost.Channel{{ID: "c1", TeamID: "t1", Kind: mattermost.ChannelKindPublic}}
+	client.memberships = map[string][]mattermost.ChannelMembership{"t1": {{ChannelID: "c1", UserID: "u1"}}}
+	eventHandled := make(chan struct{})
+	client.run = func(ctx context.Context, onReady func(), onEvent func(mattermost.Event)) error {
+		onReady()
+		onEvent(mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
+		close(eventHandled)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	messages := make(chan tea.Msg, 16)
+	startup := startConnectionTestStartup(t, map[string]*startupConnectionClient{"s1": client}, mattermostStartupDeps{
+		Cache: db,
+		Send:  func(msg tea.Msg) { messages <- msg; acknowledgeMattermostRefresh(msg) },
+		NewEventHandler: func(startup *mattermostStartup) func(context.Context, ids.ServerID, mattermost.Event) {
+			return mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error {
+				messages <- msg
+				return nil
+			}, func() (ids.ServerID, string) { return "s2", "other" }, startup, nil)
+		},
+	})
+	defer stopConnectionTestStartup(t, startup)
+	waitMattermostEvent(t, eventHandled, "immediate WebSocket event")
+	deadline := time.After(time.Second)
+	for !startup.viewState("s1").ReadState["c1"].HasUnread {
+		select {
+		case <-messages:
+		case <-deadline:
+			t.Fatal("immediate production event did not update retained unread state")
+		}
+	}
+	if _, err := db.GetMattermostPost("s1", "post-1"); err != nil {
+		t.Fatalf("immediate event post not persisted: %v", err)
+	}
+}
+
 func TestStartupWaitIncludesConnectionManagers(t *testing.T) {
 	client := newStartupConnectionClient("u1")
 	backoff := make(chan struct{})
@@ -360,6 +400,9 @@ type startupConnectionClient struct {
 	bootstrapCount  int
 	socketCount     int
 	currentUserHook func(context.Context, int) error
+	teams           []mattermost.Team
+	channels        []mattermost.Channel
+	memberships     map[string][]mattermost.ChannelMembership
 }
 
 func newStartupConnectionClient(userID string) *startupConnectionClient {
@@ -384,16 +427,16 @@ func (c *startupConnectionClient) CurrentUser(ctx context.Context) (*mattermost.
 	return &mattermost.User{ID: c.userID}, nil
 }
 
-func (*startupConnectionClient) TeamsForUser(context.Context, string) ([]mattermost.Team, error) {
-	return nil, nil
+func (c *startupConnectionClient) TeamsForUser(context.Context, string) ([]mattermost.Team, error) {
+	return append([]mattermost.Team(nil), c.teams...), nil
 }
 
-func (*startupConnectionClient) ChannelsForUser(context.Context, string) ([]mattermost.Channel, error) {
-	return nil, nil
+func (c *startupConnectionClient) ChannelsForUser(context.Context, string) ([]mattermost.Channel, error) {
+	return append([]mattermost.Channel(nil), c.channels...), nil
 }
 
-func (*startupConnectionClient) ChannelMembershipsForUser(context.Context, string, string) ([]mattermost.ChannelMembership, error) {
-	return nil, nil
+func (c *startupConnectionClient) ChannelMembershipsForUser(_ context.Context, _ string, teamID string) ([]mattermost.ChannelMembership, error) {
+	return append([]mattermost.ChannelMembership(nil), c.memberships[teamID]...), nil
 }
 
 func (*startupConnectionClient) UsersByIDs(context.Context, []string) ([]mattermost.User, error) {
@@ -410,6 +453,10 @@ func (*startupConnectionClient) ChannelPosts(context.Context, string, mattermost
 
 func (*startupConnectionClient) CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error) {
 	return mattermost.Message{}, nil
+}
+
+func (*startupConnectionClient) ViewChannel(context.Context, string, string, string) (mattermost.ViewChannelResult, error) {
+	return mattermost.ViewChannelResult{}, nil
 }
 
 func (c *startupConnectionClient) recordSocketAttempt() {
@@ -467,6 +514,9 @@ func startConnectionTestStartup(t *testing.T, clients map[string]*startupConnect
 	}
 	if overrides.OnEvent != nil {
 		deps.OnEvent = overrides.OnEvent
+	}
+	if overrides.NewEventHandler != nil {
+		deps.NewEventHandler = overrides.NewEventHandler
 	}
 	if overrides.OnConnectionState != nil {
 		deps.OnConnectionState = overrides.OnConnectionState

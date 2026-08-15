@@ -70,6 +70,7 @@ type Channel struct {
 	DisplayName   string
 	Kind          ChannelKind
 	TotalMsgCount int64
+	LastPostAt    int64
 	UpdatedAt     int64
 	DeletedAt     int64
 }

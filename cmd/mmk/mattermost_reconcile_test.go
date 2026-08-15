@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ func TestReconciliationReplacesAuthoritativeSnapshot(t *testing.T) {
 	if err := db.ReplaceMattermostBootstrapSnapshot(initial); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertMattermostPost("s1", cache.MattermostPost{ID: "retained-post", ChannelID: "retired-channel", Text: "retained"}); err != nil {
+	if err := db.UpsertMattermostPost("s1", cache.MattermostPost{ID: "retained-post", ChannelID: "retired-channel", Text: "retained", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,6 +91,114 @@ func TestReconciliationReplacesAuthoritativeSnapshot(t *testing.T) {
 	}
 }
 
+func TestUnreadReconnectAuthoritativeCorrectionReplacesRuntimeOverlay(t *testing.T) {
+	db := newMattermostReconcileDB(t)
+	client := reconciliationBootstrapClient()
+	client.channels[0].TotalMsgCount = 4
+	client.memberships["t1"][0].MsgCount = 4
+	startup := reconciliationStartup(client, service.ServerSnapshot{
+		Server:      mattermost.Server{ID: "s1", Name: "One"},
+		CurrentUser: mattermost.User{ID: "u1"},
+		Sections: []service.ChannelSection{{Channels: []service.ChannelEntry{{
+			Channel:    mattermost.Channel{ID: "c1", Kind: mattermost.ChannelKindPublic, TotalMsgCount: 4},
+			Membership: &mattermost.ChannelMembership{ChannelID: "c1", UserID: "u1", MsgCount: 3},
+		}}}},
+	})
+	if !startup.viewState("s1").ReadState["c1"].HasUnread {
+		t.Fatal("test setup did not create runtime unread overlay")
+	}
+	beforeRevision := startup.viewState("s1").Revision
+
+	err := startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{
+		Cache: db, Send: acknowledgeMattermostRefresh, Clock: time.Now,
+		ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := startup.viewState("s1"); state.ReadState["c1"].HasUnread || state.HasUnread || state.Revision <= beforeRevision {
+		t.Fatalf("authoritative reconciliation retained runtime unread: %#v", state)
+	}
+}
+
+func TestReconciliationPostAppliedDuringFetchIsRebasedExactlyOnce(t *testing.T) {
+	store := newBlockingReconciliationStore(t)
+	if err := store.DB.ReplaceMattermostBootstrapSnapshot(mattermostCacheSnapshot(localReadSnapshot(true), time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	client := reconciliationBootstrapClient()
+	fetchCaptured := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	client.currentUserHook = func(ctx context.Context) error {
+		close(fetchCaptured)
+		select {
+		case <-releaseFetch:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	startup := reconciliationStartup(client, service.ServerSnapshot{
+		Server:      mattermost.Server{ID: "s1", Name: "One"},
+		CurrentUser: mattermost.User{ID: "u1"},
+		Sections: []service.ChannelSection{{Channels: []service.ChannelEntry{{
+			Channel:    mattermost.Channel{ID: "c1", TeamID: "t1", Kind: mattermost.ChannelKindPublic},
+			Membership: &mattermost.ChannelMembership{ChannelID: "c1", UserID: "u1"},
+		}}}},
+	})
+	var mu sync.Mutex
+	var unreadOrder []bool
+	send := func(msg tea.Msg) {
+		if refresh, ok := msg.(ui.ServerRefreshedMsg); ok {
+			mu.Lock()
+			unreadOrder = append(unreadOrder, refresh.Server.HasUnread)
+			mu.Unlock()
+			acknowledgeMattermostRefresh(msg)
+		}
+	}
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{
+			Cache: store, Send: send, Clock: time.Now,
+			ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+		})
+	}()
+	waitMattermostEvent(t, fetchCaptured, "authoritative snapshot fetch")
+	eventDone := make(chan struct{})
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:           store,
+		Send:            func(_ context.Context, msg tea.Msg) error { send(msg); return nil },
+		ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+		Startup:         startup,
+	})
+	go func() {
+		adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
+		close(eventDone)
+	}()
+	waitMattermostEvent(t, eventDone, "event applied while reconciliation fetch was blocked")
+	state := startup.reconcileState("s1")
+	state.runtime.Lock()
+	_, recorded := state.inFlight.posts["post-1"]
+	state.runtime.Unlock()
+	if !recorded {
+		t.Fatal("event transition was not recorded for reconciliation rebase")
+	}
+	close(releaseFetch)
+	waitMattermostEvent(t, store.firstEntered, "authoritative snapshot persistence")
+	close(store.releaseFirst)
+	if err := <-reconcileDone; err != nil {
+		t.Fatal(err)
+	}
+	if state := startup.viewState("s1"); !state.ReadState["c1"].HasUnread {
+		t.Fatalf("final state lost post-reconciliation event: %#v", state)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(unreadOrder, []bool{true, true}) {
+		t.Fatalf("refresh unread order=%v want runtime transition then rebased commit", unreadOrder)
+	}
+}
+
 func TestReconciliationFetchesOnlyActiveServerChannel(t *testing.T) {
 	db := newMattermostReconcileDB(t)
 	client := &reconciliationClient{
@@ -103,7 +212,7 @@ func TestReconciliationFetchesOnlyActiveServerChannel(t *testing.T) {
 			{ChannelID: "active-channel", UserID: "u1"},
 			{ChannelID: "other-channel", UserID: "u1"},
 		}},
-		postPage: mattermost.MessagePage{Messages: []mattermost.Message{{ID: "recent", ChannelID: "active-channel", UserID: "u1", Text: "recent"}}},
+		postPage: mattermost.MessagePage{Messages: []mattermost.Message{{ID: "recent", ChannelID: "active-channel", UserID: "u1", Text: "recent", CreatedAt: 1}}},
 	}
 	startup := reconciliationStartup(client, service.ServerSnapshot{})
 	err := startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{
@@ -173,7 +282,7 @@ func TestReconciliationDropsFetchedPageAfterSameChannelReselection(t *testing.T)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	client := reconciliationBootstrapClient()
-	client.postPage = mattermost.MessagePage{Messages: []mattermost.Message{{ID: "stale", ChannelID: "c1", Text: "stale result"}}}
+	client.postPage = mattermost.MessagePage{Messages: []mattermost.Message{{ID: "stale", ChannelID: "c1", Text: "stale result", CreatedAt: 1}}}
 	client.postHook = func(context.Context) error {
 		close(entered)
 		<-release
@@ -467,7 +576,18 @@ func TestReconciliationGenerationIssuanceWaitsForInProgressApply(t *testing.T) {
 		}
 	})
 
-	startup.setClient("s1", newClient)
+	clientSet := make(chan struct{})
+	go func() {
+		startup.setClient("s1", newClient)
+		close(clientSet)
+	}()
+	select {
+	case <-clientSet:
+		t.Fatal("client replacement completed while prior cache commit was in progress")
+	default:
+	}
+	close(store.releaseFirst)
+	waitMattermostEvent(t, clientSet, "client replacement after prior cache commit")
 	newInvoked := make(chan struct{})
 	newDone := make(chan error, 1)
 	go func() {
@@ -475,13 +595,8 @@ func TestReconciliationGenerationIssuanceWaitsForInProgressApply(t *testing.T) {
 		newDone <- startup.reconcile(context.Background(), "s1", deps)
 	}()
 	<-newInvoked
-	select {
-	case <-newRESTEntered:
-		t.Fatal("new reconciliation entered REST while prior apply was in progress")
-	case <-time.After(20 * time.Millisecond):
-	}
+	waitMattermostEvent(t, newRESTEntered, "new reconciliation after prior apply")
 
-	close(store.releaseFirst)
 	if err := <-oldDone; err != nil {
 		t.Fatalf("old reconciliation: %v", err)
 	}
@@ -494,7 +609,7 @@ func TestReconciliationGenerationIssuanceWaitsForInProgressApply(t *testing.T) {
 	}
 }
 
-func TestReconciliationDifferentServersDoNotShareCommitLock(t *testing.T) {
+func TestReconciliationDifferentServersSerializeStartupTransaction(t *testing.T) {
 	store := newBlockingReconciliationStore(t)
 	client1 := reconciliationBootstrapClient()
 	client2 := reconciliationBootstrapClient()
@@ -513,17 +628,22 @@ func TestReconciliationDifferentServersDoNotShareCommitLock(t *testing.T) {
 	go func() { firstDone <- startup.reconcile(context.Background(), "s1", deps) }()
 	<-store.firstEntered
 	secondDone := make(chan error, 1)
-	go func() { secondDone <- startup.reconcile(context.Background(), "s2", deps) }()
+	secondStarted := make(chan struct{})
+	go func() {
+		close(secondStarted)
+		secondDone <- startup.reconcile(context.Background(), "s2", deps)
+	}()
+	waitMattermostEvent(t, secondStarted, "different-server reconciliation start")
 	select {
 	case err := <-secondDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("different server blocked by first server reconciliation")
+		t.Fatalf("different-server commit completed before first commit released: %v", err)
+	default:
 	}
 	close(store.releaseFirst)
 	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
 		t.Fatal(err)
 	}
 }
@@ -663,6 +783,356 @@ func TestMattermostReconcileDispatcherCancellationStopsRunningWork(t *testing.T)
 	waitMattermostEvent(t, done, "reconcile dispatcher shutdown")
 }
 
+func TestReconciliationLocalReadReplayDrainsPendingOverlayAtCommit(t *testing.T) {
+	client := newLocalReadReconciliationClient()
+	db := newMattermostReconcileDB(t)
+	store := &countingReconciliationStore{DB: db}
+	startup := reconciliationStartup(client, localReadSnapshot(false))
+	read := newMattermostUIReadService(context.Background(), startup, nil)
+	refreshed := make(chan ui.ServerViewState, 1)
+	dispatcher := newMattermostReconcileDispatcher(func(ctx context.Context) error {
+		return startup.reconcile(ctx, "s1", mattermostReconcileDeps{
+			Cache: store,
+			Send: func(msg tea.Msg) {
+				if refresh, ok := msg.(ui.ServerRefreshedMsg); ok {
+					refreshed <- refresh.Server
+				}
+				acknowledgeMattermostRefresh(msg)
+			},
+			Clock: time.Now, ActiveSelection: func() (ids.ServerID, string) { return "", "" },
+		})
+	}, func(err error) { t.Errorf("unexpected reconciliation diagnostic: %v", err) })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { dispatcher.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); waitMattermostEvent(t, done, "local-read dispatcher shutdown") })
+
+	dispatcher.Enqueue()
+	waitMattermostEvent(t, client.firstCaptured, "stale unread reconciliation fetch")
+	optimistic, cmd := read.View(ui.MattermostReadRequest{ServerID: "s1", ChannelID: "c1"})
+	if optimistic.ReadState["c1"].HasUnread || cmd == nil {
+		t.Fatalf("optimistic state=%#v cmd=%v", optimistic, cmd)
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("REST correction did not publish changed state")
+	}
+	close(client.releaseFirst)
+	committed := waitMattermostEvent(t, refreshed, "overlay-replayed authoritative reconciliation")
+	if committed.ReadState["c1"].HasUnread {
+		t.Fatalf("retried UI state regressed read: %#v", committed.ReadState)
+	}
+
+	if attempts := client.bootstrapAttempts(); attempts != 1 {
+		t.Fatalf("bootstrap attempts=%d want 1", attempts)
+	}
+	if replaces := store.replaceCount(); replaces != 1 {
+		t.Fatalf("cache replacements=%d want only retry commit", replaces)
+	}
+	if state := startup.viewState("s1"); state.ReadState["c1"].HasUnread {
+		t.Fatalf("retained state regressed read: %#v", state)
+	}
+	startup.mu.RLock()
+	tracked := len(startup.contexts["s1"].localReadOverlays)
+	startup.mu.RUnlock()
+	if tracked != 0 {
+		t.Fatalf("successful authoritative reconciliation retained %d local read overlays", tracked)
+	}
+	loaded, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Memberships) != 1 || loaded.Memberships[0].MsgCount != 3 || loaded.Memberships[0].MentionCount != 1 || loaded.Memberships[0].LastViewedAt != 10 {
+		t.Fatalf("durable cache did not retain raw fetched membership: %#v", loaded.Memberships)
+	}
+}
+
+func TestChannelViewedEqualDuplicateDuringFetchDoesNotClearLaterUnread(t *testing.T) {
+	client := reconciliationBootstrapClient()
+	client.channels[0].TotalMsgCount = 5
+	client.memberships["t1"][0].MsgCount = 5
+	client.memberships["t1"][0].LastViewedAt = 100
+	fetchCaptured := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	client.currentUserHook = func(ctx context.Context) error {
+		close(fetchCaptured)
+		select {
+		case <-releaseFetch:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	store := newMattermostEventDB(t, "s1", "c1")
+	startup := reconciliationStartup(client, localReadSnapshot(true))
+	done := make(chan error, 1)
+	go func() {
+		done <- startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{
+			Cache: store, Send: acknowledgeMattermostRefresh, Clock: time.Now,
+			ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+		})
+	}()
+	waitMattermostEvent(t, fetchCaptured, "authoritative fetch")
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: store, Startup: startup, ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" }})
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "later", ChannelID: "c1", CreatedAt: 200}})
+	adapter.Handle(context.Background(), "s1", mattermost.ChannelViewedEvent{UserID: "u1", Updates: []mattermost.ChannelViewUpdate{{ChannelID: "c1", ViewedAt: 100, HasViewedAt: true}}})
+	startup.mu.RLock()
+	_, tracked := startup.contexts["s1"].localReadOverlays["c1"]
+	startup.mu.RUnlock()
+	if tracked {
+		t.Fatal("equal viewed event recorded reconciliation overlay")
+	}
+	close(releaseFetch)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Membership.LastViewedAt != 100 || !service.ChannelHasUnread(entry) {
+		t.Fatalf("equal viewed duplicate cleared later unread: %#v", entry)
+	}
+}
+
+func TestReconciliationLocalReadDuringCacheCommitBelongsToNextOverlayEpoch(t *testing.T) {
+	client := newLocalReadReconciliationClient()
+	close(client.releaseFirst)
+	db := newMattermostReconcileDB(t)
+	store := &blockingLocalReadReconciliationStore{
+		DB:      db,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	startup := reconciliationStartup(client, localReadSnapshot(false))
+	read := newMattermostUIReadService(context.Background(), startup, nil)
+	sent := false
+	done := make(chan error, 1)
+	go func() {
+		done <- startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{
+			Cache: store,
+			Send: func(msg tea.Msg) {
+				sent = true
+				acknowledgeMattermostRefresh(msg)
+			},
+			Clock: time.Now, ActiveSelection: func() (ids.ServerID, string) { return "", "" },
+		})
+	}()
+	waitMattermostEvent(t, store.entered, "reconciliation cache commit")
+	readReturned := make(chan struct{})
+	readDone := make(chan tea.Msg, 1)
+	go func() {
+		optimistic, cmd := read.View(ui.MattermostReadRequest{ServerID: "s1", ChannelID: "c1"})
+		if optimistic.ReadState["c1"].HasUnread || cmd == nil {
+			readDone <- fmt.Errorf("optimistic state=%#v cmd=%v", optimistic, cmd)
+			close(readReturned)
+			return
+		}
+		close(readReturned)
+		readDone <- cmd()
+	}()
+	waitMattermostEvent(t, readReturned, "local read during cache commit")
+	close(store.release)
+	if err := waitMattermostEvent(t, done, "linearized cache commit"); err != nil {
+		t.Fatalf("reconciliation error=%v", err)
+	}
+	if !sent {
+		t.Fatal("authoritative reconciliation did not publish UI")
+	}
+	if msg := waitMattermostEvent(t, readDone, "read ordered after cache commit"); msg == nil {
+		t.Fatal("read REST correction did not publish after authoritative commit")
+	}
+	if state := startup.viewState("s1"); state.ReadState["c1"].HasUnread {
+		t.Fatalf("retained state regressed read: %#v", state)
+	}
+	loaded, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Memberships) != 1 || loaded.Memberships[0].MsgCount != 3 || loaded.Memberships[0].MentionCount != 1 || loaded.Memberships[0].LastViewedAt != 10 {
+		t.Fatalf("durable cache did not retain authoritative unread commit: %#v", loaded.Memberships)
+	}
+}
+
+func TestLocalReadReplayPreservesFetchedMembershipAuthority(t *testing.T) {
+	client := reconciliationBootstrapClient()
+	client.channels[0].TotalMsgCount = 5
+	client.memberships["t1"][0] = mattermost.ChannelMembership{
+		ChannelID: "c1", UserID: "u1", MsgCount: 3, MentionCount: 2, LastViewedAt: 40, UpdatedAt: 999,
+	}
+	startup := reconciliationStartup(client, localReadSnapshot(false))
+	if _, ok := startup.optimisticallyViewChannel("s1", "c1"); !ok {
+		t.Fatal("optimistic read failed")
+	}
+
+	if err := startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{
+		Cache: newMattermostReconcileDB(t), Send: acknowledgeMattermostRefresh, Clock: time.Now,
+		ActiveSelection: func() (ids.ServerID, string) { return "", "" },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Membership.ChannelID != "c1" || entry.Membership.UserID != "u1" || entry.Membership.UpdatedAt != 999 || entry.Membership.LastViewedAt != 40 {
+		t.Fatalf("overlay replaced fetched authoritative fields: %#v", entry.Membership)
+	}
+	if entry.Membership.MsgCount != 5 || entry.Membership.MentionCount != 0 {
+		t.Fatalf("overlay did not apply owned viewed boundary: %#v", entry.Membership)
+	}
+}
+
+func TestReconciliationSuccessfulInstallConsumesLocalReadOverlayOnce(t *testing.T) {
+	client := reconciliationBootstrapClient()
+	client.channels[0].TotalMsgCount = 5
+	client.memberships["t1"][0] = mattermost.ChannelMembership{ChannelID: "c1", UserID: "u1", MsgCount: 3, MentionCount: 1}
+	startup := reconciliationStartup(client, localReadSnapshot(false))
+	if _, ok := startup.optimisticallyViewChannel("s1", "c1"); !ok {
+		t.Fatal("optimistic read failed")
+	}
+	deps := mattermostReconcileDeps{Cache: newMattermostReconcileDB(t), Send: acknowledgeMattermostRefresh, Clock: time.Now, ActiveSelection: func() (ids.ServerID, string) { return "", "" }}
+	if err := startup.reconcile(context.Background(), "s1", deps); err != nil {
+		t.Fatal(err)
+	}
+	if state := startup.viewState("s1"); state.ReadState["c1"].HasUnread {
+		t.Fatal("first install did not replay overlay")
+	}
+	if err := startup.reconcile(context.Background(), "s1", deps); err != nil {
+		t.Fatal(err)
+	}
+	if state := startup.viewState("s1"); !state.ReadState["c1"].HasUnread {
+		t.Fatal("consumed overlay replayed into next authoritative install")
+	}
+}
+
+func TestReconciliationFailedInstallRetainsLocalReadOverlay(t *testing.T) {
+	client := reconciliationBootstrapClient()
+	client.channels[0].TotalMsgCount = 5
+	client.memberships["t1"][0] = mattermost.ChannelMembership{ChannelID: "c1", UserID: "u1", MsgCount: 3, MentionCount: 1}
+	startup := reconciliationStartup(client, localReadSnapshot(false))
+	if _, ok := startup.optimisticallyViewChannel("s1", "c1"); !ok {
+		t.Fatal("optimistic read failed")
+	}
+	failing := &failingReconciliationStore{DB: newMattermostReconcileDB(t)}
+	err := startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{Cache: failing, Send: acknowledgeMattermostRefresh, Clock: time.Now, ActiveSelection: func() (ids.ServerID, string) { return "", "" }})
+	if err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	startup.mu.RLock()
+	_, retained := startup.contexts["s1"].localReadOverlays["c1"]
+	startup.mu.RUnlock()
+	if !retained {
+		t.Fatal("failed install consumed local read overlay")
+	}
+}
+
+func TestReconciliationPostAppliedBeforeFetchUsesAuthoritativeSnapshot(t *testing.T) {
+	client := reconciliationBootstrapClient()
+	client.channels[0].TotalMsgCount = 0
+	startup := reconciliationStartup(client, localReadSnapshot(true))
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:           &atomicMattermostEventStore{inserted: true},
+		Startup:         startup,
+		ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+	})
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
+
+	failing := &failingReconciliationStore{DB: newMattermostReconcileDB(t)}
+	if err := startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{Cache: failing, Send: acknowledgeMattermostRefresh, Clock: time.Now, ActiveSelection: func() (ids.ServerID, string) { return "", "" }}); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if err := startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{Cache: failing.DB, Send: acknowledgeMattermostRefresh, Clock: time.Now, ActiveSelection: func() (ids.ServerID, string) { return "", "" }}); err != nil {
+		t.Fatal(err)
+	}
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != client.channels[0].TotalMsgCount {
+		t.Fatalf("pre-fetch post was not replaced by authoritative snapshot: %#v", entry)
+	}
+}
+
+func TestReconciliationCoveredPostBoundaryDoesNotDoubleIncrementAndClearsJournal(t *testing.T) {
+	for _, lastPostAt := range []int64{10, 11} {
+		t.Run(fmt.Sprintf("last_post_at_%d", lastPostAt), func(t *testing.T) {
+			client := reconciliationBootstrapClient()
+			client.channels[0].LastPostAt = lastPostAt
+			startup := reconciliationStartup(client, localReadSnapshot(true))
+			store := newMattermostEventDB(t, "s1", "c1")
+			adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: store, Startup: startup, ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" }})
+			adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
+			if err := startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{Cache: store, Send: acknowledgeMattermostRefresh, Clock: time.Now, ActiveSelection: func() (ids.ServerID, string) { return "", "" }}); err != nil {
+				t.Fatal(err)
+			}
+			entry := unreadMattermostEntry(t, startup, "s1", "c1")
+			if entry.Channel.TotalMsgCount != client.channels[0].TotalMsgCount {
+				t.Fatalf("covered post was rebased: %#v", entry.Channel)
+			}
+			state := startup.reconcileState("s1")
+			state.runtime.Lock()
+			inFlight := state.inFlight
+			state.runtime.Unlock()
+			if inFlight != nil {
+				t.Fatalf("authoritative commit retained journal: %#v", inFlight)
+			}
+		})
+	}
+}
+
+func TestReconciliationLastPostAtRuntimeBoundaryRetainsDurableCoverage(t *testing.T) {
+	db := newMattermostReconcileDB(t)
+	initial := localReadSnapshot(true)
+	initial.Sections[0].Channels[0].Channel.LastPostAt = 200
+	if err := db.ReplaceMattermostBootstrapSnapshot(mattermostCacheSnapshot(initial, time.UnixMilli(200))); err != nil {
+		t.Fatal(err)
+	}
+
+	client := reconciliationBootstrapClient()
+	client.channels[0].TotalMsgCount = 5
+	client.channels[0].LastPostAt = 100
+	client.memberships["t1"][0].MsgCount = 5
+	post := mattermost.Message{ID: "post-150", ChannelID: "c1", UserID: "u2", Text: "history first", CreatedAt: 150}
+	client.postPage = mattermost.MessagePage{Messages: []mattermost.Message{post}}
+	if _, err := service.NewMattermostHistoryService("s1", client, db, 20).FetchRecent(context.Background(), "c1"); err != nil {
+		t.Fatal(err)
+	}
+
+	startup := reconciliationStartup(client, initial)
+	if err := startup.reconcile(context.Background(), "s1", mattermostReconcileDeps{
+		Cache: db, Send: acknowledgeMattermostRefresh, Clock: func() time.Time { return time.UnixMilli(300) },
+		ActiveSelection: func() (ids.ServerID, string) { return "", "" },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Channels[0].LastPostAt != 200 {
+		t.Fatalf("durable last_post_at=%d want 200", loaded.Channels[0].LastPostAt)
+	}
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.LastPostAt != 200 {
+		t.Errorf("runtime last_post_at=%d want retained durable boundary 200", entry.Channel.LastPostAt)
+	}
+	beforeTotal, beforeViewed := entry.Channel.TotalMsgCount, entry.Membership.MsgCount
+
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache: db, Startup: startup,
+		ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+	})
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: post})
+	entry = unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != beforeTotal || entry.Membership.MsgCount != beforeViewed {
+		t.Errorf("covered websocket post changed counts to %d/%d want %d/%d", entry.Channel.TotalMsgCount, entry.Membership.MsgCount, beforeTotal, beforeViewed)
+	}
+	claimed, err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", cache.MattermostPost{ID: post.ID, ChannelID: post.ChannelID, UserID: post.UserID, Text: post.Text, CreatedAt: post.CreatedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claimed {
+		t.Error("covered websocket post claimed the history row runtime transition")
+	}
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: post})
+	entry = unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != beforeTotal || entry.Membership.MsgCount != beforeViewed {
+		t.Errorf("duplicate websocket post changed counts to %d/%d want %d/%d", entry.Channel.TotalMsgCount, entry.Membership.MsgCount, beforeTotal, beforeViewed)
+	}
+}
+
 type reconciliationPostCall struct {
 	channelID string
 	options   mattermost.ChannelPostsOptions
@@ -695,6 +1165,107 @@ type reconciliationClient struct {
 	currentUserHook func(context.Context) error
 	postHook        func(context.Context) error
 	mu              sync.Mutex
+}
+
+type localReadReconciliationClient struct {
+	*reconciliationClient
+	firstCaptured chan struct{}
+	releaseFirst  chan struct{}
+	mu            sync.Mutex
+	attempt       int
+}
+
+func newLocalReadReconciliationClient() *localReadReconciliationClient {
+	client := reconciliationBootstrapClient()
+	client.channels[0].TotalMsgCount = 5
+	return &localReadReconciliationClient{
+		reconciliationClient: client,
+		firstCaptured:        make(chan struct{}),
+		releaseFirst:         make(chan struct{}),
+	}
+}
+
+func (c *localReadReconciliationClient) CurrentUser(context.Context) (*mattermost.User, error) {
+	c.mu.Lock()
+	c.attempt++
+	c.mu.Unlock()
+	return &mattermost.User{ID: "u1"}, nil
+}
+
+func (c *localReadReconciliationClient) ChannelMembershipsForUser(ctx context.Context, _, _ string) ([]mattermost.ChannelMembership, error) {
+	c.mu.Lock()
+	attempt := c.attempt
+	c.mu.Unlock()
+	if attempt == 1 {
+		close(c.firstCaptured)
+		select {
+		case <-c.releaseFirst:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return []mattermost.ChannelMembership{{ChannelID: "c1", UserID: "u1", MsgCount: 3, MentionCount: 1, LastViewedAt: 10}}, nil
+	}
+	return []mattermost.ChannelMembership{{ChannelID: "c1", UserID: "u1", MsgCount: 5, LastViewedAt: 100}}, nil
+}
+
+func (c *localReadReconciliationClient) ViewChannel(context.Context, string, string, string) (mattermost.ViewChannelResult, error) {
+	return mattermost.ViewChannelResult{LastViewedAtTimes: map[string]int64{"c1": 100}}, nil
+}
+
+func (c *localReadReconciliationClient) bootstrapAttempts() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.attempt
+}
+
+func localReadSnapshot(read bool) service.ServerSnapshot {
+	msgCount, mentionCount, viewedAt := int64(3), int64(1), int64(10)
+	if read {
+		msgCount, mentionCount, viewedAt = 5, 0, 100
+	}
+	return service.ServerSnapshot{
+		Server: mattermost.Server{ID: "s1", Name: "One", URL: "https://one.example", UserID: "u1"}, CurrentUser: mattermost.User{ID: "u1"},
+		Teams: []mattermost.Team{{ID: "t1"}},
+		Sections: []service.ChannelSection{{ID: "t1", Channels: []service.ChannelEntry{{
+			Channel:    mattermost.Channel{ID: "c1", TeamID: "t1", Kind: mattermost.ChannelKindPublic, TotalMsgCount: 5},
+			Membership: &mattermost.ChannelMembership{ChannelID: "c1", UserID: "u1", MsgCount: msgCount, MentionCount: mentionCount, LastViewedAt: viewedAt},
+		}}}},
+	}
+}
+
+type countingReconciliationStore struct {
+	*cache.DB
+	mu       sync.Mutex
+	replaces int
+}
+
+type blockingLocalReadReconciliationStore struct {
+	*cache.DB
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingLocalReadReconciliationStore) ReplaceMattermostBootstrapSnapshotContext(ctx context.Context, snapshot cache.MattermostBootstrapSnapshot) error {
+	close(s.entered)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.DB.ReplaceMattermostBootstrapSnapshotContext(ctx, snapshot)
+}
+
+func (s *countingReconciliationStore) ReplaceMattermostBootstrapSnapshotContext(ctx context.Context, snapshot cache.MattermostBootstrapSnapshot) error {
+	s.mu.Lock()
+	s.replaces++
+	s.mu.Unlock()
+	return s.DB.ReplaceMattermostBootstrapSnapshotContext(ctx, snapshot)
+}
+
+func (s *countingReconciliationStore) replaceCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.replaces
 }
 
 func reconciliationBootstrapClient() *reconciliationClient {
@@ -758,6 +1329,10 @@ func (*reconciliationClient) RunWebSocket(ctx context.Context, _ func(), _ func(
 
 func (*reconciliationClient) CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error) {
 	return mattermost.Message{}, errors.New("unused send")
+}
+
+func (*reconciliationClient) ViewChannel(context.Context, string, string, string) (mattermost.ViewChannelResult, error) {
+	return mattermost.ViewChannelResult{}, errors.New("unused view")
 }
 
 type orderedReconciliationStore struct {

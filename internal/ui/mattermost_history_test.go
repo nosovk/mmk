@@ -8,11 +8,74 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/sidebar"
 	"github.com/nosovk/mmk/internal/ui/wintree"
+	"github.com/nosovk/mmk/internal/ui/workspace"
 )
+
+func TestMarkChannelReadMattermostSelectionClearsImmediatelyAndDoesNotUseSlackOperations(t *testing.T) {
+	a := NewApp()
+	a.SetWorkspaces([]workspace.WorkspaceItem{{ID: "s1", Name: "One"}})
+	_, _ = a.Update(ServerReadyMsg{Server: ServerViewState{
+		ServerID: "s1", InitialActive: true, Channels: testMattermostChannels(),
+		ReadState: map[string]cache.ReadState{"c1": {HasUnread: true}, "c2": {HasUnread: true}}, HasUnread: true,
+	}})
+	a.activeChannelID = "c1"
+
+	var requests []MattermostReadRequest
+	a.SetMattermostReadService(NewMattermostReadService(func(request MattermostReadRequest) (ServerViewState, tea.Cmd) {
+		requests = append(requests, request)
+		return ServerViewState{
+			ServerID: "s1", Channels: testMattermostChannels(),
+			ReadState: map[string]cache.ReadState{"c1": {HasUnread: true}, "c2": {HasUnread: false}}, HasUnread: true,
+		}, nil
+	}))
+	var slackRead, slackMarkUnread int
+	a.SetChannelService(NewChannelService(ChannelServiceFuncs{MarkRead: func(ids.ChannelID, ids.MessageTS) tea.Msg {
+		slackRead++
+		return nil
+	}}))
+	a.SetMessageService(NewMessageService(MessageServiceFuncs{MarkUnread: func(ids.ChannelID, ids.ThreadTS, ids.MessageTS, int) tea.Msg {
+		slackMarkUnread++
+		return nil
+	}}))
+
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c2", Name: "Two", Type: "channel"})
+
+	if len(requests) != 1 || requests[0].ServerID != "s1" || requests[0].ChannelID != "c2" || requests[0].PreviousServerID != "s1" || requests[0].PreviousChannelID != "c1" {
+		t.Fatalf("requests=%#v", requests)
+	}
+	if got := a.sidebar.UnreadChannelCount(); got != 1 {
+		t.Fatalf("unread count=%d, want other channel preserved", got)
+	}
+	if slackRead != 0 || slackMarkUnread != 0 {
+		t.Fatalf("Slack operations read=%d mark-unread=%d", slackRead, slackMarkUnread)
+	}
+}
+
+func TestMarkChannelReadInactiveServerRefreshUpdatesRailOnly(t *testing.T) {
+	a := NewApp()
+	a.SetWorkspaces([]workspace.WorkspaceItem{{ID: "s1", Name: "One"}, {ID: "s2", Name: "Two"}})
+	_, _ = a.Update(ServerReadyMsg{Server: ServerViewState{ServerID: "s1", InitialActive: true, Channels: testMattermostChannels()}})
+	a.activeChannelID = "c1"
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "visible"}})
+
+	_, _ = a.Update(ServerRefreshedMsg{Server: ServerViewState{
+		ServerID: "s2", Channels: []sidebar.ChannelItem{{ID: "other", Name: "Other"}},
+		ReadState: map[string]cache.ReadState{"other": {HasUnread: true}}, HasUnread: true,
+	}})
+
+	items := a.workspaceRail.Items()
+	if len(items) != 2 || !items[1].HasUnread {
+		t.Fatalf("rail=%#v", items)
+	}
+	if a.activeServerID != "s1" || a.activeChannelID != "c1" || !reflect.DeepEqual(historyItemIDs(a.messagepane.Messages()), []string{"visible"}) {
+		t.Fatalf("inactive refresh changed visible state: server=%q channel=%q messages=%v", a.activeServerID, a.activeChannelID, historyItemIDs(a.messagepane.Messages()))
+	}
+}
 
 type fakeUIHistory struct {
 	cached map[string][]messages.MessageItem

@@ -144,6 +144,9 @@ func TestWireMattermostRuntimeSetsOnlyMattermostSendBoundary(t *testing.T) {
 	if app.send == nil {
 		t.Fatal("Mattermost send boundary was not wired")
 	}
+	if app.read == nil {
+		t.Fatal("Mattermost read boundary was not wired")
+	}
 	if _, ok := app.send.Send(context.Background(), request).(ui.MattermostMessageSentMsg); !ok {
 		t.Fatal("Mattermost send boundary was not wired")
 	}
@@ -155,6 +158,7 @@ func TestWireMattermostRuntimeSetsOnlyMattermostSendBoundary(t *testing.T) {
 type recordingMattermostRuntimeApp struct {
 	history       ui.MattermostHistoryService
 	send          ui.MattermostSendService
+	read          ui.MattermostReadService
 	slackSetCalls int
 }
 
@@ -164,6 +168,10 @@ func (a *recordingMattermostRuntimeApp) SetMattermostHistoryService(history ui.M
 
 func (a *recordingMattermostRuntimeApp) SetMattermostSendService(send ui.MattermostSendService) {
 	a.send = send
+}
+
+func (a *recordingMattermostRuntimeApp) SetMattermostReadService(read ui.MattermostReadService) {
+	a.read = read
 }
 
 func (a *recordingMattermostRuntimeApp) SetMessageService(ui.MessageService) {
@@ -185,6 +193,10 @@ func (c *recordingMattermostSendClient) CreatePost(ctx context.Context, request 
 		return mattermost.Message{}, ctx.Err()
 	}
 	return c.message, c.err
+}
+
+func (c *recordingMattermostSendClient) ViewChannel(context.Context, string, string, string) (mattermost.ViewChannelResult, error) {
+	return mattermost.ViewChannelResult{}, errors.New("unused view")
 }
 
 func (*recordingMattermostSendClient) CurrentUser(context.Context) (*mattermost.User, error) {

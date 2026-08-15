@@ -3,12 +3,294 @@ package service
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/nosovk/mmk/internal/mattermost"
 )
+
+func TestUnreadDerivedFromMembership(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		channel    mattermost.Channel
+		membership *mattermost.ChannelMembership
+		want       bool
+	}{
+		{
+			name:       "mentions",
+			channel:    mattermost.Channel{TotalMsgCount: 5},
+			membership: &mattermost.ChannelMembership{MsgCount: 5, MentionCount: 1},
+			want:       true,
+		},
+		{
+			name:       "message count divergence",
+			channel:    mattermost.Channel{TotalMsgCount: 6},
+			membership: &mattermost.ChannelMembership{MsgCount: 5},
+			want:       true,
+		},
+		{
+			name:       "equal counts and zero mentions",
+			channel:    mattermost.Channel{TotalMsgCount: 5},
+			membership: &mattermost.ChannelMembership{MsgCount: 5},
+			want:       false,
+		},
+		{
+			name:    "absent membership",
+			channel: mattermost.Channel{TotalMsgCount: 5},
+			want:    false,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := ChannelEntry{Channel: tt.channel, Membership: tt.membership}
+			if got := ChannelHasUnread(entry); got != tt.want {
+				t.Fatalf("ChannelHasUnread() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUnreadPostInInactiveChannelBecomesUnread(t *testing.T) {
+	entry := ChannelEntry{
+		Channel:    mattermost.Channel{ID: "channel-1", TotalMsgCount: 5},
+		Membership: &mattermost.ChannelMembership{ChannelID: "channel-1", UserID: "user-1", MsgCount: 5},
+	}
+
+	got := ChannelWithNewPost(entry, false)
+
+	if !ChannelHasUnread(got) {
+		t.Fatal("ChannelHasUnread() = false, want true")
+	}
+	if got.Channel.TotalMsgCount != 6 || got.Membership.MsgCount != 5 {
+		t.Fatalf("post counts = channel %d, membership %d; want 6, 5", got.Channel.TotalMsgCount, got.Membership.MsgCount)
+	}
+}
+
+func TestUnreadPostInActivelyViewedChannelRemainsRead(t *testing.T) {
+	entry := ChannelEntry{
+		Channel:    mattermost.Channel{ID: "channel-1", TotalMsgCount: 5},
+		Membership: &mattermost.ChannelMembership{ChannelID: "channel-1", UserID: "user-1", MsgCount: 5},
+	}
+
+	got := ChannelWithNewPost(entry, true)
+
+	if ChannelHasUnread(got) {
+		t.Fatal("ChannelHasUnread() = true, want false")
+	}
+	if got.Channel.TotalMsgCount != 6 || got.Membership.MsgCount != 6 {
+		t.Fatalf("post counts = channel %d, membership %d; want 6, 6", got.Channel.TotalMsgCount, got.Membership.MsgCount)
+	}
+}
+
+func TestUnreadPostInActivelyViewedChannelPreservesExistingMentions(t *testing.T) {
+	entry := ChannelEntry{
+		Channel: mattermost.Channel{ID: "channel-1", ServerID: "server-1", TotalMsgCount: 5, UpdatedAt: 100},
+		Membership: &mattermost.ChannelMembership{
+			ChannelID:    "channel-1",
+			UserID:       "user-1",
+			MsgCount:     5,
+			MentionCount: 2,
+			LastViewedAt: 80,
+			UpdatedAt:    90,
+		},
+	}
+	wantOriginal := entry
+	wantMembership := *entry.Membership
+	wantMembership.MsgCount++
+
+	got := ChannelWithNewPost(entry, true)
+
+	if got.Channel.TotalMsgCount != 6 {
+		t.Fatalf("channel total = %d, want 6", got.Channel.TotalMsgCount)
+	}
+	if got.Membership == nil || !reflect.DeepEqual(*got.Membership, wantMembership) {
+		t.Fatalf("membership = %#v, want %#v", got.Membership, wantMembership)
+	}
+	if !reflect.DeepEqual(entry, wantOriginal) {
+		t.Fatalf("ChannelWithNewPost mutated input: %#v", entry)
+	}
+}
+
+func TestUnreadPostCountersSaturateAtMaxInt64(t *testing.T) {
+	t.Run("inactive channel stays unread", func(t *testing.T) {
+		entry := ChannelEntry{
+			Channel:    mattermost.Channel{TotalMsgCount: math.MaxInt64},
+			Membership: &mattermost.ChannelMembership{MsgCount: math.MaxInt64 - 1},
+		}
+
+		got := ChannelWithNewPost(entry, false)
+
+		if got.Channel.TotalMsgCount != math.MaxInt64 {
+			t.Fatalf("channel total = %d, want %d", got.Channel.TotalMsgCount, int64(math.MaxInt64))
+		}
+		if !ChannelHasUnread(got) {
+			t.Fatal("ChannelHasUnread() = false, want existing unread state preserved")
+		}
+	})
+
+	t.Run("active channel stays read", func(t *testing.T) {
+		entry := ChannelEntry{
+			Channel:    mattermost.Channel{TotalMsgCount: math.MaxInt64},
+			Membership: &mattermost.ChannelMembership{MsgCount: math.MaxInt64},
+		}
+
+		got := ChannelWithNewPost(entry, true)
+
+		if got.Channel.TotalMsgCount != math.MaxInt64 || got.Membership.MsgCount != math.MaxInt64 {
+			t.Fatalf("post counts = channel %d, membership %d; want both %d", got.Channel.TotalMsgCount, got.Membership.MsgCount, int64(math.MaxInt64))
+		}
+		if ChannelHasUnread(got) {
+			t.Fatal("ChannelHasUnread() = true, want false")
+		}
+	})
+}
+
+func TestUnreadPostAtActiveCounterBoundaryPreservesDivergence(t *testing.T) {
+	entry := ChannelEntry{
+		Channel: mattermost.Channel{ID: "channel-1", TotalMsgCount: math.MaxInt64},
+		Membership: &mattermost.ChannelMembership{
+			ChannelID:    "channel-1",
+			UserID:       "user-1",
+			MsgCount:     math.MaxInt64 - 1,
+			MentionCount: 2,
+			LastViewedAt: 80,
+			UpdatedAt:    90,
+		},
+	}
+
+	got := ChannelWithNewPost(entry, true)
+
+	if !reflect.DeepEqual(got, entry) {
+		t.Fatalf("post entry = %#v, want unchanged %#v", got, entry)
+	}
+	if !ChannelHasUnread(got) {
+		t.Fatal("ChannelHasUnread() = false, want existing divergence preserved")
+	}
+}
+
+func TestUnreadPostAtActiveMembershipCounterBoundaryPreservesDivergence(t *testing.T) {
+	entry := ChannelEntry{
+		Channel: mattermost.Channel{
+			ID:            "channel-1",
+			ServerID:      "server-1",
+			TotalMsgCount: math.MaxInt64 - 1,
+			UpdatedAt:     100,
+		},
+		DisplayName: "Town Square",
+		Membership: &mattermost.ChannelMembership{
+			ChannelID:    "channel-1",
+			UserID:       "user-1",
+			MsgCount:     math.MaxInt64,
+			MentionCount: 2,
+			LastViewedAt: 80,
+			UpdatedAt:    90,
+		},
+	}
+
+	got := ChannelWithNewPost(entry, true)
+
+	if !reflect.DeepEqual(got, entry) {
+		t.Fatalf("post entry = %#v, want unchanged %#v", got, entry)
+	}
+}
+
+func TestUnreadPostInActivelyViewedChannelPreservesExistingCountDivergence(t *testing.T) {
+	entry := ChannelEntry{
+		Channel: mattermost.Channel{TotalMsgCount: 8},
+		Membership: &mattermost.ChannelMembership{
+			MsgCount:     5,
+			MentionCount: 2,
+		},
+	}
+
+	got := ChannelWithNewPost(entry, true)
+
+	if got.Channel.TotalMsgCount != 9 || got.Membership.MsgCount != 6 {
+		t.Fatalf("post counts = channel %d, membership %d; want 9, 6", got.Channel.TotalMsgCount, got.Membership.MsgCount)
+	}
+	if got.Membership.MentionCount != 2 {
+		t.Fatalf("mention count = %d, want 2", got.Membership.MentionCount)
+	}
+	if !ChannelHasUnread(got) {
+		t.Fatal("ChannelHasUnread() = false, want pre-existing divergence preserved")
+	}
+}
+
+func TestUnreadPostWithoutMembershipOnlyAdvancesChannel(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		count int64
+		want  int64
+	}{
+		{name: "increments", count: 5, want: 6},
+		{name: "saturates", count: math.MaxInt64, want: math.MaxInt64},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := ChannelEntry{Channel: mattermost.Channel{ID: "channel-1", TotalMsgCount: tt.count}}
+
+			got := ChannelWithNewPost(entry, true)
+
+			if got.Channel.TotalMsgCount != tt.want || got.Membership != nil {
+				t.Fatalf("post entry = %#v, want channel total %d and nil membership", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUnreadViewedWithoutMembershipIsNoOp(t *testing.T) {
+	entry := ChannelEntry{
+		Channel:     mattermost.Channel{ID: "channel-1", TotalMsgCount: 5},
+		DisplayName: "Town Square",
+	}
+
+	if got := ChannelViewed(entry); !reflect.DeepEqual(got, entry) {
+		t.Fatalf("ChannelViewed() = %#v, want unchanged %#v", got, entry)
+	}
+}
+
+func TestUnreadViewedClearsUnreadAndMentionsWithoutMutatingUnrelatedData(t *testing.T) {
+	entry := ChannelEntry{
+		Channel: mattermost.Channel{
+			ID:            "channel-1",
+			ServerID:      "server-1",
+			TeamID:        "team-1",
+			Name:          "town-square",
+			DisplayName:   "Town Square",
+			Kind:          mattermost.ChannelKindPublic,
+			TotalMsgCount: 8,
+			UpdatedAt:     100,
+		},
+		DisplayName: "Derived Town Square",
+		Membership: &mattermost.ChannelMembership{
+			ChannelID:    "channel-1",
+			UserID:       "user-1",
+			MsgCount:     5,
+			MentionCount: 2,
+			LastViewedAt: 80,
+			UpdatedAt:    90,
+		},
+	}
+	wantOriginal := entry
+	wantMembership := *entry.Membership
+	wantMembership.MsgCount = entry.Channel.TotalMsgCount
+	wantMembership.MentionCount = 0
+
+	got := ChannelViewed(entry)
+
+	if ChannelHasUnread(got) {
+		t.Fatal("ChannelHasUnread() = true, want false")
+	}
+	if !reflect.DeepEqual(got.Channel, entry.Channel) || got.DisplayName != entry.DisplayName {
+		t.Fatalf("viewed entry mutated unrelated channel data: got %#v, input %#v", got, entry)
+	}
+	if got.Membership == nil || !reflect.DeepEqual(*got.Membership, wantMembership) {
+		t.Fatalf("viewed membership = %#v, want %#v", got.Membership, wantMembership)
+	}
+	if !reflect.DeepEqual(entry, wantOriginal) || entry.Membership.MsgCount != 5 || entry.Membership.MentionCount != 2 {
+		t.Fatalf("ChannelViewed mutated input: %#v", entry)
+	}
+}
 
 func TestServerBootstrapBuildsDirectThenStableTeamSections(t *testing.T) {
 	client := &fakeServerBootstrapClient{

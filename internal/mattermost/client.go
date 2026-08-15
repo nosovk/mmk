@@ -239,6 +239,63 @@ func (c *Client) ChannelMembershipsForUser(ctx context.Context, userID, teamID s
 	return memberships, nil
 }
 
+// ViewChannelResult contains Mattermost's authoritative channel view times.
+type ViewChannelResult struct {
+	LastViewedAtTimes map[string]int64
+}
+
+// ViewChannel marks the current channel viewed for a user. The previous channel
+// may be blank when no same-server previous channel is known.
+func (c *Client) ViewChannel(ctx context.Context, userID, channelID, previousChannelID string) (ViewChannelResult, error) {
+	if err := validateBulkID(userID); err != nil {
+		return ViewChannelResult{}, fmt.Errorf("Mattermost user ID: %w", err)
+	}
+	if err := validateBulkID(channelID); err != nil {
+		return ViewChannelResult{}, fmt.Errorf("Mattermost channel ID: %w", err)
+	}
+	if previousChannelID != "" {
+		if err := validateBulkID(previousChannelID); err != nil {
+			return ViewChannelResult{}, fmt.Errorf("Mattermost previous channel ID: %w", err)
+		}
+	}
+
+	payload := viewChannelRequest{
+		ChannelID:                 channelID,
+		PreviousChannelID:         previousChannelID,
+		CollapsedThreadsSupported: false,
+	}
+	var wire viewChannelResponse
+	endpoint := "channels/members/" + url.PathEscape(userID) + "/view"
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, payload, &wire); err != nil {
+		return ViewChannelResult{}, err
+	}
+	if wire.Status != "OK" {
+		err := fmt.Errorf("Mattermost channel view status is %q, expected %q", wire.Status, "OK")
+		return ViewChannelResult{}, redactError("validate Mattermost channel view", err, c.token)
+	}
+	lastViewedAtTimes := make(map[string]int64, len(wire.LastViewedAtTimes))
+	for responseChannelID, timestamp := range wire.LastViewedAtTimes {
+		if err := validateBulkID(responseChannelID); err != nil {
+			err = fmt.Errorf("Mattermost channel view returned invalid channel ID: %w", err)
+			return ViewChannelResult{}, redactError("validate Mattermost channel view", err, c.token)
+		}
+		if timestamp == nil {
+			err := errors.New("Mattermost channel view returned null timestamp")
+			return ViewChannelResult{}, redactError("validate Mattermost channel view", err, c.token)
+		}
+		if *timestamp < 0 {
+			err := errors.New("Mattermost channel view returned negative timestamp")
+			return ViewChannelResult{}, redactError("validate Mattermost channel view", err, c.token)
+		}
+		lastViewedAtTimes[responseChannelID] = *timestamp
+	}
+	if _, ok := wire.LastViewedAtTimes[channelID]; !ok {
+		err := fmt.Errorf("Mattermost channel view response is missing requested channel %q", channelID)
+		return ViewChannelResult{}, redactError("validate Mattermost channel view", err, c.token)
+	}
+	return ViewChannelResult{LastViewedAtTimes: lastViewedAtTimes}, nil
+}
+
 // UsersByIDs returns requested users in first-seen ID order. Mattermost users
 // not present in the request are ignored, as are duplicate response users.
 func (c *Client) UsersByIDs(ctx context.Context, ids []string) ([]User, error) {
@@ -381,6 +438,9 @@ func (c *Client) ChannelPosts(ctx context.Context, channelID string, options Cha
 		if post.ChannelID != channelID {
 			return MessagePage{}, fmt.Errorf("Mattermost post %q belongs to channel %q, expected %q", orderedID, post.ChannelID, channelID)
 		}
+		if post.CreatedAt <= 0 {
+			return MessagePage{}, fmt.Errorf("Mattermost post %q create_at must be positive", orderedID)
+		}
 		messages = append(messages, post.domain())
 	}
 	return MessagePage{Messages: messages, OrderCount: len(wire.Order)}, nil
@@ -423,6 +483,9 @@ func (c *Client) CreatePost(ctx context.Context, input CreatePostRequest) (Messa
 	if wire.ChannelID != input.ChannelID {
 		err := fmt.Errorf("Mattermost created post belongs to channel %q, expected %q", wire.ChannelID, input.ChannelID)
 		return Message{}, redactError("validate Mattermost created post", err, c.token)
+	}
+	if wire.CreatedAt <= 0 {
+		return Message{}, errors.New("Mattermost created post create_at must be positive")
 	}
 	if wire.PendingPostID == "" {
 		wire.PendingPostID = input.CorrelationID
@@ -748,6 +811,7 @@ type channelResponse struct {
 	DisplayName   string `json:"display_name"`
 	Type          string `json:"type"`
 	TotalMsgCount int64  `json:"total_msg_count"`
+	LastPostAt    int64  `json:"last_post_at"`
 	UpdatedAt     int64  `json:"update_at"`
 	DeletedAt     int64  `json:"delete_at"`
 }
@@ -764,6 +828,7 @@ func (c channelResponse) domain() (Channel, error) {
 		DisplayName:   c.DisplayName,
 		Kind:          kind,
 		TotalMsgCount: c.TotalMsgCount,
+		LastPostAt:    c.LastPostAt,
 		UpdatedAt:     c.UpdatedAt,
 		DeletedAt:     c.DeletedAt,
 	}, nil
@@ -776,6 +841,17 @@ type channelMembershipResponse struct {
 	MentionCount int64  `json:"mention_count"`
 	LastViewedAt int64  `json:"last_viewed_at"`
 	UpdatedAt    int64  `json:"last_update_at"`
+}
+
+type viewChannelRequest struct {
+	ChannelID                 string `json:"channel_id"`
+	PreviousChannelID         string `json:"prev_channel_id"`
+	CollapsedThreadsSupported bool   `json:"collapsed_threads_supported"`
+}
+
+type viewChannelResponse struct {
+	Status            string            `json:"status"`
+	LastViewedAtTimes map[string]*int64 `json:"last_viewed_at_times"`
 }
 
 type postListResponse struct {

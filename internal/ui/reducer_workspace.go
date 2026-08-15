@@ -68,13 +68,18 @@ import (
 var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case ServerReadyMsg:
-		return reduceServerReady(a, m.Server), true
+		state, accepted := a.acceptServerReadyState(m.Server)
+		return reduceServerReady(a, state, accepted), true
 
 	case ServerRefreshedMsg:
-		return reduceServerRefreshed(a, m.Server), true
+		state, accepted := a.acceptServerRefreshedState(m.Server)
+		if !accepted {
+			return nil, true
+		}
+		return reduceServerRefreshed(a, state), true
 
 	case ServerSwitchedMsg:
-		return reduceServerSwitched(a, m.Server), true
+		return reduceServerSwitched(a, a.acceptServerSwitchedState(m.Server)), true
 
 	case ServerStateMsg:
 		a.workspaceRail.SetState(string(m.ServerID), m.State, m.Err)
@@ -177,8 +182,12 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func reduceServerReady(a *App, state ServerViewState) tea.Cmd {
+func reduceServerReady(a *App, state ServerViewState, accepted bool) tea.Cmd {
 	a.bootstrap.MarkServerReady(string(state.ServerID))
+	if accepted {
+		a.workspaceRail.SetUnread(string(state.ServerID), state.HasUnread)
+		a.notifyReadStateChanged()
+	}
 	if !state.InitialActive || !a.bootstrap.ClaimInitialActive() {
 		return nil
 	}
@@ -186,7 +195,9 @@ func reduceServerReady(a *App, state ServerViewState) tea.Cmd {
 }
 
 func reduceServerRefreshed(a *App, state ServerViewState) tea.Cmd {
+	a.workspaceRail.SetUnread(string(state.ServerID), state.HasUnread)
 	if string(state.ServerID) != a.activeServerID {
+		a.notifyReadStateChanged()
 		return nil
 	}
 	a.sidebar.SetSectionsProvider(state.SectionsProvider)
@@ -196,12 +207,12 @@ func reduceServerRefreshed(a *App, state ServerViewState) tea.Cmd {
 	a.channelFinder.SetItems(state.FinderItems)
 	a.SetUserNames(state.UserNames)
 	a.SetCurrentUserID(state.UserID)
-	a.workspaceRail.SetUnread(a.activeServerID, state.HasUnread)
 
 	for _, channel := range state.Channels {
 		if channel.ID == a.activeChannelID {
 			a.sidebar.SelectByID(channel.ID)
 			a.sidebar.SetActiveChannelID(channel.ID)
+			a.notifyReadStateChanged()
 			return nil
 		}
 	}
@@ -213,12 +224,14 @@ func reduceServerRefreshed(a *App, state ServerViewState) tea.Cmd {
 		a.messagepane.SetMessages(nil)
 		a.CloseThread()
 		a.clearSelections()
+		a.notifyReadStateChanged()
 		return nil
 	}
 
 	target := state.Channels[0]
 	cmd, _ := reduceChannelSelected(a, ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type})
 	a.sidebar.SelectByID(target.ID)
+	a.notifyReadStateChanged()
 	return cmd
 }
 
@@ -278,6 +291,7 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	if len(state.Channels) == 0 {
 		a.messagepane.SetLoading(false)
 		a.messagepane.SetMessages(nil)
+		a.notifyReadStateChanged()
 		return nil
 	}
 	target := state.Channels[0]
@@ -293,10 +307,90 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 		}
 	}
 	a.sidebar.SelectByID(target.ID)
-	a.activeChannelID = target.ID
 	a.messagepane.SetLoading(true)
 	a.messagepane.SetMessages(nil)
+	a.notifyReadStateChanged()
 	return func() tea.Msg { return ChannelSelectedMsg{ID: target.ID, Name: target.Name, Type: target.Type} }
+}
+
+func (a *App) ensureServerStateMaps() {
+	if a.serverRevisions == nil {
+		a.serverRevisions = map[string]uint64{}
+	}
+	if a.serverStates == nil {
+		a.serverStates = map[string]ServerViewState{}
+	}
+	a.workspaceRail.SetUnreadReader(func() []string {
+		var unread []string
+		for serverID, state := range a.serverStates {
+			if state.HasUnread {
+				unread = append(unread, serverID)
+			}
+		}
+		return unread
+	})
+}
+
+func (a *App) acceptServerReadyState(state ServerViewState) (ServerViewState, bool) {
+	a.ensureServerStateMaps()
+	serverID := string(state.ServerID)
+	currentRevision := a.serverRevisions[serverID]
+	initialActive := state.InitialActive
+	accepted := false
+	switch {
+	case state.Revision == 0 && currentRevision > 0:
+		state = a.serverStates[serverID]
+	case state.Revision == 0:
+		a.serverStates[serverID] = state
+		accepted = true
+	case state.Revision > currentRevision:
+		a.serverRevisions[serverID] = state.Revision
+		a.serverStates[serverID] = state
+		accepted = true
+	case state.Revision > 0:
+		state = a.serverStates[serverID]
+	}
+	state.InitialActive = initialActive
+	return state, accepted
+}
+
+func (a *App) acceptServerRefreshedState(state ServerViewState) (ServerViewState, bool) {
+	a.ensureServerStateMaps()
+	serverID := string(state.ServerID)
+	currentRevision := a.serverRevisions[serverID]
+	if state.Revision == 0 {
+		if currentRevision > 0 {
+			return ServerViewState{}, false
+		}
+		a.serverStates[serverID] = state
+		return state, true
+	}
+	if state.Revision <= currentRevision {
+		return ServerViewState{}, false
+	}
+	a.serverRevisions[serverID] = state.Revision
+	a.serverStates[serverID] = state
+	return state, true
+}
+
+func (a *App) acceptServerSwitchedState(state ServerViewState) ServerViewState {
+	a.ensureServerStateMaps()
+	serverID := string(state.ServerID)
+	currentRevision := a.serverRevisions[serverID]
+	switch {
+	case state.Revision == 0 && currentRevision > 0:
+		return a.serverStates[serverID]
+	case state.Revision == 0:
+		a.serverStates[serverID] = state
+		return state
+	case state.Revision > currentRevision:
+		a.serverRevisions[serverID] = state.Revision
+		a.serverStates[serverID] = state
+		return state
+	case state.Revision > 0:
+		return a.serverStates[serverID]
+	}
+	return state
 }
 
 // reduceWorkspaceReady handles WorkspaceReadyMsg. Extracted from

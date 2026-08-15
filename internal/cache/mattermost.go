@@ -41,6 +41,7 @@ type MattermostChannel struct {
 	DisplayName   string
 	Kind          string
 	TotalMsgCount int64
+	LastPostAt    int64
 	UpdatedAt     int64
 	DeletedAt     int64
 	IsActive      bool
@@ -280,8 +281,8 @@ func upsertMattermostChannel(exec mattermostExecer, serverID string, channel Mat
 		teamID = channel.TeamID
 	}
 	_, err := exec.Exec(`INSERT INTO mattermost_channels
-		(server_id, id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at, is_active)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+		(server_id, id, team_id, name, display_name, kind, total_msg_count, last_post_at, updated_at, deleted_at, is_active)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 		ON CONFLICT(server_id, id) DO UPDATE SET
 		team_id=CASE
 			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at)
@@ -310,6 +311,7 @@ func upsertMattermostChannel(exec mattermostExecer, serverID string, channel Mat
 			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN excluded.total_msg_count
 			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.total_msg_count, excluded.total_msg_count)
 			ELSE mattermost_channels.total_msg_count END,
+		last_post_at=max(mattermost_channels.last_post_at, excluded.last_post_at),
 		updated_at=CASE
 			WHEN max(excluded.updated_at, excluded.deleted_at) > max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN excluded.updated_at
 			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.updated_at, excluded.updated_at)
@@ -319,28 +321,60 @@ func upsertMattermostChannel(exec mattermostExecer, serverID string, channel Mat
 			WHEN max(excluded.updated_at, excluded.deleted_at) = max(mattermost_channels.updated_at, mattermost_channels.deleted_at) THEN max(mattermost_channels.deleted_at, excluded.deleted_at)
 			ELSE mattermost_channels.deleted_at END`,
 		serverID, channel.ID, teamID, channel.Name, channel.DisplayName, channel.Kind,
-		channel.TotalMsgCount, channel.UpdatedAt, channel.DeletedAt)
+		channel.TotalMsgCount, channel.LastPostAt, channel.UpdatedAt, channel.DeletedAt)
 	return wrapMattermostError("upserting channel", err)
 }
 
 func (db *DB) GetMattermostChannel(serverID, channelID string) (MattermostChannel, error) {
 	var channel MattermostChannel
 	var teamID sql.NullString
-	err := db.conn.QueryRow(`SELECT id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at
+	err := db.conn.QueryRow(`SELECT id, team_id, name, display_name, kind, total_msg_count, last_post_at, updated_at, deleted_at
 		FROM mattermost_channels WHERE server_id = ? AND id = ?`, serverID, channelID).
 		Scan(&channel.ID, &teamID, &channel.Name, &channel.DisplayName, &channel.Kind,
-			&channel.TotalMsgCount, &channel.UpdatedAt, &channel.DeletedAt)
+			&channel.TotalMsgCount, &channel.LastPostAt, &channel.UpdatedAt, &channel.DeletedAt)
 	channel.TeamID = teamID.String
 	return channel, wrapMattermostError("getting channel", err)
 }
 
+func (db *DB) MattermostChannelLastPostAtsContext(ctx context.Context, serverID string, channelIDs []string) (map[string]int64, error) {
+	if err := requireMattermostID("server", serverID); err != nil {
+		return nil, err
+	}
+	if len(channelIDs) == 0 {
+		return map[string]int64{}, nil
+	}
+	args := make([]any, 0, len(channelIDs)+1)
+	args = append(args, serverID)
+	for _, channelID := range channelIDs {
+		if err := requireMattermostID("channel", channelID); err != nil {
+			return nil, err
+		}
+		args = append(args, channelID)
+	}
+	rows, err := db.conn.QueryContext(ctx, `SELECT id, last_post_at FROM mattermost_channels WHERE server_id = ? AND id IN (`+placeholders(len(channelIDs))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing Mattermost channel last-post boundaries: %w", err)
+	}
+	defer rows.Close()
+	boundaries := make(map[string]int64, len(channelIDs))
+	for rows.Next() {
+		var channelID string
+		var lastPostAt int64
+		if err := rows.Scan(&channelID, &lastPostAt); err != nil {
+			return nil, fmt.Errorf("scanning Mattermost channel last-post boundary: %w", err)
+		}
+		boundaries[channelID] = lastPostAt
+	}
+	return boundaries, rows.Err()
+}
+
 func (db *DB) ListMattermostChannels(serverID string) ([]MattermostChannel, error) {
-	return db.listMattermostChannels(`SELECT id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at
+	return db.listMattermostChannels(`SELECT id, team_id, name, display_name, kind, total_msg_count, last_post_at, updated_at, deleted_at
 		FROM mattermost_channels WHERE server_id = ? ORDER BY display_name, name, id`, serverID)
 }
 
 func (db *DB) ListMattermostTeamChannels(serverID, teamID string) ([]MattermostChannel, error) {
-	return db.listMattermostChannels(`SELECT id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at
+	return db.listMattermostChannels(`SELECT id, team_id, name, display_name, kind, total_msg_count, last_post_at, updated_at, deleted_at
 		FROM mattermost_channels WHERE server_id = ? AND team_id = ? ORDER BY display_name, name, id`, serverID, teamID)
 }
 
@@ -355,7 +389,7 @@ func (db *DB) listMattermostChannels(query string, args ...any) ([]MattermostCha
 		var channel MattermostChannel
 		var teamID sql.NullString
 		if err := rows.Scan(&channel.ID, &teamID, &channel.Name, &channel.DisplayName, &channel.Kind,
-			&channel.TotalMsgCount, &channel.UpdatedAt, &channel.DeletedAt); err != nil {
+			&channel.TotalMsgCount, &channel.LastPostAt, &channel.UpdatedAt, &channel.DeletedAt); err != nil {
 			return nil, fmt.Errorf("scanning Mattermost channel: %w", err)
 		}
 		channel.TeamID = teamID.String
@@ -624,7 +658,7 @@ func (db *DB) LoadMattermostBootstrapSnapshot(serverID string) (MattermostBootst
 	if err != nil {
 		return MattermostBootstrapSnapshot{}, err
 	}
-	channels, err := db.listMattermostChannels(`SELECT id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at
+	channels, err := db.listMattermostChannels(`SELECT id, team_id, name, display_name, kind, total_msg_count, last_post_at, updated_at, deleted_at
 		FROM mattermost_channels WHERE server_id = ? AND deleted_at = 0 AND is_active = 1 ORDER BY display_name, name, id`, serverID)
 	if err != nil {
 		return MattermostBootstrapSnapshot{}, err
@@ -716,40 +750,64 @@ func (db *DB) UpsertMattermostPostContext(ctx context.Context, serverID string, 
 	return upsertMattermostPostContext(ctx, db.conn, serverID, post)
 }
 
-// UpsertMattermostRealtimePostContext persists a trusted server's realtime post
-// even when the authoritative channel bootstrap has not arrived yet.
-func (db *DB) UpsertMattermostRealtimePostContext(ctx context.Context, serverID string, post MattermostPost) error {
+// UpsertMattermostRealtimePostContext persists and atomically claims a trusted
+// server's realtime post for its one runtime transition.
+func (db *DB) UpsertMattermostRealtimePostContext(ctx context.Context, serverID string, post MattermostPost) (bool, error) {
+	return db.upsertMattermostRealtimePostContext(ctx, serverID, post, true)
+}
+
+// PersistMattermostRealtimePostContext merges a realtime post already covered
+// by the retained authoritative channel boundary without claiming it.
+func (db *DB) PersistMattermostRealtimePostContext(ctx context.Context, serverID string, post MattermostPost) error {
+	_, err := db.upsertMattermostRealtimePostContext(ctx, serverID, post, false)
+	return err
+}
+
+func (db *DB) upsertMattermostRealtimePostContext(ctx context.Context, serverID string, post MattermostPost, claim bool) (bool, error) {
 	if err := validateMattermostPost(serverID, post); err != nil {
-		return err
+		return false, err
 	}
 	if db.mattermostBeforeWrite != nil {
 		db.mattermostBeforeWrite()
 	}
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("beginning Mattermost realtime post upsert: %w", err)
+		return false, fmt.Errorf("beginning Mattermost realtime post upsert: %w", err)
 	}
-	fail := func(err error) error {
+	fail := func(err error) (bool, error) {
 		_ = tx.Rollback()
-		return err
+		return false, err
 	}
 	var trustedServerID string
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM mattermost_servers WHERE id = ?`, serverID).Scan(&trustedServerID); err != nil {
 		return fail(err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO mattermost_channels
-		(server_id, id, team_id, name, display_name, kind, total_msg_count, updated_at, deleted_at, is_active)
-		VALUES (?, ?, NULL, '', '', 'direct', 0, 0, 0, 0)
+		(server_id, id, team_id, name, display_name, kind, total_msg_count, last_post_at, updated_at, deleted_at, is_active)
+		VALUES (?, ?, NULL, '', '', 'direct', 0, 0, 0, 0, 0)
 		ON CONFLICT(server_id, id) DO NOTHING`, serverID, post.ChannelID); err != nil {
 		return fail(fmt.Errorf("creating Mattermost realtime channel placeholder: %w", err))
 	}
 	if err := upsertMattermostPostContext(ctx, tx, serverID, post); err != nil {
 		return fail(err)
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing Mattermost realtime post upsert: %w", err)
+	claimed := false
+	if claim {
+		result, err := tx.ExecContext(ctx, `UPDATE mattermost_posts SET runtime_applied = 1
+			WHERE server_id = ? AND id = ? AND runtime_applied = 0`, serverID, post.ID)
+		if err != nil {
+			return fail(wrapMattermostError("claiming realtime post runtime transition", err))
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fail(fmt.Errorf("checking Mattermost realtime post runtime claim: %w", err))
+		}
+		claimed = rows != 0
 	}
-	return nil
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("committing Mattermost realtime post upsert: %w", err)
+	}
+	return claimed, nil
 }
 
 func upsertMattermostPost(exec mattermostExecer, serverID string, post MattermostPost) error {
@@ -989,7 +1047,7 @@ func validateMattermostChannel(serverID string, channel MattermostChannel) error
 	default:
 		return fmt.Errorf("invalid Mattermost channel kind %q", channel.Kind)
 	}
-	if min(channel.TotalMsgCount, channel.UpdatedAt, channel.DeletedAt) < 0 {
+	if min(channel.TotalMsgCount, channel.LastPostAt, channel.UpdatedAt, channel.DeletedAt) < 0 {
 		return errors.New("Mattermost channel counts and timestamps must not be negative")
 	}
 	return nil
@@ -999,7 +1057,10 @@ func validateMattermostPost(serverID string, post MattermostPost) error {
 	if err := requireMattermostIDs(serverID, post.ID, post.ChannelID); err != nil {
 		return err
 	}
-	if min(post.CreatedAt, post.UpdatedAt, post.EditedAt, post.DeletedAt, post.ReplyCount) < 0 {
+	if post.CreatedAt <= 0 {
+		return errors.New("Mattermost post created_at must be positive")
+	}
+	if min(post.UpdatedAt, post.EditedAt, post.DeletedAt, post.ReplyCount) < 0 {
 		return errors.New("Mattermost post counts and timestamps must not be negative")
 	}
 	return nil

@@ -37,6 +37,9 @@ func TestMattermostHistoryItemsCarryTransportCorrelationWithoutPersistence(t *te
 func (c *contextHistoryClient) CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error) {
 	return mattermost.Message{}, errors.New("unused")
 }
+func (c *contextHistoryClient) ViewChannel(context.Context, string, string, string) (mattermost.ViewChannelResult, error) {
+	return mattermost.ViewChannelResult{}, errors.New("unused")
+}
 func (c *contextHistoryClient) UsersByIDs(context.Context, []string) ([]mattermost.User, error) {
 	return nil, nil
 }

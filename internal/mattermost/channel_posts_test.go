@@ -86,9 +86,9 @@ func TestClient_ChannelPostsHandlesOrderAnomalies(t *testing.T) {
 		wantIDs    []string
 		wantErr    string
 	}{
-		{"duplicate first wins", `{"order":["p1","p1"],"posts":{"p1":{"id":"p1","channel_id":"c1"}}}`, []string{"p1"}, ""},
-		{"unexpected map ignored", `{"order":["p1"],"posts":{"p1":{"id":"p1","channel_id":"c1"},"extra":{"id":"extra","channel_id":"c1"}}}`, []string{"p1"}, ""},
-		{"empty id filled from key", `{"order":["p1"],"posts":{"p1":{"channel_id":"c1"}}}`, []string{"p1"}, ""},
+		{"duplicate first wins", `{"order":["p1","p1"],"posts":{"p1":{"id":"p1","channel_id":"c1","create_at":1}}}`, []string{"p1"}, ""},
+		{"unexpected map ignored", `{"order":["p1"],"posts":{"p1":{"id":"p1","channel_id":"c1","create_at":1},"extra":{"id":"extra","channel_id":"c1"}}}`, []string{"p1"}, ""},
+		{"empty id filled from key", `{"order":["p1"],"posts":{"p1":{"channel_id":"c1","create_at":1}}}`, []string{"p1"}, ""},
 		{"missing ordered post", `{"order":["missing"],"posts":{}}`, nil, "missing"},
 		{"mismatched id", `{"order":["p1"],"posts":{"p1":{"id":"other","channel_id":"c1"}}}`, nil, "mismatched"},
 		{"mismatched channel", `{"order":["p1"],"posts":{"p1":{"id":"p1","channel_id":"c2"}}}`, nil, "channel"},
@@ -128,8 +128,20 @@ func TestClient_ChannelPostsReturnsValidNonNilEmptyPage(t *testing.T) {
 	}
 }
 
+func TestClient_ChannelPostsRequiresPositiveCreateAt(t *testing.T) {
+	for _, createdAt := range []int64{0, -1} {
+		t.Run(fmt.Sprintf("create_at_%d", createdAt), func(t *testing.T) {
+			client := newJSONMattermostClient(t, fmt.Sprintf(`{"order":["p1"],"posts":{"p1":{"id":"p1","channel_id":"c1","create_at":%d}}}`, createdAt))
+			_, err := client.ChannelPosts(context.Background(), "c1", ChannelPostsOptions{PerPage: 20})
+			if err == nil || !strings.Contains(err.Error(), "create_at") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestClient_ChannelPostsReportsRawOrderCountForFullDuplicatePage(t *testing.T) {
-	client := newJSONMattermostClient(t, `{"order":["p1","p1"],"posts":{"p1":{"id":"p1","channel_id":"c1"}}}`)
+	client := newJSONMattermostClient(t, `{"order":["p1","p1"],"posts":{"p1":{"id":"p1","channel_id":"c1","create_at":1}}}`)
 	page, err := client.ChannelPosts(context.Background(), "c1", ChannelPostsOptions{PerPage: 2})
 	if err != nil {
 		t.Fatal(err)

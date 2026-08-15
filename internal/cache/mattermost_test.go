@@ -238,7 +238,7 @@ func TestReplaceMattermostBootstrapSnapshotRetiresAbsentRowsAndPreservesPosts(t 
 	if err := db.ReplaceMattermostBootstrapSnapshot(initial); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "gone", Text: "retained"}); err != nil {
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "gone", Text: "retained", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	next := MattermostBootstrapSnapshot{
@@ -465,6 +465,92 @@ func TestMattermostNewerChannelCountCanCorrectDownward(t *testing.T) {
 	channel, err := db.GetMattermostChannel("s1", "c1")
 	if err != nil || channel.TotalMsgCount != 3 {
 		t.Fatalf("channel = %#v, %v", channel, err)
+	}
+}
+
+func TestMattermostChannelLastPostAtRoundTripsAndMergesMonotonically(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostUser("s1", MattermostUser{ID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range []MattermostChannel{
+		{ID: "c1", TeamID: "t1", Kind: "public", LastPostAt: 200, UpdatedAt: 10},
+		{ID: "c1", TeamID: "t1", Kind: "public", LastPostAt: 100, UpdatedAt: 20},
+	} {
+		if err := db.UpsertMattermostChannel("s1", channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := db.GetMattermostChannel("s1", "c1")
+	if err != nil || got.LastPostAt != 200 {
+		t.Fatalf("channel=%#v err=%v want last_post_at 200", got, err)
+	}
+	loaded, err := db.LoadMattermostBootstrapSnapshot("s1")
+	if err != nil || len(loaded.Channels) != 1 || loaded.Channels[0].LastPostAt != 200 {
+		t.Fatalf("loaded=%#v err=%v", loaded.Channels, err)
+	}
+}
+
+func TestMattermostReplacementPreservesMonotonicLastPostAt(t *testing.T) {
+	db := setupMattermostDB(t)
+	base := MattermostBootstrapSnapshot{
+		Server: MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}, CurrentUser: MattermostUser{ID: "u1"},
+		Teams: []MattermostTeam{{ID: "t1"}}, Channels: []MattermostChannel{{ID: "c1", TeamID: "t1", Kind: "public", LastPostAt: 200, UpdatedAt: 10}},
+	}
+	if err := db.ReplaceMattermostBootstrapSnapshot(base); err != nil {
+		t.Fatal(err)
+	}
+	base.Channels[0].LastPostAt = 100
+	base.Channels[0].UpdatedAt = 20
+	if err := db.ReplaceMattermostBootstrapSnapshot(base); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetMattermostChannel("s1", "c1")
+	if err != nil || got.LastPostAt != 200 {
+		t.Fatalf("replacement channel=%#v err=%v", got, err)
+	}
+}
+
+func TestMattermostRealtimePostDoesNotAdvanceChannelLastPostAt(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public", LastPostAt: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", MattermostPost{ID: "p1", ChannelID: "c1", CreatedAt: 200}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetMattermostChannel("s1", "c1")
+	if err != nil || got.LastPostAt != 100 {
+		t.Fatalf("channel=%#v err=%v", got, err)
+	}
+}
+
+func TestMattermostLastPostAtBoundariesReturnsRequestedChannels(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range []MattermostChannel{
+		{ID: "c1", TeamID: "t1", Kind: "public", LastPostAt: 200},
+		{ID: "c2", TeamID: "t1", Kind: "public", LastPostAt: 300},
+	} {
+		if err := db.UpsertMattermostChannel("s1", channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := db.MattermostChannelLastPostAtsContext(context.Background(), "s1", []string{"c1", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, map[string]int64{"c1": 200}) {
+		t.Fatalf("boundaries=%v want c1 only", got)
 	}
 }
 
@@ -808,7 +894,7 @@ func TestMattermostPostCachePreservesCorrelationID(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "opaque/correlation:id"
-	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1", CorrelationID: want}); err != nil {
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1", CorrelationID: want, CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	post, err := db.GetMattermostPost("s1", "p1")
@@ -848,7 +934,7 @@ func TestMattermostPostContextWriteCancelsWhileDatabaseLocked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- db.UpsertMattermostPostContext(ctx, "s1", MattermostPost{ID: "p1", ChannelID: "c1"})
+		done <- db.UpsertMattermostPostContext(ctx, "s1", MattermostPost{ID: "p1", ChannelID: "c1", CreatedAt: 1})
 	}()
 	<-attempted
 	cancel()
@@ -920,7 +1006,7 @@ func TestMattermostHistoryContextWriteCancelsWhileDatabaseLocked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- db.UpsertMattermostHistoryContext(ctx, "s1", []MattermostPost{{ID: "p1", ChannelID: "c1"}}, nil)
+		done <- db.UpsertMattermostHistoryContext(ctx, "s1", []MattermostPost{{ID: "p1", ChannelID: "c1", CreatedAt: 1}}, nil)
 	}()
 	<-attempted
 	cancel()
@@ -1039,7 +1125,7 @@ func TestMattermostServerDeleteCascadesAllChildCategories(t *testing.T) {
 	if err := db.ReplaceMattermostChannelUserIDs("s1", "c1", []string{"u1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1"}); err != nil {
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.DeleteMattermostServer("s1"); err != nil {
@@ -1062,7 +1148,7 @@ func TestMattermostRealtimePostCreatesHiddenPlaceholderAndAuthoritativeSnapshotE
 		t.Fatal(err)
 	}
 	post := MattermostPost{ID: "p1", ChannelID: "unknown-channel", UserID: "u2", Text: "realtime", CreatedAt: 10}
-	if err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", post); err != nil {
+	if _, err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", post); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := db.GetMattermostPost("s1", post.ID)
@@ -1109,9 +1195,116 @@ func TestMattermostRealtimePostCreatesHiddenPlaceholderAndAuthoritativeSnapshotE
 	}
 }
 
+func TestMattermostRealtimePostRuntimeClaimIsAtomicAndPreservesMerge(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", MattermostPost{ID: "p1", ChannelID: "c1", Text: "first", CreatedAt: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claimed {
+		t.Fatal("first realtime persistence did not claim runtime transition")
+	}
+	claimed, err = db.UpsertMattermostRealtimePostContext(context.Background(), "s1", MattermostPost{ID: "p1", ChannelID: "c1", Text: "updated", CreatedAt: 10, UpdatedAt: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed {
+		t.Fatal("duplicate realtime persistence reclaimed runtime transition")
+	}
+	post, err := db.GetMattermostPost("s1", "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if post.Text != "updated" || post.UpdatedAt != 20 {
+		t.Fatalf("merged post=%#v", post)
+	}
+}
+
+func TestMattermostHistoryPostCanBeRuntimeClaimedOnce(t *testing.T) {
+	db := setupMattermostDB(t)
+	if err := db.UpsertMattermostTeam("s1", MattermostTeam{ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostChannel("s1", MattermostChannel{ID: "c1", TeamID: "t1", Kind: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	post := MattermostPost{ID: "p1", ChannelID: "c1", CreatedAt: 10}
+	if err := db.UpsertMattermostPost("s1", post); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", post)
+	if err != nil || !claimed {
+		t.Fatalf("first claim=%v err=%v", claimed, err)
+	}
+	claimed, err = db.UpsertMattermostRealtimePostContext(context.Background(), "s1", post)
+	if err != nil || claimed {
+		t.Fatalf("duplicate claim=%v err=%v", claimed, err)
+	}
+}
+
+func TestMattermostRealtimePostWithoutRuntimeClaimStaysClaimable(t *testing.T) {
+	db := setupMattermostDB(t)
+	post := MattermostPost{ID: "p1", ChannelID: "c1", CreatedAt: 10}
+	err := db.PersistMattermostRealtimePostContext(context.Background(), "s1", post)
+	if err != nil {
+		t.Fatalf("persistence-only err=%v", err)
+	}
+	claimed, err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", post)
+	if err != nil || !claimed {
+		t.Fatalf("later claim=%v err=%v", claimed, err)
+	}
+}
+
+func TestMattermostRuntimeClaimSurvivesRestartAndHistoryMerge(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "cache.db")
+	db, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertMattermostServer(MattermostServer{ID: "s1", URL: "https://one.example", CurrentUserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	post := MattermostPost{ID: "p1", ChannelID: "c1", CreatedAt: 10}
+	claimed, err := db.UpsertMattermostRealtimePostContext(context.Background(), "s1", post)
+	if err != nil || !claimed {
+		t.Fatalf("initial claim=%v err=%v", claimed, err)
+	}
+	if err := db.UpsertMattermostPost("s1", MattermostPost{ID: "p1", ChannelID: "c1", Text: "history", CreatedAt: 10, UpdatedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	claimed, err = db.UpsertMattermostRealtimePostContext(context.Background(), "s1", post)
+	if err != nil || claimed {
+		t.Fatalf("post-restart claim=%v err=%v", claimed, err)
+	}
+}
+
+func TestMattermostPostCreateAtMustBePositive(t *testing.T) {
+	db := setupMattermostDB(t)
+	for _, createdAt := range []int64{0, -1} {
+		if err := db.UpsertMattermostPost("s1", MattermostPost{ID: fmt.Sprintf("p%d", createdAt), ChannelID: "c1", CreatedAt: createdAt}); err == nil {
+			t.Fatalf("accepted create_at=%d", createdAt)
+		}
+	}
+}
+
 func TestMattermostRealtimePostRequiresTrustedExistingServer(t *testing.T) {
 	db := setupMattermostDB(t)
-	err := db.UpsertMattermostRealtimePostContext(context.Background(), "missing", MattermostPost{ID: "p1", ChannelID: "c1"})
+	_, err := db.UpsertMattermostRealtimePostContext(context.Background(), "missing", MattermostPost{ID: "p1", ChannelID: "c1"})
 	if err == nil {
 		t.Fatal("missing trusted server accepted")
 	}
@@ -1124,7 +1317,7 @@ func TestMattermostRealtimePostContextCancellationRollsBackPlaceholder(t *testin
 	db := setupMattermostDB(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := db.UpsertMattermostRealtimePostContext(ctx, "s1", MattermostPost{ID: "p1", ChannelID: "unknown"})
+	_, err := db.UpsertMattermostRealtimePostContext(ctx, "s1", MattermostPost{ID: "p1", ChannelID: "unknown", CreatedAt: 1})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v want context.Canceled", err)
 	}

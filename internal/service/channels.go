@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -29,6 +30,38 @@ type ChannelEntry struct {
 	Channel     mattermost.Channel
 	DisplayName string
 	Membership  *mattermost.ChannelMembership
+}
+
+func ChannelHasUnread(entry ChannelEntry) bool {
+	return entry.Membership != nil && (entry.Membership.MentionCount > 0 || entry.Channel.TotalMsgCount > entry.Membership.MsgCount)
+}
+
+func ChannelWithNewPost(entry ChannelEntry, activelyViewed bool) ChannelEntry {
+	if activelyViewed && entry.Membership != nil {
+		// This is an optimistic runtime snapshot advance, not an authoritative membership response.
+		if entry.Channel.TotalMsgCount < math.MaxInt64 && entry.Membership.MsgCount < math.MaxInt64 {
+			membership := *entry.Membership
+			entry.Channel.TotalMsgCount++
+			membership.MsgCount++
+			entry.Membership = &membership
+		}
+		return entry
+	}
+	if entry.Channel.TotalMsgCount < math.MaxInt64 {
+		entry.Channel.TotalMsgCount++
+	}
+	return entry
+}
+
+func ChannelViewed(entry ChannelEntry) ChannelEntry {
+	if entry.Membership == nil {
+		return entry
+	}
+	membership := *entry.Membership
+	membership.MsgCount = entry.Channel.TotalMsgCount
+	membership.MentionCount = 0
+	entry.Membership = &membership
+	return entry
 }
 
 func buildChannelSections(

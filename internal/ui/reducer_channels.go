@@ -59,6 +59,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/debuglog"
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/messages"
@@ -443,6 +444,17 @@ func (a *App) retargetActiveChannel(id, name, chType string) {
 // flag.
 func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 	if a.features.kind == ContextMattermost {
+		previousServerID := ids.ServerID(a.activeServerID)
+		previousChannelID := a.activeChannelID
+		readState, readCmd := a.mattermostRead.View(MattermostReadRequest{
+			ServerID: ids.ServerID(a.activeServerID), ChannelID: m.ID,
+			PreviousServerID: previousServerID, PreviousChannelID: previousChannelID,
+		})
+		if readState.ServerID != "" {
+			if accepted, ok := a.acceptServerRefreshedState(readState); ok {
+				a.applyMattermostReadState(accepted)
+			}
+		}
 		a.cancelEdit()
 		a.view = ViewChannels
 		a.sidebar.SetThreadsActive(false)
@@ -477,7 +489,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		if a.mattermostHistory == nil {
 			a.messagepane.SetLoading(false)
 			scope.recentInFlight = false
-			return nil, false
+			return readCmd, false
 		}
 		scope.recentInFlight = len(cached) > 0
 		scope.fetchInFlight = true
@@ -490,7 +502,7 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		for i := range cached {
 			cachedIDs[i] = cached[i].MessageID()
 		}
-		return tea.Batch(spinnerTickCmd(), func() tea.Msg {
+		return tea.Batch(readCmd, spinnerTickCmd(), func() tea.Msg {
 			msg := service.FetchRecent(historyCtx, request)
 			msg.Sequence = sequence
 			msg.CachedIDs = cachedIDs
@@ -623,4 +635,16 @@ func reduceChannelSelected(a *App, m ChannelSelectedMsg) (tea.Cmd, bool) {
 		tier = "3_spinner"
 		return tea.Batch(spinnerTickCmd(), fetchCmd()), true
 	}
+}
+
+func (a *App) applyMattermostReadState(state ServerViewState) {
+	a.sidebar.SetSectionsProvider(state.SectionsProvider)
+	readState := state.ReadState
+	a.sidebar.SetReadStateReader(func() map[string]cache.ReadState { return readState })
+	a.SetChannels(state.Channels)
+	a.channelFinder.SetItems(state.FinderItems)
+	a.SetUserNames(state.UserNames)
+	a.SetCurrentUserID(state.UserID)
+	a.workspaceRail.SetUnread(string(state.ServerID), state.HasUnread)
+	a.notifyReadStateChanged()
 }

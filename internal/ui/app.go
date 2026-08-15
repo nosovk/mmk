@@ -159,6 +159,8 @@ type App struct {
 	activeServerID      string // workspace whose data is currently loaded into the side panels
 	selectionGeneration uint64
 	selectionObserver   SelectionObserver
+	serverRevisions     map[string]uint64
+	serverStates        map[string]ServerViewState
 
 	// windowTitle is the cached terminal-window-title string, recomputed
 	// by notifyReadStateChanged on every read-state mutation and read by
@@ -189,6 +191,7 @@ type App struct {
 	// mattermostSend is intentionally separate from the Slack-shaped
 	// MessageService send operation.
 	mattermostSend          MattermostSendService
+	mattermostRead          MattermostReadService
 	mattermostCorrelationID func() (string, error)
 
 	uploader UploadFunc
@@ -526,11 +529,14 @@ func NewApp() *App {
 		threads:                    noopThreadService,
 		messageSvc:                 noopMessageService,
 		mattermostSend:             noopMattermostSendService,
+		mattermostRead:             noopMattermostReadService,
 		mattermostCorrelationID:    generateMattermostCorrelationID,
 		channels:                   noopChannelService,
 		searchSvc:                  noopSearchService,
 		lastChannelByTeam:          map[string]string{},
 		workspaceDomains:           map[string]string{},
+		serverRevisions:            map[string]uint64{},
+		serverStates:               map[string]ServerViewState{},
 		browserOpener:              openURLCmd,
 		navHistory:                 newNavHistoryStore(),
 		clipboardRead:              defaultClipboardReader,
@@ -578,6 +584,13 @@ func (a *App) SetMattermostSendService(service MattermostSendService) {
 		service = noopMattermostSendService
 	}
 	a.mattermostSend = service
+}
+
+func (a *App) SetMattermostReadService(service MattermostReadService) {
+	if service == nil {
+		service = noopMattermostReadService
+	}
+	a.mattermostRead = service
 }
 
 // defaultHelpHint is the resting statusbar hint ("? for keybindings").

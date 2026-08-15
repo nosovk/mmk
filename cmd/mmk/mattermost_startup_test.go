@@ -207,7 +207,7 @@ func TestApplyPendingMattermostMessagesQueuesCachedHistoryLifecycleForInit(t *te
 	state := mattermostServerViewState(service.ServerSnapshot{
 		Server: mattermost.Server{ID: "s1", Name: "One"}, CurrentUser: mattermost.User{ID: "u1"},
 		Sections: []service.ChannelSection{{Channels: []service.ChannelEntry{{Channel: mattermost.Channel{ID: "c1", Kind: mattermost.ChannelKindPublic}, DisplayName: "Town Square"}}}},
-	}, true)
+	}, true, 1)
 	applyPendingMattermostMessages(app, []tea.Msg{mattermostRailMsg{Items: []workspace.WorkspaceItem{{ID: "s1", Name: "One"}}}, ui.ServerReadyMsg{Server: state}})
 	if got := app.ActiveChannelID(); got != "c1" {
 		t.Fatalf("active channel=%q", got)
@@ -355,7 +355,7 @@ func TestMattermostServerViewStateMarksFinderChannelsJoined(t *testing.T) {
 	state := mattermostServerViewState(service.ServerSnapshot{
 		Server: mattermost.Server{ID: "s1"}, CurrentUser: mattermost.User{ID: "u1"},
 		Sections: []service.ChannelSection{{Channels: []service.ChannelEntry{{Channel: mattermost.Channel{ID: "c1", Kind: mattermost.ChannelKindPublic}, DisplayName: "Town Square"}}}},
-	}, false)
+	}, false, 1)
 	if len(state.FinderItems) != 1 || !state.FinderItems[0].Joined {
 		t.Fatalf("finder items = %#v", state.FinderItems)
 	}
@@ -369,9 +369,22 @@ func TestMattermostCacheHydrationWithoutMembershipClearsUnread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := mattermostServerViewState(snapshot, false)
+	state := mattermostServerViewState(snapshot, false, 1)
 	if state.HasUnread || len(state.ReadState) != 0 {
 		t.Fatalf("unread state=%#v hasUnread=%v", state.ReadState, state.HasUnread)
+	}
+}
+
+func TestUnreadRuntimeUpdateRetainsFreshServerSnapshot(t *testing.T) {
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+
+	state, changed := startup.updateRuntimeEvent("s1", mattermost.PostedEvent{Message: mattermost.Message{ChannelID: "c1"}}, "s2", "other", true)
+
+	if !changed || !state.ReadState["c1"].HasUnread {
+		t.Fatalf("state=%#v changed=%v", state, changed)
+	}
+	if switched, ok := startup.switchMsg("s1").(ui.ServerSwitchedMsg); !ok || !switched.Server.ReadState["c1"].HasUnread {
+		t.Fatalf("switch state=%#v", startup.switchMsg("s1"))
 	}
 }
 
@@ -472,6 +485,10 @@ func (blockingBootstrapClient) CreatePost(context.Context, mattermost.CreatePost
 	return mattermost.Message{}, errors.New("unused send")
 }
 
+func (blockingBootstrapClient) ViewChannel(context.Context, string, string, string) (mattermost.ViewChannelResult, error) {
+	return mattermost.ViewChannelResult{}, errors.New("unused view")
+}
+
 func (fixedBlockingBootstrapClient) ChannelPosts(context.Context, string, mattermost.ChannelPostsOptions) (mattermost.MessagePage, error) {
 	return mattermost.MessagePage{}, errors.New("unused history")
 }
@@ -483,6 +500,10 @@ func (fixedBlockingBootstrapClient) RunWebSocket(ctx context.Context, _ func(), 
 
 func (fixedBlockingBootstrapClient) CreatePost(context.Context, mattermost.CreatePostRequest) (mattermost.Message, error) {
 	return mattermost.Message{}, errors.New("unused send")
+}
+
+func (fixedBlockingBootstrapClient) ViewChannel(context.Context, string, string, string) (mattermost.ViewChannelResult, error) {
+	return mattermost.ViewChannelResult{}, errors.New("unused view")
 }
 
 func (b fixedBlockingBootstrapClient) CurrentUser(ctx context.Context) (*mattermost.User, error) {

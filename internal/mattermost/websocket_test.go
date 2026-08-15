@@ -21,7 +21,7 @@ import (
 
 const webSocketTestTimeout = 2 * time.Second
 
-func TestWebSocketConnectsAuthenticatesDecodesAndToleratesUnknownEvents(t *testing.T) {
+func TestChannelViewedWebSocketDeliversKnownEventsInOrderAndIgnoresUnknown(t *testing.T) {
 	authenticated := make(chan struct{})
 	serverErrors := make(chan error, 1)
 	upgrader := websocket.Upgrader{}
@@ -64,11 +64,19 @@ func TestWebSocketConnectsAuthenticatesDecodesAndToleratesUnknownEvents(t *testi
 			return
 		}
 
+		if err := conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"channel-1","user_id":"user-1","message":"first","create_at":10}`}}); err != nil {
+			serverErrors <- err
+			return
+		}
 		if err := conn.WriteJSON(map[string]any{"event": "future_event", "data": map[string]any{"value": true}}); err != nil {
 			serverErrors <- err
 			return
 		}
-		if err := conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"channel-1","user_id":"user-1","message":"hello","create_at":10}`}}); err != nil {
+		if err := conn.WriteJSON(map[string]any{"event": "multiple_channels_viewed", "data": map[string]any{"channel_times": map[string]any{"channel-1": 20}}, "broadcast": map[string]any{"user_id": "user-1"}}); err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-2","channel_id":"channel-1","user_id":"user-1","message":"second","create_at":30}`}}); err != nil {
 			serverErrors <- err
 			return
 		}
@@ -82,15 +90,21 @@ func TestWebSocketConnectsAuthenticatesDecodesAndToleratesUnknownEvents(t *testi
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	events := make(chan Event, 1)
+	events := make(chan Event, 3)
 	done := make(chan error, 1)
 	go func() { done <- client.RunWebSocket(ctx, func() {}, func(event Event) { events <- event }, nil) }()
 
 	waitWebSocket(t, authenticated, "authentication challenge")
-	got := waitWebSocket(t, events, "posted event")
-	want := PostedEvent{Message: Message{ID: "post-1", ChannelID: "channel-1", UserID: "user-1", Text: "hello", CreatedAt: 10}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("event = %#v, want %#v", got, want)
+	want := []Event{
+		PostedEvent{Message: Message{ID: "post-1", ChannelID: "channel-1", UserID: "user-1", Text: "first", CreatedAt: 10}},
+		ChannelViewedEvent{UserID: "user-1", Updates: []ChannelViewUpdate{{ChannelID: "channel-1", ViewedAt: 20, HasViewedAt: true}}},
+		PostedEvent{Message: Message{ID: "post-2", ChannelID: "channel-1", UserID: "user-1", Text: "second", CreatedAt: 30}},
+	}
+	for i := range want {
+		got := waitWebSocket(t, events, "ordered known event")
+		if !reflect.DeepEqual(got, want[i]) {
+			t.Fatalf("event %d = %#v, want %#v", i, got, want[i])
+		}
 	}
 	cancel()
 	if err := waitWebSocket(t, done, "cancellation"); !errors.Is(err, context.Canceled) {
@@ -118,7 +132,7 @@ func TestWebSocketContinuesAfterMalformedPostedFrame(t *testing.T) {
 			return
 		}
 		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"broken"`}})
-		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"channel-1","message":"valid"}`}})
+		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"channel-1","message":"valid","create_at":1}`}})
 		<-r.Context().Done()
 	}))
 	t.Cleanup(server.Close)
@@ -139,7 +153,7 @@ func TestWebSocketContinuesAfterMalformedPostedFrame(t *testing.T) {
 		t.Fatalf("diagnostic=%v", err)
 	}
 	got := waitWebSocket(t, events, "valid event after malformed frame")
-	want := PostedEvent{Message: Message{ID: "post-1", ChannelID: "channel-1", Text: "valid"}}
+	want := PostedEvent{Message: Message{ID: "post-1", ChannelID: "channel-1", Text: "valid", CreatedAt: 1}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("event=%#v want %#v", got, want)
 	}
@@ -203,7 +217,7 @@ func TestWebSocketValidUnknownEventResetsMalformedFrameBudget(t *testing.T) {
 		for range maxConsecutiveMalformedWebSocketFrames - 1 {
 			_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": "bad"}})
 		}
-		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"c1"}`}})
+		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"c1","create_at":1}`}})
 		<-r.Context().Done()
 	}))
 	t.Cleanup(server.Close)
@@ -221,6 +235,63 @@ func TestWebSocketValidUnknownEventResetsMalformedFrameBudget(t *testing.T) {
 	cancel()
 	if err := waitWebSocket(t, done, "cancellation"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestChannelViewedWebSocketResetsMalformedFrameBudget(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := writeWebSocketAuthOK(conn); err != nil {
+			return
+		}
+		for range maxConsecutiveMalformedWebSocketFrames - 1 {
+			_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": "bad"}})
+		}
+		_ = conn.WriteJSON(map[string]any{
+			"event":     "multiple_channels_viewed",
+			"data":      map[string]any{"channel_times": map[string]any{"channel-1": 20}},
+			"broadcast": map[string]any{"user_id": "user-1"},
+		})
+		for range maxConsecutiveMalformedWebSocketFrames - 1 {
+			_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": "bad"}})
+		}
+		_ = conn.WriteJSON(map[string]any{"event": "posted", "data": map[string]any{"post": `{"id":"post-1","channel_id":"channel-1","create_at":1}`}})
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.URL, "test-token", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan Event, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- client.RunWebSocket(ctx, func() {}, func(event Event) { events <- event }, func(error) {})
+	}()
+
+	viewed := waitWebSocket(t, events, "viewed event after first malformed frame run")
+	wantViewed := ChannelViewedEvent{UserID: "user-1", Updates: []ChannelViewUpdate{{ChannelID: "channel-1", ViewedAt: 20, HasViewedAt: true}}}
+	if !reflect.DeepEqual(viewed, wantViewed) {
+		t.Fatalf("viewed event = %#v, want %#v", viewed, wantViewed)
+	}
+	posted := waitWebSocket(t, events, "posted event after second malformed frame run")
+	wantPosted := PostedEvent{Message: Message{ID: "post-1", ChannelID: "channel-1", CreatedAt: 1}}
+	if !reflect.DeepEqual(posted, wantPosted) {
+		t.Fatalf("posted event = %#v, want %#v", posted, wantPosted)
+	}
+	cancel()
+	if err := waitWebSocket(t, done, "cancellation"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
 	}
 }
 

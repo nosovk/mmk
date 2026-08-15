@@ -403,6 +403,29 @@ func TestClientDecodesUserAndChannelRevisionFields(t *testing.T) {
 	}
 }
 
+func TestClientDecodesChannelLastPostAt(t *testing.T) {
+	channel, err := (channelResponse{ID: "c1", Type: "O"}).domain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := reflect.ValueOf(channel).FieldByName("LastPostAt")
+	if !value.IsValid() {
+		t.Fatal("channel model is missing LastPostAt")
+	}
+
+	var wire channelResponse
+	if err := json.Unmarshal([]byte(`{"id":"c1","type":"O","last_post_at":123}`), &wire); err != nil {
+		t.Fatal(err)
+	}
+	channel, err = wire.domain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reflect.ValueOf(channel).FieldByName("LastPostAt").Int(); got != 123 {
+		t.Fatalf("last post at=%d want 123", got)
+	}
+}
+
 func TestClient_ChannelsForUserCallsCrossTeamEndpointAndReturnsCompleteResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.Method, http.MethodGet; got != want {
@@ -599,6 +622,147 @@ func TestClient_ChannelMembershipsForUserValidatesIDsWithoutRequest(t *testing.T
 			}
 			if got := requests.Load(); got != 0 {
 				t.Fatalf("requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestMarkChannelReadPostsOfficialViewRequestAndReturnsAuthoritativeTimes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodPost; got != want {
+			t.Errorf("method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.Path, "/api/v4/channels/members/user-1/view"; got != want {
+			t.Errorf("path = %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer secret"; got != want {
+			t.Errorf("Authorization = %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("Content-Type"), "application/json"; got != want {
+			t.Errorf("Content-Type = %q, want %q", got, want)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		wantBody := map[string]any{
+			"channel_id":                  "channel-2",
+			"prev_channel_id":             "channel-1",
+			"collapsed_threads_supported": false,
+		}
+		if !reflect.DeepEqual(body, wantBody) {
+			t.Errorf("request body = %#v, want %#v", body, wantBody)
+			return
+		}
+		_, _ = io.WriteString(w, `{
+			"status":"OK",
+			"last_viewed_at_times":{"channel-2":222,"channel-1":111,"extra-channel":333}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	result, err := client.ViewChannel(context.Background(), "user-1", "channel-2", "channel-1")
+	if err != nil {
+		t.Fatalf("ViewChannel returned error: %v", err)
+	}
+	want := map[string]int64{"channel-2": 222, "channel-1": 111, "extra-channel": 333}
+	if !reflect.DeepEqual(result.LastViewedAtTimes, want) {
+		t.Fatalf("last viewed times = %#v, want %#v", result.LastViewedAtTimes, want)
+	}
+}
+
+func TestMarkChannelReadAllowsBlankPreviousChannel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if got, want := body["prev_channel_id"], ""; got != want {
+			t.Errorf("prev_channel_id = %#v, want %#v", got, want)
+		}
+		_, _ = io.WriteString(w, `{"status":"OK","last_viewed_at_times":{"channel-2":222}}`)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	if _, err := client.ViewChannel(context.Background(), "user-1", "channel-2", ""); err != nil {
+		t.Fatalf("ViewChannel returned error: %v", err)
+	}
+}
+
+func TestMarkChannelReadResultContainsOnlyAuthoritativeTimes(t *testing.T) {
+	resultType := reflect.TypeFor[ViewChannelResult]()
+	if _, ok := resultType.FieldByName("Status"); ok {
+		t.Fatal("ViewChannelResult exposes wire-only Status")
+	}
+	if _, ok := resultType.FieldByName("LastViewedAtTimes"); !ok {
+		t.Fatal("ViewChannelResult is missing authoritative LastViewedAtTimes")
+	}
+}
+
+func TestMarkChannelReadValidatesIDsWithoutRequest(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		userID            string
+		channelID         string
+		previousChannelID string
+	}{
+		{name: "empty user", userID: "", channelID: "channel-2"},
+		{name: "unsafe user", userID: "user/1", channelID: "channel-2"},
+		{name: "empty current channel", userID: "user-1", channelID: ""},
+		{name: "unsafe current channel", userID: "user-1", channelID: "channel/2"},
+		{name: "unsafe previous channel", userID: "user-1", channelID: "channel-2", previousChannelID: "channel/1"},
+		{name: "oversized previous channel", userID: "user-1", channelID: "channel-2", previousChannelID: strings.Repeat("c", 129)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := &atomic.Int32{}
+			client := newCountingMattermostClient(t, requests)
+
+			if _, err := client.ViewChannel(context.Background(), tt.userID, tt.channelID, tt.previousChannelID); err == nil {
+				t.Fatal("ViewChannel accepted invalid IDs")
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestMarkChannelReadRejectsMalformedAuthoritativeResponse(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		response string
+		want     string
+		private  string
+	}{
+		{name: "non OK status", response: `{"status":"FAIL","last_viewed_at_times":{"channel-2":222}}`, want: "status"},
+		{name: "missing current channel", response: `{"status":"OK","last_viewed_at_times":{"channel-1":111}}`, want: "channel-2"},
+		{name: "null current channel timestamp", response: `{"status":"OK","last_viewed_at_times":{"channel-2":null}}`, want: "null"},
+		{name: "null extra channel timestamp", response: `{"status":"OK","last_viewed_at_times":{"channel-2":222,"sentinel-private":null}}`, want: "null", private: "sentinel-private"},
+		{name: "negative timestamp", response: `{"status":"OK","last_viewed_at_times":{"channel-2":-1}}`, want: "negative"},
+		{name: "invalid response channel ID", response: `{"status":"OK","last_viewed_at_times":{"channel-2":222,"sentinel/private":1}}`, want: "channel ID", private: "sentinel/private"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newJSONMattermostClient(t, tt.response)
+
+			result, err := client.ViewChannel(context.Background(), "user-1", "channel-2", "channel-1")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want error containing %q", err, tt.want)
+			}
+			if tt.private != "" && strings.Contains(err.Error(), tt.private) {
+				t.Fatalf("error leaked response payload: %v", err)
+			}
+			if !reflect.DeepEqual(result, ViewChannelResult{}) {
+				t.Fatalf("result = %#v, want zero value", result)
 			}
 		})
 	}

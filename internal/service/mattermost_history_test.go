@@ -70,7 +70,7 @@ func TestMattermostHistoryFetchCachesExactPageAndResolvesUnknownAuthorsOnce(t *t
 
 func TestMattermostHistorySeparatesInclusiveAnchorFromDeletedIDs(t *testing.T) {
 	db := setupMattermostHistoryDB(t)
-	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{OrderCount: 3, Messages: []mattermost.Message{{ID: "anchor", ChannelID: "c1"}, {ID: "deleted", ChannelID: "c1", DeletedAt: 2}, {ID: "older", ChannelID: "c1"}, {ID: "deleted", ChannelID: "c1", DeletedAt: 2}}}}
+	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{OrderCount: 3, Messages: []mattermost.Message{{ID: "anchor", ChannelID: "c1", CreatedAt: 3}, {ID: "deleted", ChannelID: "c1", CreatedAt: 2, DeletedAt: 2}, {ID: "older", ChannelID: "c1", CreatedAt: 1}, {ID: "deleted", ChannelID: "c1", CreatedAt: 2, DeletedAt: 2}}}}
 	page, err := NewMattermostHistoryService("s1", client, db, 3).FetchOlder(context.Background(), "c1", "anchor")
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestMattermostHistorySeparatesInclusiveAnchorFromDeletedIDs(t *testing.T) {
 
 func TestMattermostHistoryDeletedInclusiveAnchorIsTombstone(t *testing.T) {
 	db := setupMattermostHistoryDB(t)
-	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{Messages: []mattermost.Message{{ID: "anchor", ChannelID: "c1", DeletedAt: 9}, {ID: "older", ChannelID: "c1"}}}}
+	client := &fakeMattermostHistoryClient{page: mattermost.MessagePage{Messages: []mattermost.Message{{ID: "anchor", ChannelID: "c1", CreatedAt: 9, DeletedAt: 9}, {ID: "older", ChannelID: "c1", CreatedAt: 1}}}}
 	page, err := NewMattermostHistoryService("s1", client, db, 20).FetchOlder(context.Background(), "c1", "anchor")
 	if err != nil {
 		t.Fatal(err)

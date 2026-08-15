@@ -33,8 +33,8 @@ func TestMattermostMigrationCreatesVersionedSchemaWithoutChangingLegacyRows(t *t
 	if err := db.conn.QueryRow(`SELECT version FROM cache_schema_versions WHERE component = 'mattermost'`).Scan(&version); err != nil {
 		t.Fatalf("Mattermost schema version: %v", err)
 	}
-	if version != 5 {
-		t.Fatalf("Mattermost schema version = %d, want 5", version)
+	if version != 7 {
+		t.Fatalf("Mattermost schema version = %d, want 7", version)
 	}
 
 	for _, table := range []string{
@@ -166,7 +166,7 @@ func TestMattermostMigrationRollsBackDDLAndVersionOnFailure(t *testing.T) {
 				`THIS IS NOT SQL`,
 			},
 		},
-		{version: 2}, {version: 3}, {version: 4}, {version: 5},
+		{version: 2}, {version: 3}, {version: 4}, {version: 5}, {version: 6}, {version: 7},
 	})
 	if err == nil {
 		t.Fatal("migrateMattermost returned nil error")
@@ -192,12 +192,12 @@ func TestMattermostMigrationRejectsMalformedSequences(t *testing.T) {
 		migrations []mattermostMigration
 		want       string
 	}{
-		{"empty", nil, "must end at version 5"},
+		{"empty", nil, "must end at version 7"},
 		{"starts above one", []mattermostMigration{{version: 2}}, "start at version 1"},
 		{"gap", []mattermostMigration{{version: 1}, {version: 3}}, "contiguous"},
 		{"duplicate", []mattermostMigration{{version: 1}, {version: 1}}, "contiguous"},
-		{"missing terminal", []mattermostMigration{{version: 1}}, "must end at version 5"},
-		{"beyond current", []mattermostMigration{{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}, {version: 6}}, "newer than supported"},
+		{"missing terminal", []mattermostMigration{{version: 1}}, "must end at version 7"},
+		{"beyond current", []mattermostMigration{{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}, {version: 6}, {version: 7}, {version: 8}}, "newer than supported"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -247,7 +247,7 @@ func TestMattermostMigrationUpgradesV2WithActiveFlags(t *testing.T) {
 	if err := db.conn.QueryRow(`SELECT is_active FROM mattermost_channels WHERE id='c1'`).Scan(&channelActive); err != nil {
 		t.Fatal(err)
 	}
-	if version != 5 || teamActive != 1 || channelActive != 1 {
+	if version != 7 || teamActive != 1 || channelActive != 1 {
 		t.Fatalf("version=%d team=%d channel=%d", version, teamActive, channelActive)
 	}
 }
@@ -285,7 +285,7 @@ func TestMattermostMigrationUpgradesExactPriorV1Schema(t *testing.T) {
 	if err := db.conn.QueryRow(`SELECT name, updated_at FROM mattermost_teams WHERE server_id = 's1' AND id = 't1'`).Scan(&name, &updatedAt); err != nil {
 		t.Fatal(err)
 	}
-	if version != 5 || name != "team" || updatedAt != 0 {
+	if version != 7 || name != "team" || updatedAt != 0 {
 		t.Fatalf("upgraded data: version=%d name=%q updated_at=%d", version, name, updatedAt)
 	}
 	columns := indexColumns(t, db, "idx_mattermost_posts_channel_chronology")
@@ -334,6 +334,97 @@ func TestMattermostMigrationUpgradesV4PostsWithEmptyCorrelation(t *testing.T) {
 	post, err = db.GetMattermostPost("s1", "p1")
 	if err != nil || post.CorrelationID != "corr-1" {
 		t.Fatalf("updated post=%#v err=%v", post, err)
+	}
+}
+
+func TestMattermostMigrationSixAddsLastPostAtWithZeroDefault(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "cache.db")
+	conn, err := sql.Open("sqlite", appendPragmas(dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(priorMattermostV1Schema + `
+		ALTER TABLE mattermost_teams ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0 CHECK (updated_at >= 0);
+		DROP INDEX idx_mattermost_posts_channel_chronology;
+		CREATE INDEX idx_mattermost_posts_channel_chronology ON mattermost_posts(server_id, channel_id, created_at, id);
+		ALTER TABLE mattermost_teams ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1));
+		ALTER TABLE mattermost_channels ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1));
+		ALTER TABLE mattermost_posts ADD COLUMN edited_at INTEGER NOT NULL DEFAULT 0 CHECK (edited_at >= 0);
+		ALTER TABLE mattermost_posts ADD COLUMN correlation_id TEXT NOT NULL DEFAULT '';
+		INSERT INTO cache_schema_versions (component, version, applied_at) VALUES ('mattermost', 5, 1);
+		INSERT INTO mattermost_servers VALUES ('s1', 'One', 'https://one.example', 'u1', 1);
+		INSERT INTO mattermost_teams (server_id,id,name,display_name,updated_at,is_active) VALUES ('s1','t1','','',0,1);
+		INSERT INTO mattermost_channels (server_id,id,team_id,name,display_name,kind,total_msg_count,updated_at,deleted_at,is_active) VALUES ('s1','c1','t1','','','public',0,0,0,1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	var lastPostAt int64
+	if err := db.conn.QueryRow(`SELECT version FROM cache_schema_versions WHERE component='mattermost'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.conn.QueryRow(`SELECT last_post_at FROM mattermost_channels WHERE id='c1'`).Scan(&lastPostAt); err != nil {
+		t.Fatal(err)
+	}
+	if version != 7 || lastPostAt != 0 {
+		t.Fatalf("version=%d last_post_at=%d want 7/0", version, lastPostAt)
+	}
+	if _, err := db.conn.Exec(`UPDATE mattermost_channels SET last_post_at=-1 WHERE id='c1'`); err == nil {
+		t.Fatal("negative last_post_at passed schema constraint")
+	}
+}
+
+func TestMattermostMigrationSevenAddsRuntimeAppliedWithFalseDefault(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "cache.db")
+	conn, err := sql.Open("sqlite", appendPragmas(dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(priorMattermostV1Schema + `
+		ALTER TABLE mattermost_teams ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0 CHECK (updated_at >= 0);
+		DROP INDEX idx_mattermost_posts_channel_chronology;
+		CREATE INDEX idx_mattermost_posts_channel_chronology ON mattermost_posts(server_id, channel_id, created_at, id);
+		ALTER TABLE mattermost_teams ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1));
+		ALTER TABLE mattermost_channels ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1));
+		ALTER TABLE mattermost_posts ADD COLUMN edited_at INTEGER NOT NULL DEFAULT 0 CHECK (edited_at >= 0);
+		ALTER TABLE mattermost_posts ADD COLUMN correlation_id TEXT NOT NULL DEFAULT '';
+		ALTER TABLE mattermost_channels ADD COLUMN last_post_at INTEGER NOT NULL DEFAULT 0 CHECK (last_post_at >= 0);
+		INSERT INTO cache_schema_versions (component, version, applied_at) VALUES ('mattermost', 6, 1);
+		INSERT INTO mattermost_servers VALUES ('s1', 'One', 'https://one.example', 'u1', 1);
+		INSERT INTO mattermost_teams (server_id,id,name,display_name,updated_at,is_active) VALUES ('s1','t1','','',0,1);
+		INSERT INTO mattermost_channels (server_id,id,team_id,name,display_name,kind,total_msg_count,updated_at,deleted_at,is_active,last_post_at) VALUES ('s1','c1','t1','','','public',0,0,0,1,0);
+		INSERT INTO mattermost_posts (server_id,id,channel_id,user_id,root_id,text,created_at,updated_at,deleted_at,reply_count,edited_at,correlation_id) VALUES ('s1','p1','c1','','','old',1,1,0,0,0,'');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version, runtimeApplied int
+	if err := db.conn.QueryRow(`SELECT version FROM cache_schema_versions WHERE component='mattermost'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.conn.QueryRow(`SELECT runtime_applied FROM mattermost_posts WHERE id='p1'`).Scan(&runtimeApplied); err != nil {
+		t.Fatal(err)
+	}
+	if version != 7 || runtimeApplied != 0 {
+		t.Fatalf("version=%d runtime_applied=%d want 7/0", version, runtimeApplied)
+	}
+	if _, err := db.conn.Exec(`UPDATE mattermost_posts SET runtime_applied=2 WHERE id='p1'`); err == nil {
+		t.Fatal("invalid runtime_applied passed schema constraint")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -55,6 +56,375 @@ func TestMattermostPostedEventPersistsForInactiveServer(t *testing.T) {
 	}
 }
 
+func TestUnreadInactiveChannelPostUpdatesRuntimeBeforeNotification(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1", "c2")
+	startup := unreadMattermostStartup("s1", "u1", "c1", "c2")
+	var sent []tea.Msg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache: db,
+		Send: func(_ context.Context, msg tea.Msg) error {
+			if !startup.viewState("s1").ReadState["c2"].HasUnread {
+				t.Fatal("UI notified before retained runtime snapshot update")
+			}
+			sent = append(sent, msg)
+			return nil
+		},
+		ActiveSelection: func() (ids.ServerID, string) { return "s1", "c1" },
+		Startup:         startup,
+	})
+
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c2", CreatedAt: 10}})
+
+	if len(sent) != 1 {
+		t.Fatalf("notifications=%#v want one server refresh", sent)
+	}
+	refresh, ok := sent[0].(ui.ServerRefreshedMsg)
+	if !ok || !refresh.Server.ReadState["c2"].HasUnread || !refresh.Server.HasUnread {
+		t.Fatalf("refresh=%#v", sent[0])
+	}
+}
+
+func TestUnreadInactiveServerPostUpdatesServerScopedRuntime(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1")
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	var sent tea.Msg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:           db,
+		Send:            func(_ context.Context, msg tea.Msg) error { sent = msg; return nil },
+		ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+		Startup:         startup,
+	})
+
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
+
+	refresh, ok := sent.(ui.ServerRefreshedMsg)
+	if !ok || refresh.Server.ServerID != "s1" || !refresh.Server.ReadState["c1"].HasUnread {
+		t.Fatalf("sent=%#v", sent)
+	}
+}
+
+func TestUnreadActiveChannelPostSuppressesUnreadAndKeepsHistoryRefresh(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1")
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	var sent []tea.Msg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:           db,
+		Send:            func(_ context.Context, msg tea.Msg) error { sent = append(sent, msg); return nil },
+		ActiveSelection: func() (ids.ServerID, string) { return "s1", "c1" },
+		Startup:         startup,
+	})
+
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
+
+	state := startup.viewState("s1")
+	if state.ReadState["c1"].HasUnread || state.HasUnread {
+		t.Fatalf("active channel became unread: %#v", state)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("notifications=%#v want server and history refresh", sent)
+	}
+	if _, ok := sent[0].(ui.ServerRefreshedMsg); !ok {
+		t.Fatalf("first notification=%#v want server refresh", sent[0])
+	}
+	if _, ok := sent[1].(ui.MattermostHistoryRefreshMsg); !ok {
+		t.Fatalf("second notification=%#v want history refresh", sent[1])
+	}
+}
+
+func TestUnreadPostedEventUsesSelectionAtRuntimeTransition(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		initialChannel     string
+		transitionChannel  string
+		wantUnread         bool
+		wantHistoryRefresh bool
+	}{
+		{name: "becomes active", initialChannel: "c1", transitionChannel: "c2", wantUnread: false, wantHistoryRefresh: true},
+		{name: "becomes inactive", initialChannel: "c2", transitionChannel: "c1", wantUnread: true, wantHistoryRefresh: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &blockingMattermostEventStore{started: make(chan struct{}), release: make(chan struct{})}
+			startup := unreadMattermostStartup("s1", "u1", "c1", "c2")
+			selection := newMattermostActiveSelection()
+			selection.Store("s1", tt.initialChannel)
+			var mu sync.Mutex
+			var sent []tea.Msg
+			adapter := newMattermostEventAdapter(mattermostEventDeps{
+				Cache: store,
+				Send: func(_ context.Context, msg tea.Msg) error {
+					mu.Lock()
+					sent = append(sent, msg)
+					mu.Unlock()
+					return nil
+				},
+				ActiveSelection: selection.Load,
+				Startup:         startup,
+			})
+			done := make(chan struct{})
+			go func() {
+				adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c2", CreatedAt: 10}})
+				close(done)
+			}()
+			waitMattermostEvent(t, store.started, "blocked event persistence")
+			selection.Store("s1", tt.transitionChannel)
+			close(store.release)
+			waitMattermostEvent(t, done, "posted event completion")
+
+			state := startup.viewState("s1")
+			if got := state.ReadState["c2"].HasUnread; got != tt.wantUnread {
+				t.Fatalf("unread=%v want %v state=%#v", got, tt.wantUnread, state)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			historyRefreshes := 0
+			for _, msg := range sent {
+				if refresh, ok := msg.(ui.MattermostHistoryRefreshMsg); ok && refresh.ChannelID == "c2" {
+					historyRefreshes++
+				}
+			}
+			if got := historyRefreshes == 1; got != tt.wantHistoryRefresh {
+				t.Fatalf("history refreshes=%d messages=%#v", historyRefreshes, sent)
+			}
+		})
+	}
+}
+
+func TestUnreadDuplicatePostedDeliveryDoesNotDoubleIncrementRuntime(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1")
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:           db,
+		Send:            func(context.Context, tea.Msg) error { return nil },
+		ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+		Startup:         startup,
+	})
+	event := mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}}
+
+	adapter.Handle(context.Background(), "s1", event)
+	adapter.Handle(context.Background(), "s1", event)
+
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != 1 || entry.Membership.MsgCount != 0 {
+		t.Fatalf("counts total=%d viewed=%d want 1/0", entry.Channel.TotalMsgCount, entry.Membership.MsgCount)
+	}
+}
+
+func TestRuntimePostHistoryPersistenceBeforeWebSocketStillAdvancesOnce(t *testing.T) {
+	store := &atomicMattermostEventStore{inserted: false}
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	var sent []tea.Msg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:           store,
+		Send:            func(_ context.Context, msg tea.Msg) error { sent = append(sent, msg); return nil },
+		ActiveSelection: func() (ids.ServerID, string) { return "s1", "c1" },
+		Startup:         startup,
+	})
+
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
+
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != 1 || entry.Membership.MsgCount != 1 {
+		t.Fatalf("persisted history suppressed runtime transition: %#v", entry)
+	}
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
+	entry = unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != 1 || entry.Membership.MsgCount != 1 {
+		t.Fatalf("duplicate advanced runtime counts: %#v", entry)
+	}
+	if len(sent) != 3 {
+		t.Fatalf("notifications=%#v want one runtime refresh and two history refreshes", sent)
+	}
+	if _, ok := sent[0].(ui.ServerRefreshedMsg); !ok {
+		t.Fatalf("first notification=%#v want runtime refresh", sent[0])
+	}
+}
+
+func TestRuntimePostPersistenceFailureDoesNotMarkApplied(t *testing.T) {
+	store := &atomicMattermostEventStore{err: errors.New("disk full")}
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: store, Startup: startup})
+	event := mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}}
+
+	adapter.Handle(context.Background(), "s1", event)
+	store.err = nil
+	adapter.Handle(context.Background(), "s1", event)
+
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != 1 {
+		t.Fatalf("retry after persistence failure did not apply exactly once: %#v", entry)
+	}
+}
+
+func TestRuntimePostRejectsNonpositiveCreateAt(t *testing.T) {
+	store := &atomicMattermostEventStore{inserted: true}
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: store, Startup: startup})
+	for _, createdAt := range []int64{0, -1} {
+		adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: fmt.Sprintf("post-%d", createdAt), ChannelID: "c1", CreatedAt: createdAt}})
+	}
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != 0 {
+		t.Fatalf("nonpositive posts advanced runtime: %#v", entry)
+	}
+}
+
+func TestRuntimePostEqualTimestampDistinctIDsAdvanceIndependently(t *testing.T) {
+	store := newClaimingMattermostEventStore()
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: store, Startup: startup, ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" }})
+	for _, id := range []string{"post-1", "post-2", "post-1"} {
+		adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: id, ChannelID: "c1", CreatedAt: 10}})
+	}
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != 2 {
+		t.Fatalf("equal timestamp count=%d want 2", entry.Channel.TotalMsgCount)
+	}
+}
+
+func TestRuntimePostArbitraryOutOfOrderDistinctIDsAdvanceIndependently(t *testing.T) {
+	store := newClaimingMattermostEventStore()
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: store, Startup: startup})
+	for _, post := range []mattermost.Message{
+		{ID: "post-20", ChannelID: "c1", CreatedAt: 20},
+		{ID: "post-10", ChannelID: "c1", CreatedAt: 10},
+		{ID: "post-20", ChannelID: "c1", CreatedAt: 20},
+		{ID: "post-10", ChannelID: "c1", CreatedAt: 10},
+	} {
+		adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: post})
+	}
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	if entry.Channel.TotalMsgCount != 2 {
+		t.Fatalf("out-of-order distinct count=%d want 2", entry.Channel.TotalMsgCount)
+	}
+}
+
+func TestRuntimePostStateHasNoUnboundedPostIDLedger(t *testing.T) {
+	store := newClaimingMattermostEventStore()
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: store, Startup: startup})
+	for i := int64(1); i <= 1000; i++ {
+		adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: fmt.Sprintf("post-%d", i), ChannelID: "c1", CreatedAt: i}})
+	}
+	stateType := reflect.TypeOf(*startup.reconcileState("s1"))
+	for i := 0; i < stateType.NumField(); i++ {
+		if strings.Contains(strings.ToLower(stateType.Field(i).Name), "frontier") {
+			t.Fatalf("runtime state retains frontier field %q", stateType.Field(i).Name)
+		}
+	}
+}
+
+func TestChannelViewedEqualModernNoOpDoesNotRecordOverlayAndLegacyDoes(t *testing.T) {
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	entry := unreadMattermostEntry(t, startup, "s1", "c1")
+	entry.Channel.TotalMsgCount = 5
+	entry.Membership.MsgCount = 5
+	entry.Membership.LastViewedAt = 100
+	startup.mu.Lock()
+	serverContext := startup.contexts["s1"]
+	serverContext.snapshot.Sections[0].Channels[0] = entry
+	startup.contexts["s1"] = serverContext
+	startup.mu.Unlock()
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Startup: startup})
+	adapter.Handle(context.Background(), "s1", mattermost.ChannelViewedEvent{UserID: "u1", Updates: []mattermost.ChannelViewUpdate{{ChannelID: "c1", ViewedAt: 100, HasViewedAt: true}}})
+	startup.mu.RLock()
+	_, modernTracked := startup.contexts["s1"].localReadOverlays["c1"]
+	startup.mu.RUnlock()
+	if modernTracked {
+		t.Fatal("equal modern viewed event recorded overlay")
+	}
+	adapter.Handle(context.Background(), "s1", mattermost.ChannelViewedEvent{UserID: "u1", Updates: []mattermost.ChannelViewUpdate{{ChannelID: "c1"}}})
+	startup.mu.RLock()
+	overlay := startup.contexts["s1"].localReadOverlays["c1"]
+	startup.mu.RUnlock()
+	if overlay.ViewedMsgCount != 5 || overlay.HasLastViewedAt {
+		t.Fatalf("overlay=%#v", overlay)
+	}
+}
+
+func TestChannelViewedCurrentUserCorrectsRuntimeAndLegacyKeepsTimestamp(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1", "c2")
+	startup := unreadMattermostStartup("s1", "u1", "c1", "c2")
+	startup.updateRuntimeEvent("s1", mattermost.PostedEvent{Message: mattermost.Message{ChannelID: "c1"}}, "s2", "", true)
+	startup.updateRuntimeEvent("s1", mattermost.PostedEvent{Message: mattermost.Message{ChannelID: "c2"}}, "s2", "", true)
+	var sent tea.Msg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:           db,
+		Send:            func(_ context.Context, msg tea.Msg) error { sent = msg; return nil },
+		ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+		Startup:         startup,
+	})
+
+	adapter.Handle(context.Background(), "s1", mattermost.ChannelViewedEvent{UserID: "u1", Updates: []mattermost.ChannelViewUpdate{
+		{ChannelID: "c1", ViewedAt: 50, HasViewedAt: true},
+		{ChannelID: "c2"},
+	}})
+
+	refresh, ok := sent.(ui.ServerRefreshedMsg)
+	if !ok || refresh.Server.HasUnread {
+		t.Fatalf("sent=%#v", sent)
+	}
+	c1 := unreadMattermostEntry(t, startup, "s1", "c1")
+	c2 := unreadMattermostEntry(t, startup, "s1", "c2")
+	if c1.Membership.LastViewedAt != 50 || c2.Membership.LastViewedAt != 10 {
+		t.Fatalf("last viewed c1=%d c2=%d want 50/10", c1.Membership.LastViewedAt, c2.Membership.LastViewedAt)
+	}
+}
+
+func TestChannelViewedOtherUserIsIgnored(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1")
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	startup.updateRuntimeEvent("s1", mattermost.PostedEvent{Message: mattermost.Message{ChannelID: "c1"}}, "s2", "", true)
+	notified := false
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:           db,
+		Send:            func(context.Context, tea.Msg) error { notified = true; return nil },
+		ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+		Startup:         startup,
+	})
+
+	adapter.Handle(context.Background(), "s1", mattermost.ChannelViewedEvent{UserID: "u2", Updates: []mattermost.ChannelViewUpdate{{ChannelID: "c1", ViewedAt: 50, HasViewedAt: true}}})
+
+	if !startup.viewState("s1").ReadState["c1"].HasUnread || notified {
+		t.Fatal("other user's viewed event changed runtime state or notified UI")
+	}
+}
+
+func TestChannelViewedStaleTimestampDoesNotClearNewerUnread(t *testing.T) {
+	for _, viewedAt := range []int64{90, 100} {
+		t.Run(fmt.Sprintf("viewed_at_%d", viewedAt), func(t *testing.T) {
+			startup := unreadMattermostStartup("s1", "u1", "c1")
+			startup.updateRuntimeEvent("s1", mattermost.PostedEvent{Message: mattermost.Message{ChannelID: "c1"}}, "s2", "", true)
+			startup.mu.Lock()
+			serverContext := startup.contexts["s1"]
+			entry := serverContext.snapshot.Sections[0].Channels[0]
+			membership := *entry.Membership
+			membership.LastViewedAt = 100
+			membership.MentionCount = 2
+			entry.Membership = &membership
+			serverContext.snapshot.Sections[0].Channels[0] = entry
+			startup.contexts["s1"] = serverContext
+			startup.mu.Unlock()
+			notified := false
+			adapter := newMattermostEventAdapter(mattermostEventDeps{
+				Send:            func(context.Context, tea.Msg) error { notified = true; return nil },
+				ActiveSelection: func() (ids.ServerID, string) { return "s2", "other" },
+				Startup:         startup,
+			})
+
+			adapter.Handle(context.Background(), "s1", mattermost.ChannelViewedEvent{UserID: "u1", Updates: []mattermost.ChannelViewUpdate{{ChannelID: "c1", ViewedAt: viewedAt, HasViewedAt: true}}})
+
+			got := unreadMattermostEntry(t, startup, "s1", "c1")
+			if got.Membership.MsgCount != 0 || got.Membership.MentionCount != 2 || got.Membership.LastViewedAt != 100 || !service.ChannelHasUnread(got) {
+				t.Fatalf("stale viewed update changed entry: %#v", got)
+			}
+			if notified {
+				t.Fatal("stale viewed update notified UI")
+			}
+		})
+	}
+}
+
 func TestMattermostPostedEventRefreshesActiveChannel(t *testing.T) {
 	db := newMattermostEventDB(t, "s1", "c1")
 	var sent tea.Msg
@@ -70,7 +440,7 @@ func TestMattermostPostedEventRefreshesActiveChannel(t *testing.T) {
 		ActiveSelection: func() (ids.ServerID, string) { return "s1", "c1" },
 	})
 
-	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1"}})
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
 
 	if got, ok := sent.(ui.MattermostHistoryRefreshMsg); !ok || got.ServerID != "s1" || got.ChannelID != "c1" {
 		t.Fatalf("sent=%#v", sent)
@@ -80,7 +450,7 @@ func TestMattermostPostedEventRefreshesActiveChannel(t *testing.T) {
 func TestMattermostPostedEventPersistsWhenChannelIsAbsent(t *testing.T) {
 	db := newMattermostEventDB(t, "s1")
 	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: db, ActiveSelection: func() (ids.ServerID, string) { return "", "" }})
-	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ServerID: "payload-server", ChannelID: "unknown", Text: "visible after fallback"}})
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ServerID: "payload-server", ChannelID: "unknown", Text: "visible after fallback", CreatedAt: 10}})
 	if _, err := db.GetMattermostPost("s1", "post-1"); err != nil {
 		t.Fatalf("post not persisted: %v", err)
 	}
@@ -178,7 +548,7 @@ func TestMattermostPostedEventDeduplicatesWithReconciliation(t *testing.T) {
 func TestMattermostEventCannotMutateAnotherServer(t *testing.T) {
 	db := newMattermostEventDB(t, "s1", "c1")
 	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: db, ActiveSelection: func() (ids.ServerID, string) { return "", "" }})
-	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ServerID: "s2", ChannelID: "c1"}})
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ServerID: "s2", ChannelID: "c1", CreatedAt: 10}})
 	if _, err := db.GetMattermostPost("s1", "post-1"); err != nil {
 		t.Fatalf("trusted server row missing: %v", err)
 	}
@@ -202,9 +572,9 @@ func TestMattermostProductionEventHandlerUsesCacheAndSelection(t *testing.T) {
 	selection := newMattermostActiveSelection()
 	selection.Store("s1", "c1")
 	var sent tea.Msg
-	handle := mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error { sent = msg; return nil }, selection.Load, nil)
+	handle := mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error { sent = msg; return nil }, selection.Load, nil, nil)
 
-	handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1"}})
+	handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
 
 	if _, err := db.GetMattermostPost("s1", "post-1"); err != nil {
 		t.Fatal(err)
@@ -221,11 +591,11 @@ func TestMattermostEventDispatcherEnqueueReturnsWhilePersistenceBlocked(t *testi
 	done := make(chan struct{})
 	go func() { dispatcher.Run(ctx); close(done) }()
 
-	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "first", ChannelID: "c1"}})
+	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "first", ChannelID: "c1", CreatedAt: 1}})
 	waitMattermostEvent(t, store.started, "blocked persistence")
 	returned := make(chan struct{})
 	go func() {
-		dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "second", ChannelID: "c1"}})
+		dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "second", ChannelID: "c1", CreatedAt: 2}})
 		close(returned)
 	}()
 	waitMattermostEvent(t, returned, "prompt enqueue")
@@ -237,8 +607,8 @@ func TestMattermostEventDispatcherEnqueueReturnsWhilePersistenceBlocked(t *testi
 func TestMattermostEventDispatcherPreservesFIFO(t *testing.T) {
 	store := &recordingMattermostEventStore{processed: make(chan string, 3)}
 	dispatcher := newMattermostEventDispatcher("s1", newMattermostEventAdapter(mattermostEventDeps{Cache: store}).Handle)
-	for _, id := range []string{"one", "two", "three"} {
-		dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: id, ChannelID: "c1"}})
+	for i, id := range []string{"one", "two", "three"} {
+		dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: id, ChannelID: "c1", CreatedAt: int64(i + 1)}})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -260,8 +630,8 @@ func TestMattermostEventDispatcherContinuesAfterPersistenceFailure(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { dispatcher.Run(ctx); close(done) }()
-	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "sentinel-event-text", ChannelID: "c1"}})
-	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "later", ChannelID: "c1"}})
+	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "sentinel-event-text", ChannelID: "c1", CreatedAt: 1}})
+	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "later", ChannelID: "c1", CreatedAt: 2}})
 
 	if err := waitMattermostEvent(t, diagnostic, "persistence diagnostic"); err == nil || err.Error() != "Mattermost posted event persistence failed" {
 		t.Fatalf("diagnostic=%v", err)
@@ -279,9 +649,9 @@ func TestMattermostEventDispatcherCancellationDiscardsQueuedEvents(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { dispatcher.Run(ctx); close(done) }()
-	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "first", ChannelID: "c1"}})
+	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "first", ChannelID: "c1", CreatedAt: 1}})
 	waitMattermostEvent(t, store.started, "blocked persistence")
-	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "discarded", ChannelID: "c1"}})
+	dispatcher.Enqueue(mattermost.PostedEvent{Message: mattermost.Message{ID: "discarded", ChannelID: "c1", CreatedAt: 2}})
 	cancel()
 	waitMattermostEvent(t, done, "canceled dispatcher")
 	if got := store.ids(); !reflect.DeepEqual(got, []string{"first"}) {
@@ -296,7 +666,7 @@ type blockingMattermostEventStore struct {
 	release chan struct{}
 }
 
-func (s *blockingMattermostEventStore) UpsertMattermostRealtimePostContext(ctx context.Context, _ string, post cache.MattermostPost) error {
+func (s *blockingMattermostEventStore) UpsertMattermostRealtimePostContext(ctx context.Context, _ string, post cache.MattermostPost) (bool, error) {
 	s.mu.Lock()
 	s.seen = append(s.seen, post.ID)
 	s.mu.Unlock()
@@ -307,10 +677,15 @@ func (s *blockingMattermostEventStore) UpsertMattermostRealtimePostContext(ctx c
 	}
 	select {
 	case <-s.release:
-		return nil
+		return true, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	}
+}
+
+func (s *blockingMattermostEventStore) PersistMattermostRealtimePostContext(ctx context.Context, serverID string, post cache.MattermostPost) error {
+	_, err := s.UpsertMattermostRealtimePostContext(ctx, serverID, post)
+	return err
 }
 
 func (s *blockingMattermostEventStore) ids() []string {
@@ -325,16 +700,65 @@ type recordingMattermostEventStore struct {
 	processed chan string
 }
 
-func (s *recordingMattermostEventStore) UpsertMattermostRealtimePostContext(_ context.Context, _ string, post cache.MattermostPost) error {
+func (s *recordingMattermostEventStore) UpsertMattermostRealtimePostContext(_ context.Context, _ string, post cache.MattermostPost) (bool, error) {
 	s.mu.Lock()
 	if s.failFirst {
 		s.failFirst = false
 		s.mu.Unlock()
-		return errors.New("database failure containing sentinel-event-text")
+		return false, errors.New("database failure containing sentinel-event-text")
 	}
 	s.mu.Unlock()
 	s.processed <- post.ID
+	return true, nil
+}
+
+func (s *recordingMattermostEventStore) PersistMattermostRealtimePostContext(ctx context.Context, serverID string, post cache.MattermostPost) error {
+	_, err := s.UpsertMattermostRealtimePostContext(ctx, serverID, post)
+	return err
+}
+
+type atomicMattermostEventStore struct {
+	inserted bool
+	err      error
+	claimed  bool
+}
+
+type claimingMattermostEventStore struct {
+	mu      sync.Mutex
+	claimed map[string]bool
+}
+
+func newClaimingMattermostEventStore() *claimingMattermostEventStore {
+	return &claimingMattermostEventStore{claimed: make(map[string]bool)}
+}
+
+func (s *claimingMattermostEventStore) UpsertMattermostRealtimePostContext(_ context.Context, _ string, post cache.MattermostPost) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claimed[post.ID] {
+		return false, nil
+	}
+	s.claimed[post.ID] = true
+	return true, nil
+}
+
+func (*claimingMattermostEventStore) PersistMattermostRealtimePostContext(context.Context, string, cache.MattermostPost) error {
 	return nil
+}
+
+func (s *atomicMattermostEventStore) UpsertMattermostRealtimePostContext(context.Context, string, cache.MattermostPost) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
+	if s.claimed {
+		return false, nil
+	}
+	s.claimed = true
+	return true, nil
+}
+
+func (s *atomicMattermostEventStore) PersistMattermostRealtimePostContext(context.Context, string, cache.MattermostPost) error {
+	return s.err
 }
 
 func waitMattermostEvent[T any](t *testing.T, ch <-chan T, label string) T {
@@ -428,4 +852,39 @@ func newMattermostEventDB(t *testing.T, serverID string, channelIDs ...string) *
 		t.Fatal(err)
 	}
 	return db
+}
+
+func unreadMattermostStartup(serverID, userID string, channelIDs ...string) *mattermostStartup {
+	entries := make([]service.ChannelEntry, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		entries = append(entries, service.ChannelEntry{
+			Channel: mattermost.Channel{ID: channelID, Kind: mattermost.ChannelKindPublic},
+			Membership: &mattermost.ChannelMembership{
+				ChannelID: channelID, UserID: userID, LastViewedAt: 10,
+			},
+		})
+	}
+	snapshot := service.ServerSnapshot{
+		Server:      mattermost.Server{ID: serverID, Name: serverID},
+		CurrentUser: mattermost.User{ID: userID},
+		Sections:    []service.ChannelSection{{ID: "t1", Channels: entries}},
+	}
+	return &mattermostStartup{contexts: map[ids.ServerID]mattermostServerContext{
+		ids.ServerID(serverID): {server: snapshot.Server, snapshot: snapshot, usable: true},
+	}}
+}
+
+func unreadMattermostEntry(t *testing.T, startup *mattermostStartup, serverID ids.ServerID, channelID string) service.ChannelEntry {
+	t.Helper()
+	startup.mu.RLock()
+	defer startup.mu.RUnlock()
+	for _, section := range startup.contexts[serverID].snapshot.Sections {
+		for _, entry := range section.Channels {
+			if entry.Channel.ID == channelID {
+				return entry
+			}
+		}
+	}
+	t.Fatalf("channel %q not found", channelID)
+	return service.ChannelEntry{}
 }
