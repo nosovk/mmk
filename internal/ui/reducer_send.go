@@ -80,7 +80,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		if m.Request.RootID != "" {
-			if a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() {
+			if request == a.activeHistoryRequest && a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() {
 				item := cloneMessageItem(m.Message)
 				if !a.threadPanel.ReplaceLocalReply(m.Request.CorrelationID, item) {
 					a.threadPanel.UpsertReply(item)
@@ -103,7 +103,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		if m.Request.RootID != "" {
-			if a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() {
+			if request == a.activeHistoryRequest && a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() {
 				a.threadPanel.RemoveLocalReply(m.Request.CorrelationID)
 			}
 			return func() tea.Msg { return statusbar.SendFailedMsg{Reason: "message send failed"} }, true

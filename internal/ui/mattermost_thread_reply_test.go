@@ -438,6 +438,60 @@ func TestMattermostThreadResultsAcceptRetainedOriginScopeWithoutMutatingCurrentP
 	}
 }
 
+func TestMattermostRetainedThreadResultDoesNotMutateSameChannelRootPanelWithDifferentScope(t *testing.T) {
+	for _, scopeDifference := range []string{"server", "generation"} {
+		t.Run(scopeDifference, func(t *testing.T) {
+			for _, failure := range []bool{false, true} {
+				t.Run(map[bool]string{false: "success", true: "failure"}[failure], func(t *testing.T) {
+					a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+					a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+					origin := a.activeHistoryRequest
+					_, _ = a.Update(mattermostThreadReplyMsg(a, "origin"))
+					correlationID := a.threadPanel.Replies()[0].CorrelationID
+					w1 := a.focusedWin
+					_ = a.splitWindow(wintree.SplitSideBySide)
+					w2 := a.focusedWin
+
+					a.releaseMattermostWindowScope(w2)
+					serverID := origin.ServerID
+					if scopeDifference == "server" {
+						serverID = "server-2"
+					}
+					active := a.newMattermostHistoryScope(serverID, origin.ChannelID)
+					a.mattermostWindowScopes[w2] = active
+					a.setFocusedMattermostScope(active)
+					a.threadPanel.SetThread(messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain}, []messages.MessageItem{{
+						ID: correlationID, CorrelationID: correlationID, RootID: "root-1", Format: messages.FormatMattermostPlain,
+						DeliveryState: messages.DeliveryPending, DeliveryServerID: string(active.request.ServerID), DeliveryChannelID: active.request.ChannelID, DeliveryGeneration: active.request.Generation,
+					}}, origin.ChannelID, "root-1")
+					before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
+
+					var toast tea.Cmd
+					if failure {
+						_, toast = a.Update(MattermostMessageSendFailedMsg{Request: MattermostSendRequest{ServerID: origin.ServerID, ChannelID: origin.ChannelID, Generation: origin.Generation, RootID: "root-1", CorrelationID: correlationID}})
+					} else {
+						_, toast = a.Update(MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: origin.ServerID, ChannelID: origin.ChannelID, Generation: origin.Generation, RootID: "root-1", CorrelationID: correlationID}, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID}})
+					}
+
+					if got := a.threadPanel.Replies(); !reflect.DeepEqual(got, before) {
+						t.Fatalf("retained result changed same-channel/root active panel from %#v to %#v", before, got)
+					}
+					if failure {
+						if toast == nil {
+							t.Fatal("valid retained failure returned nil toast")
+						}
+					} else {
+						rows := a.winModels[w1].Messages()
+						if len(rows) != 1 || rows[0].ReplyCount != 1 {
+							t.Fatalf("origin model rows=%#v want root count 1", rows)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestMattermostThreadResultsRejectCanceledRetainedScope(t *testing.T) {
 	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
 	request := a.activeHistoryRequest
