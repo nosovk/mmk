@@ -47,12 +47,12 @@ func (s mattermostUIThreadService) Fetch(ctx context.Context, channelID ids.Chan
 	if err != nil {
 		return ui.ThreadRepliesLoadedMsg{Request: s.request, ThreadTS: string(rootID), Replies: nil}
 	}
-	replies := mattermostHistoryItems(items)
-	if len(replies) > 0 {
-		replies = replies[1:]
-	}
-	if replies == nil {
-		replies = []messages.MessageItem{}
+	presented := mattermostHistoryItems(items)
+	replies := make([]messages.MessageItem, 0, len(presented))
+	for _, item := range presented {
+		if item.ID != string(rootID) {
+			replies = append(replies, item)
+		}
 	}
 	return ui.ThreadRepliesLoadedMsg{Request: s.request, ThreadTS: string(rootID), Replies: replies}
 }

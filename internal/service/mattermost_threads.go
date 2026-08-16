@@ -105,7 +105,17 @@ func (s *MattermostThreadService) Fetch(ctx context.Context, channelID, rootID s
 	if err != nil {
 		return nil, fmt.Errorf("read merged Mattermost thread: %w", err)
 	}
-	return presented, nil
+	authoritativeIDs := make(map[string]struct{}, len(page.Messages))
+	for _, message := range page.Messages {
+		authoritativeIDs[message.ID] = struct{}{}
+	}
+	authoritative := presented[:0]
+	for _, message := range presented {
+		if _, ok := authoritativeIDs[message.Message.ID]; ok {
+			authoritative = append(authoritative, message)
+		}
+	}
+	return authoritative, nil
 }
 
 func validateMattermostThread(messages []mattermost.Message, channelID, rootID string) error {

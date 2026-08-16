@@ -52,6 +52,7 @@ func TestMattermostUIThreadsFetchPreservesSuccessAndFailureSemantics(t *testing.
 	}{
 		{name: "reply success", service: stubMattermostThreadService{live: []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "root-1"}}, {Message: mattermost.Message{ID: "reply-1", RootID: "root-1"}}}}, want: []messages.MessageItem{{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}}},
 		{name: "root only", service: stubMattermostThreadService{live: []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "root-1"}}}}, want: []messages.MessageItem{}},
+		{name: "deleted root", service: stubMattermostThreadService{live: []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "reply-1", RootID: "root-1"}}, {Message: mattermost.Message{ID: "reply-2", RootID: "root-1"}}}}, want: []messages.MessageItem{{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}, {ID: "reply-2", RootID: "root-1", Format: messages.FormatMattermostPlain}}},
 		{name: "failure", service: stubMattermostThreadService{err: errors.New("offline")}, want: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

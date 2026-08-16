@@ -232,6 +232,39 @@ func TestMattermostThreadFetchReturnsMergedCacheStateAfterPersistence(t *testing
 	}
 }
 
+func TestMattermostThreadFetchPresentsOnlyAuthoritativeResponsePostsWithoutPruningCache(t *testing.T) {
+	db := setupMattermostHistoryDB(t)
+	if err := db.UpsertMattermostHistory("s1", []cache.MattermostPost{
+		{ID: "root", ChannelID: "c1", UserID: "u1", Text: "newer cached root", CreatedAt: 10, UpdatedAt: 50, EditedAt: 50},
+		{ID: "omitted-reply", ChannelID: "c1", UserID: "u2", RootID: "root", Text: "cached reply", CreatedAt: 20, UpdatedAt: 20},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeMattermostThreadClient{page: mattermost.MessagePage{Messages: []mattermost.Message{
+		{ID: "root", ChannelID: "c1", UserID: "u1", Text: "stale live root", CreatedAt: 10, UpdatedAt: 30},
+	}}}
+	svc := NewMattermostThreadService("s1", client, db)
+
+	messages, err := svc.Fetch(context.Background(), "c1", "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := historyIDs(messages), []string{"root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("live ids=%v want %v", got, want)
+	}
+	if messages[0].Message.Text != "newer cached root" || messages[0].Message.UpdatedAt != 50 {
+		t.Fatalf("root=%#v", messages[0])
+	}
+
+	cached, err := svc.ReadCached("c1", "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := historyIDs(cached), []string{"root", "omitted-reply"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cached ids=%v want %v", got, want)
+	}
+}
+
 func TestMattermostThreadFetchRejectsBlankChannelBeforeClientCall(t *testing.T) {
 	for _, channelID := range []string{"", " \t\n "} {
 		t.Run(strings.ReplaceAll(channelID, " ", "space"), func(t *testing.T) {
