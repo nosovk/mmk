@@ -120,7 +120,7 @@ func TestUnreadStartupProductionBindingAppliesImmediatePostedEvent(t *testing.T)
 			return mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error {
 				messages <- msg
 				return nil
-			}, func() (ids.ServerID, string) { return "s2", "other" }, startup, nil)
+			}, func() (ids.ServerID, string) { return "s2", "other" }, func() ui.HistoryRequest { return ui.HistoryRequest{} }, startup, nil)
 		},
 	})
 	defer stopConnectionTestStartup(t, startup)
@@ -385,6 +385,20 @@ func TestMattermostActiveSelectionStoresAtomicPair(t *testing.T) {
 	serverID, channelID := selection.Load()
 	if serverID != "s1" || channelID != "c1" {
 		t.Fatalf("selection = %q/%q", serverID, channelID)
+	}
+}
+
+func TestMattermostActiveSelectionKeepsHistoryRequestGenerationIndependent(t *testing.T) {
+	selection := newMattermostActiveSelection()
+	request := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 17}
+	selection.StoreHistoryRequest(request)
+	selection.Store("s2", "c2")
+
+	if got := selection.LoadHistoryRequest(); got != request {
+		t.Fatalf("history request=%#v want %#v", got, request)
+	}
+	if serverID, channelID := selection.Load(); serverID != "s2" || channelID != "c2" {
+		t.Fatalf("selection=%q/%q want s2/c2", serverID, channelID)
 	}
 }
 

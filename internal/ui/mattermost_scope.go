@@ -36,12 +36,18 @@ func (a *App) setFocusedMattermostScope(scope *mattermostHistoryScope) {
 		a.activeHistoryContext = nil
 		a.activeHistoryCancel = nil
 		a.statusbar.SetSyncing(false)
+		if a.historyRequestObserver != nil {
+			a.historyRequestObserver(a.activeHistoryRequest)
+		}
 		return
 	}
 	a.activeHistoryRequest = scope.request
 	a.activeHistoryContext = scope.ctx
 	a.activeHistoryCancel = scope.cancel
 	a.statusbar.SetSyncing(scope.recentInFlight)
+	if a.historyRequestObserver != nil {
+		a.historyRequestObserver(a.activeHistoryRequest)
+	}
 }
 
 func (a *App) installFocusedMattermostScope(serverID ids.ServerID, channelID string) *mattermostHistoryScope {

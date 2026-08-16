@@ -12,6 +12,7 @@ import (
 	"github.com/nosovk/mmk/internal/mattermost"
 	"github.com/nosovk/mmk/internal/service"
 	"github.com/nosovk/mmk/internal/ui"
+	"github.com/nosovk/mmk/internal/ui/messages"
 )
 
 type mattermostEventStore interface {
@@ -20,11 +21,12 @@ type mattermostEventStore interface {
 }
 
 type mattermostEventDeps struct {
-	Cache           mattermostEventStore
-	Send            func(context.Context, tea.Msg) error
-	ActiveSelection func() (ids.ServerID, string)
-	Startup         *mattermostStartup
-	Diagnostic      func(error)
+	Cache                mattermostEventStore
+	Send                 func(context.Context, tea.Msg) error
+	ActiveSelection      func() (ids.ServerID, string)
+	ActiveHistoryRequest func() ui.HistoryRequest
+	Startup              *mattermostStartup
+	Diagnostic           func(error)
 }
 
 type mattermostEventAdapter struct {
@@ -35,8 +37,8 @@ func newMattermostEventAdapter(deps mattermostEventDeps) *mattermostEventAdapter
 	return &mattermostEventAdapter{deps: deps}
 }
 
-func mattermostProductionEventHandler(cache mattermostEventStore, send func(context.Context, tea.Msg) error, activeSelection func() (ids.ServerID, string), startup *mattermostStartup, diagnostic func(error)) func(context.Context, ids.ServerID, mattermost.Event) {
-	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: cache, Send: send, ActiveSelection: activeSelection, Startup: startup, Diagnostic: diagnostic})
+func mattermostProductionEventHandler(cache mattermostEventStore, send func(context.Context, tea.Msg) error, activeSelection func() (ids.ServerID, string), activeHistoryRequest func() ui.HistoryRequest, startup *mattermostStartup, diagnostic func(error)) func(context.Context, ids.ServerID, mattermost.Event) {
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: cache, Send: send, ActiveSelection: activeSelection, ActiveHistoryRequest: activeHistoryRequest, Startup: startup, Diagnostic: diagnostic})
 	return adapter.Handle
 }
 
@@ -56,7 +58,12 @@ func (a *mattermostEventAdapter) Handle(ctx context.Context, serverID ids.Server
 	}
 	posted, isPosted := event.(mattermost.PostedEvent)
 	applyPosted := false
+	var realtime ui.MattermostRealtimePostMsg
 	if isPosted {
+		request := ui.HistoryRequest{}
+		if a.deps.ActiveHistoryRequest != nil {
+			request = a.deps.ActiveHistoryRequest()
+		}
 		if posted.Message.CreatedAt <= 0 {
 			return
 		}
@@ -95,6 +102,9 @@ func (a *mattermostEventAdapter) Handle(ctx context.Context, serverID ids.Server
 			return
 		}
 		applyPosted = claimed
+		if request.ServerID == serverID && request.ChannelID == message.ChannelID {
+			realtime = ui.MattermostRealtimePostMsg{Request: request, Message: a.mattermostRealtimeItem(serverID, message)}
+		}
 	}
 	if a.deps.Startup != nil {
 		changed := false
@@ -112,6 +122,11 @@ func (a *mattermostEventAdapter) Handle(ctx context.Context, serverID ids.Server
 			}
 		}
 	}
+	if realtime.Request.ChannelID != "" && a.deps.Send != nil {
+		if err := a.deps.Send(ctx, realtime); err != nil && ctx.Err() == nil {
+			a.diagnostic(errors.New("Mattermost posted event UI notification failed"))
+		}
+	}
 	activeServer, activeChannel := ids.ServerID(""), ""
 	if a.deps.ActiveSelection != nil {
 		activeServer, activeChannel = a.deps.ActiveSelection()
@@ -122,6 +137,28 @@ func (a *mattermostEventAdapter) Handle(ctx context.Context, serverID ids.Server
 	if err := a.deps.Send(ctx, ui.MattermostHistoryRefreshMsg{ServerID: serverID, ChannelID: posted.Message.ChannelID}); err != nil && ctx.Err() == nil {
 		a.diagnostic(errors.New("Mattermost posted event UI notification failed"))
 	}
+}
+
+func (a *mattermostEventAdapter) mattermostRealtimeItem(serverID ids.ServerID, message mattermost.Message) messages.MessageItem {
+	userName := message.UserID
+	if a.deps.Startup != nil {
+		a.deps.Startup.mu.RLock()
+		serverContext, ok := a.deps.Startup.contexts[serverID]
+		if ok {
+			for _, user := range serverContext.snapshot.Users {
+				if user.ID == message.UserID {
+					userName = user.DisplayName()
+					break
+				}
+			}
+		}
+		a.deps.Startup.mu.RUnlock()
+	}
+	if userName == "" {
+		userName = message.UserID
+	}
+	items := mattermostHistoryItems([]service.MattermostHistoryMessage{{Message: message, UserName: userName}})
+	return items[0]
 }
 
 func (a *mattermostEventAdapter) applyPostedRuntime(serverID ids.ServerID, posted mattermost.PostedEvent, runtimeState *mattermostReconcileState) (ui.ServerViewState, bool) {

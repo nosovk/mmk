@@ -64,6 +64,25 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case NewMessageMsg:
 		return reduceNewMessage(a, m), true
 
+	case MattermostRealtimePostMsg:
+		if m.Message.RootID == "" {
+			return nil, true
+		}
+		scope := a.mattermostScope(m.Request)
+		if scope == nil || scope.ctx.Err() != nil {
+			return nil, true
+		}
+		for _, mm := range a.modelsForMattermostScope(m.Request) {
+			mm.IncrementReplyCount(m.Message.RootID, m.Message.MessageID())
+		}
+		if m.Request == a.activeHistoryRequest && a.threadVisible && m.Request.ChannelID == a.threadPanel.ChannelID() && m.Message.RootID == a.threadPanel.ThreadTS() {
+			item := cloneMessageItem(m.Message)
+			if !a.threadPanel.ReplaceLocalReply(item.CorrelationID, item) {
+				a.threadPanel.UpsertReply(item)
+			}
+		}
+		return nil, true
+
 	case SendMessageMsg:
 		if !a.allows(FeatureSend) {
 			return nil, true

@@ -17,8 +17,120 @@ import (
 	"github.com/nosovk/mmk/internal/mattermost"
 	"github.com/nosovk/mmk/internal/service"
 	"github.com/nosovk/mmk/internal/ui"
+	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/sidebar"
 )
+
+func TestMattermostRealtimeReplyPersistsBeforeAuthoritativeNotification(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1")
+	startup := unreadMattermostStartup("s1", "u1", "c1")
+	startup.mu.Lock()
+	serverContext := startup.contexts["s1"]
+	serverContext.snapshot.Users = append(serverContext.snapshot.Users, mattermost.User{ID: "u2", FirstName: "Bob", LastName: "Builder"})
+	startup.contexts["s1"] = serverContext
+	startup.mu.Unlock()
+	request := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 7}
+	var sent []tea.Msg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:                db,
+		ActiveHistoryRequest: func() ui.HistoryRequest { return request },
+		Send: func(_ context.Context, msg tea.Msg) error {
+			if _, err := db.GetMattermostPost("s1", "reply-1"); err != nil {
+				t.Fatalf("UI notified before cache write: %v", err)
+			}
+			sent = append(sent, msg)
+			return nil
+		},
+		ActiveSelection: func() (ids.ServerID, string) { return "s1", "c1" },
+		Startup:         startup,
+	})
+
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{
+		ID: "reply-1", ChannelID: "c1", RootID: "root-1", UserID: "u2",
+		Text: "authoritative", CorrelationID: "corr-1", CreatedAt: 123,
+		EditedAt: 124, ReplyCount: 3,
+	}})
+
+	realtimeIndex, historyIndex := -1, -1
+	var got ui.MattermostRealtimePostMsg
+	for i, msg := range sent {
+		if value, ok := msg.(ui.MattermostRealtimePostMsg); ok {
+			realtimeIndex, got = i, value
+		}
+		if _, ok := msg.(ui.MattermostHistoryRefreshMsg); ok {
+			historyIndex = i
+		}
+	}
+	if realtimeIndex < 0 || historyIndex < 0 || realtimeIndex >= historyIndex {
+		t.Fatalf("notifications=%#v want realtime post before history refresh", sent)
+	}
+	want := ui.MattermostRealtimePostMsg{Request: request, Message: messages.MessageItem{
+		ID: "reply-1", CorrelationID: "corr-1", CreatedAt: 123, RootID: "root-1",
+		Format: messages.FormatMattermostPlain, UserID: "u2", UserName: "Bob Builder",
+		Text: "authoritative", ReplyCount: 3, IsEdited: true,
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("realtime=%#v want %#v", got, want)
+	}
+}
+
+func TestMattermostRealtimeReplyPersistenceFailureAndCancellationSuppressNotification(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ctx   func() context.Context
+		store mattermostEventStore
+	}{
+		{name: "failure", ctx: context.Background, store: &atomicMattermostEventStore{err: errors.New("disk full")}},
+		{name: "cancellation", ctx: func() context.Context { ctx, cancel := context.WithCancel(context.Background()); cancel(); return ctx }, store: &blockingMattermostEventStore{started: make(chan struct{}), release: make(chan struct{})}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			notified := false
+			adapter := newMattermostEventAdapter(mattermostEventDeps{
+				Cache: tc.store,
+				ActiveHistoryRequest: func() ui.HistoryRequest {
+					return ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 1}
+				},
+				Send: func(context.Context, tea.Msg) error { notified = true; return nil },
+			})
+			adapter.Handle(tc.ctx(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "reply-1", ChannelID: "c1", RootID: "root-1", CreatedAt: 1}})
+			if notified {
+				t.Fatal("failed or canceled persistence notified UI")
+			}
+		})
+	}
+}
+
+func TestMattermostRealtimeReplyCapturesOriginScopeBeforePersistence(t *testing.T) {
+	store := &blockingMattermostEventStore{started: make(chan struct{}), release: make(chan struct{})}
+	selection := newMattermostActiveSelection()
+	origin := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 7}
+	selection.StoreHistoryRequest(origin)
+	var sent tea.Msg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache:                store,
+		ActiveHistoryRequest: selection.LoadHistoryRequest,
+		Send: func(_ context.Context, msg tea.Msg) error {
+			if _, ok := msg.(ui.MattermostRealtimePostMsg); ok {
+				sent = msg
+			}
+			return nil
+		},
+	})
+	done := make(chan struct{})
+	go func() {
+		adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "reply-1", ChannelID: "c1", RootID: "root-1", CreatedAt: 1}})
+		close(done)
+	}()
+	waitMattermostEvent(t, store.started, "blocked persistence")
+	selection.StoreHistoryRequest(ui.HistoryRequest{ServerID: "s1", ChannelID: "c2", Generation: 8})
+	close(store.release)
+	waitMattermostEvent(t, done, "posted event completion")
+
+	got, ok := sent.(ui.MattermostRealtimePostMsg)
+	if !ok || got.Request != origin {
+		t.Fatalf("realtime=%#v want origin request %#v", sent, origin)
+	}
+}
 
 func TestMattermostPostedEventPersistsForInactiveServer(t *testing.T) {
 	db := newMattermostEventDB(t, "s1", "c1")
@@ -572,7 +684,7 @@ func TestMattermostProductionEventHandlerUsesCacheAndSelection(t *testing.T) {
 	selection := newMattermostActiveSelection()
 	selection.Store("s1", "c1")
 	var sent tea.Msg
-	handle := mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error { sent = msg; return nil }, selection.Load, nil, nil)
+	handle := mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error { sent = msg; return nil }, selection.Load, func() ui.HistoryRequest { return ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 1} }, nil, nil)
 
 	handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
 

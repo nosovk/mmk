@@ -103,6 +103,10 @@ type (
 		ServerID  ids.ServerID
 		ChannelID string
 	}
+	MattermostRealtimePostMsg struct {
+		Request HistoryRequest
+		Message messages.MessageItem
+	}
 	MattermostOlderMessagesLoadedMsg struct {
 		Request          HistoryRequest
 		AnchorID         string

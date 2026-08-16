@@ -155,12 +155,13 @@ type App struct {
 	renderCache *panelRenderCache
 
 	// Current context
-	activeChannelID     string
-	activeServerID      string // workspace whose data is currently loaded into the side panels
-	selectionGeneration uint64
-	selectionObserver   SelectionObserver
-	serverRevisions     map[string]uint64
-	serverStates        map[string]ServerViewState
+	activeChannelID        string
+	activeServerID         string // workspace whose data is currently loaded into the side panels
+	selectionGeneration    uint64
+	selectionObserver      SelectionObserver
+	historyRequestObserver func(HistoryRequest)
+	serverRevisions        map[string]uint64
+	serverStates           map[string]ServerViewState
 
 	// windowTitle is the cached terminal-window-title string, recomputed
 	// by notifyReadStateChanged on every read-state mutation and read by
@@ -2558,6 +2559,13 @@ func (a *App) SetSelectionObserver(observer SelectionObserver) {
 	a.selectionObserver = observer
 	if observer != nil {
 		observer(ids.ServerID(a.activeServerID), a.activeChannelID)
+	}
+}
+
+func (a *App) SetHistoryRequestObserver(observer func(HistoryRequest)) {
+	a.historyRequestObserver = observer
+	if observer != nil {
+		observer(a.activeHistoryRequest)
 	}
 }
 

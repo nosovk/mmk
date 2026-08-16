@@ -548,3 +548,148 @@ func TestMattermostThreadResultIgnoresRetainedUnfocusedScope(t *testing.T) {
 		t.Fatalf("retained unfocused result changed replies from %#v to %#v", before, got)
 	}
 }
+
+func TestMattermostRealtimeReplyRoutesMatchingOpenThreadAndCountsOnce(t *testing.T) {
+	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	request := a.activeHistoryRequest
+	post := MattermostRealtimePostMsg{Request: request, Message: messages.MessageItem{
+		ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain, Text: "realtime",
+	}}
+
+	_, _ = a.Update(post)
+	_, _ = a.Update(post)
+
+	if got := a.threadPanel.Replies(); len(got) != 1 || !reflect.DeepEqual(got[0], post.Message) {
+		t.Fatalf("replies=%#v want one authoritative realtime reply", got)
+	}
+	if got := a.messagepane.Messages()[0].ReplyCount; got != 1 {
+		t.Fatalf("root reply count=%d want exactly 1", got)
+	}
+}
+
+func TestMattermostRealtimeRootPostExcludedFromThreadReplyPath(t *testing.T) {
+	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
+
+	_, _ = a.Update(MattermostRealtimePostMsg{Request: a.activeHistoryRequest, Message: messages.MessageItem{ID: "post-1", Format: messages.FormatMattermostPlain}})
+
+	if got := a.threadPanel.Replies(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("root post changed thread replies from %#v to %#v", before, got)
+	}
+	if got := a.messagepane.Messages()[0].ReplyCount; got != 0 {
+		t.Fatalf("root post incremented reply count to %d", got)
+	}
+}
+
+func TestMattermostRealtimeReplyDoesNotRouteDifferentPanelScope(t *testing.T) {
+	for _, difference := range []string{"root", "server", "channel", "generation"} {
+		t.Run(difference, func(t *testing.T) {
+			a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+			request := a.activeHistoryRequest
+			message := messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}
+			switch difference {
+			case "root":
+				message.RootID = "root-2"
+			case "server":
+				request.ServerID = "server-2"
+			case "channel":
+				request.ChannelID = "c2"
+			case "generation":
+				request.Generation++
+			}
+			before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
+
+			_, _ = a.Update(MattermostRealtimePostMsg{Request: request, Message: message})
+
+			if got := a.threadPanel.Replies(); !reflect.DeepEqual(got, before) {
+				t.Fatalf("%s mismatch changed panel from %#v to %#v", difference, before, got)
+			}
+			if got := a.messagepane.Messages()[0].ReplyCount; got != 0 {
+				t.Fatalf("%s mismatch changed active root count to %d", difference, got)
+			}
+		})
+	}
+}
+
+func TestMattermostRealtimeReplyCollapsesOptimisticRegardlessOfArrivalOrder(t *testing.T) {
+	for _, websocketFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "websocket before HTTP", false: "HTTP before websocket"}[websocketFirst], func(t *testing.T) {
+			a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+			request := a.activeHistoryRequest
+			_, _ = a.Update(mattermostThreadReplyMsg(a, "reply"))
+			correlationID := a.threadPanel.Replies()[0].CorrelationID
+			authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "authoritative"}
+			realtime := MattermostRealtimePostMsg{Request: request, Message: authoritative}
+			http := MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", CorrelationID: correlationID}, Message: authoritative}
+			if websocketFirst {
+				_, _ = a.Update(realtime)
+				_, _ = a.Update(http)
+			} else {
+				_, _ = a.Update(http)
+				_, _ = a.Update(realtime)
+			}
+
+			if got := a.threadPanel.Replies(); len(got) != 1 || !reflect.DeepEqual(got[0], authoritative) {
+				t.Fatalf("replies=%#v want one authoritative reply", got)
+			}
+			if got := a.messagepane.Messages()[0].ReplyCount; got != 1 {
+				t.Fatalf("root reply count=%d want exactly 1", got)
+			}
+		})
+	}
+}
+
+func TestMattermostRealtimeReplyRetainedOriginScopeIsolationSameChannelRoot(t *testing.T) {
+	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	origin := a.activeHistoryRequest
+	w1 := a.focusedWin
+	_ = a.splitWindow(wintree.SplitSideBySide)
+	w2 := a.focusedWin
+	a.releaseMattermostWindowScope(w2)
+	current := a.newMattermostHistoryScope(origin.ServerID, origin.ChannelID)
+	a.mattermostWindowScopes[w2] = current
+	a.setFocusedMattermostScope(current)
+	a.winModels[w2].SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.threadPanel.SetThread(messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain}, []messages.MessageItem{{ID: "current"}}, origin.ChannelID, "root-1")
+	before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
+
+	_, _ = a.Update(MattermostRealtimePostMsg{Request: origin, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}})
+
+	if got := a.threadPanel.Replies(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("retained event changed current same-channel/root panel from %#v to %#v", before, got)
+	}
+	if got := a.winModels[w1].Messages()[0].ReplyCount; got != 1 {
+		t.Fatalf("origin model reply count=%d want 1", got)
+	}
+	if got := a.winModels[w2].Messages()[0].ReplyCount; got != 0 {
+		t.Fatalf("unrelated current model reply count=%d want 0", got)
+	}
+}
+
+func TestMattermostRealtimeReplyRejectsCanceledOrReleasedScope(t *testing.T) {
+	for _, released := range []bool{false, true} {
+		t.Run(map[bool]string{false: "canceled", true: "released"}[released], func(t *testing.T) {
+			a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+			request := a.activeHistoryRequest
+			if released {
+				a.releaseMattermostWindowScope(a.focusedWin)
+			} else {
+				a.mattermostScope(request).cancel()
+			}
+			beforePanel := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
+			beforeModel := append([]messages.MessageItem(nil), a.messagepane.Messages()...)
+
+			_, _ = a.Update(MattermostRealtimePostMsg{Request: request, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}})
+
+			if !reflect.DeepEqual(a.threadPanel.Replies(), beforePanel) || !reflect.DeepEqual(a.messagepane.Messages(), beforeModel) {
+				t.Fatalf("dead scope mutated panel=%#v model=%#v", a.threadPanel.Replies(), a.messagepane.Messages())
+			}
+		})
+	}
+}
