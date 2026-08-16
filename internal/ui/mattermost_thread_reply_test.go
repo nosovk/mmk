@@ -302,6 +302,163 @@ func TestMattermostThreadReplyFailureRemovesMatchingOptimisticAndReportsError(t 
 	}
 }
 
+func TestMattermostThreadFetchPreservesPendingReplyUntilPOSTSuccess(t *testing.T) {
+	service := &recordingMattermostSendService{}
+	a := openMattermostThreadForSend(t, service)
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.threadPanel.AddReply(messages.MessageItem{ID: "stale-authoritative", RootID: "root-1", Format: messages.FormatMattermostPlain})
+	request := a.activeHistoryRequest
+
+	_, sendCmd := a.Update(mattermostThreadReplyMsg(a, "racing reply"))
+	correlationID := a.threadPanel.Replies()[1].CorrelationID
+	_, _ = a.Update(ThreadRepliesLoadedMsg{Request: request, ThreadTS: "root-1", Replies: []messages.MessageItem{}})
+	replies := a.threadPanel.Replies()
+	if len(replies) != 1 || replies[0].CorrelationID != correlationID || replies[0].DeliveryState != messages.DeliveryPending {
+		t.Fatalf("fetch replies=%#v want only preserved pending reply", replies)
+	}
+
+	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "authoritative"}
+	service.result = MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", Text: "racing reply", CorrelationID: correlationID}, Message: authoritative}
+	result := sendCmd()
+	_, _ = a.Update(result)
+	_, _ = a.Update(result)
+
+	replies = a.threadPanel.Replies()
+	if len(replies) != 1 || !reflect.DeepEqual(replies[0], authoritative) {
+		t.Fatalf("final replies=%#v want one authoritative reply", replies)
+	}
+	if got := a.messagepane.Messages()[0].ReplyCount; got != 1 {
+		t.Fatalf("root reply count=%d want exactly 1", got)
+	}
+}
+
+func TestMattermostThreadFetchDoesNotPreservePendingAlreadyRepresentedAuthoritatively(t *testing.T) {
+	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+	request := a.activeHistoryRequest
+	_, _ = a.Update(mattermostThreadReplyMsg(a, "racing reply"))
+	correlationID := a.threadPanel.Replies()[0].CorrelationID
+	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "fetched"}
+
+	_, _ = a.Update(ThreadRepliesLoadedMsg{Request: request, ThreadTS: "root-1", Replies: []messages.MessageItem{authoritative}})
+	if got := a.threadPanel.Replies(); len(got) != 1 || !reflect.DeepEqual(got[0], authoritative) {
+		t.Fatalf("replies=%#v want one fetched authoritative reply", got)
+	}
+}
+
+func TestMattermostThreadPOSTSuccessUpsertsWhenFetchRemovedPlaceholder(t *testing.T) {
+	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	request := a.activeHistoryRequest
+	_, _ = a.Update(mattermostThreadReplyMsg(a, "reply"))
+	correlationID := a.threadPanel.Replies()[0].CorrelationID
+	a.threadPanel.SetThread(a.threadPanel.ParentMsg(), nil, request.ChannelID, "root-1")
+	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain}
+	result := MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", CorrelationID: correlationID}, Message: authoritative}
+
+	_, _ = a.Update(result)
+	_, _ = a.Update(result)
+	if got := a.threadPanel.Replies(); len(got) != 1 || !reflect.DeepEqual(got[0], authoritative) {
+		t.Fatalf("replies=%#v want one upserted authoritative reply", got)
+	}
+	if got := a.messagepane.Messages()[0].ReplyCount; got != 1 {
+		t.Fatalf("root reply count=%d want exactly 1", got)
+	}
+}
+
+func TestMattermostThreadPOSTFailureNotifiesWhenFetchRemovedPlaceholder(t *testing.T) {
+	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+	request := a.activeHistoryRequest
+	_, _ = a.Update(mattermostThreadReplyMsg(a, "reply"))
+	correlationID := a.threadPanel.Replies()[0].CorrelationID
+	a.threadPanel.SetThread(a.threadPanel.ParentMsg(), nil, request.ChannelID, "root-1")
+
+	_, toast := a.Update(MattermostMessageSendFailedMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", CorrelationID: correlationID}})
+	if toast == nil {
+		t.Fatal("valid failure without placeholder returned nil toast")
+	}
+	if _, ok := toast().(statusbar.SendFailedMsg); !ok {
+		t.Fatalf("toast=%T want statusbar.SendFailedMsg", toast())
+	}
+}
+
+func TestMattermostThreadFetchPreservesPendingReplyUntilPOSTFailure(t *testing.T) {
+	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+	request := a.activeHistoryRequest
+	_, _ = a.Update(mattermostThreadReplyMsg(a, "failing reply"))
+	correlationID := a.threadPanel.Replies()[0].CorrelationID
+
+	_, _ = a.Update(ThreadRepliesLoadedMsg{Request: request, ThreadTS: "root-1", Replies: []messages.MessageItem{}})
+	if got := a.threadPanel.Replies(); len(got) != 1 || got[0].CorrelationID != correlationID {
+		t.Fatalf("fetch replies=%#v want preserved pending reply", got)
+	}
+	_, toast := a.Update(MattermostMessageSendFailedMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", CorrelationID: correlationID}})
+	if got := a.threadPanel.Replies(); len(got) != 0 {
+		t.Fatalf("failure replies=%#v want placeholder removed", got)
+	}
+	if toast == nil {
+		t.Fatal("failure after fetch returned nil toast")
+	}
+}
+
+func TestMattermostThreadResultsAcceptRetainedOriginScopeWithoutMutatingCurrentPanel(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "failure"}[failure], func(t *testing.T) {
+			a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+			origin := a.activeHistoryRequest
+			_, _ = a.Update(mattermostThreadReplyMsg(a, "retained"))
+			correlationID := a.threadPanel.Replies()[0].CorrelationID
+			w1 := a.focusedWin
+			_ = a.splitWindow(wintree.SplitSideBySide)
+			_, _ = a.Update(ChannelSelectedMsg{ID: "c2", Name: "Two"})
+			a.threadPanel.SetThread(messages.MessageItem{ID: "root-2", Format: messages.FormatMattermostPlain}, []messages.MessageItem{{ID: "current-reply", RootID: "root-2"}}, "c2", "root-2")
+			before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
+
+			var toast tea.Cmd
+			if failure {
+				_, toast = a.Update(MattermostMessageSendFailedMsg{Request: MattermostSendRequest{ServerID: origin.ServerID, ChannelID: origin.ChannelID, Generation: origin.Generation, RootID: "root-1", CorrelationID: correlationID}})
+			} else {
+				_, toast = a.Update(MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: origin.ServerID, ChannelID: origin.ChannelID, Generation: origin.Generation, RootID: "root-1", CorrelationID: correlationID}, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID}})
+			}
+
+			if got := a.threadPanel.Replies(); !reflect.DeepEqual(got, before) {
+				t.Fatalf("retained result mutated current panel from %#v to %#v", before, got)
+			}
+			if failure {
+				if toast == nil {
+					t.Fatal("retained failure returned nil toast")
+				}
+			} else {
+				rows := a.winModels[w1].Messages()
+				if len(rows) != 1 || rows[0].ReplyCount != 1 {
+					t.Fatalf("origin model rows=%#v want root count 1", rows)
+				}
+			}
+		})
+	}
+}
+
+func TestMattermostThreadResultsRejectCanceledRetainedScope(t *testing.T) {
+	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
+	request := a.activeHistoryRequest
+	_, _ = a.Update(mattermostThreadReplyMsg(a, "canceled result"))
+	before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
+	scope := a.mattermostScope(request)
+	if scope == nil {
+		t.Fatal("origin scope missing")
+	}
+	scope.cancel()
+
+	_, toast := a.Update(MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", CorrelationID: before[0].CorrelationID}, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1"}})
+	if toast != nil || !reflect.DeepEqual(a.threadPanel.Replies(), before) {
+		t.Fatalf("canceled success toast=%v replies=%#v want unchanged %#v", toast != nil, a.threadPanel.Replies(), before)
+	}
+	_, toast = a.Update(MattermostMessageSendFailedMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", CorrelationID: before[0].CorrelationID}})
+	if toast != nil || !reflect.DeepEqual(a.threadPanel.Replies(), before) {
+		t.Fatalf("canceled failure toast=%v replies=%#v want unchanged %#v", toast != nil, a.threadPanel.Replies(), before)
+	}
+}
+
 func TestMattermostThreadReplyIgnoresStaleScope(t *testing.T) {
 	service := &recordingMattermostSendService{}
 	a := openMattermostThreadForSend(t, service)

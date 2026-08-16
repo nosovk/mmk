@@ -74,19 +74,20 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return reduceSendMessage(a, m), true
 
 	case MattermostMessageSentMsg:
-		if m.Request.RootID != "" && m.Request.HistoryRequest() != a.activeHistoryRequest {
-			return nil, true
-		}
-		if m.Request.RootID == "" && !a.hasMattermostScope(m.Request.HistoryRequest()) {
+		request := m.Request.HistoryRequest()
+		scope := a.mattermostScope(request)
+		if scope == nil || scope.ctx.Err() != nil {
 			return nil, true
 		}
 		if m.Request.RootID != "" {
 			if a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() {
-				if a.threadPanel.ReplaceLocalReply(m.Request.CorrelationID, cloneMessageItem(m.Message)) {
-					for _, mm := range a.modelsForChannel(m.Request.ChannelID) {
-						mm.IncrementReplyCount(m.Request.RootID, m.Message.MessageID())
-					}
+				item := cloneMessageItem(m.Message)
+				if !a.threadPanel.ReplaceLocalReply(m.Request.CorrelationID, item) {
+					a.threadPanel.UpsertReply(item)
 				}
+			}
+			for _, mm := range a.modelsForMattermostScope(request) {
+				mm.IncrementReplyCount(m.Request.RootID, m.Message.MessageID())
 			}
 			return nil, true
 		}
@@ -96,15 +97,14 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case MattermostMessageSendFailedMsg:
-		if m.Request.RootID != "" && m.Request.HistoryRequest() != a.activeHistoryRequest {
-			return nil, true
-		}
-		if m.Request.RootID == "" && !a.hasMattermostScope(m.Request.HistoryRequest()) {
+		request := m.Request.HistoryRequest()
+		scope := a.mattermostScope(request)
+		if scope == nil || scope.ctx.Err() != nil {
 			return nil, true
 		}
 		if m.Request.RootID != "" {
-			if !(a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() && a.threadPanel.RemoveLocalReply(m.Request.CorrelationID)) {
-				return nil, true
+			if a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() {
+				a.threadPanel.RemoveLocalReply(m.Request.CorrelationID)
 			}
 			return func() tea.Msg { return statusbar.SendFailedMsg{Reason: "message send failed"} }, true
 		}
