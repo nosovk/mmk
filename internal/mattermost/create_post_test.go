@@ -47,7 +47,7 @@ func TestClient_CreatePostSendsPayloadAndReturnsAuthoritativeMessage(t *testing.
 			"id":%q,
 			"channel_id":%q,
 			"user_id":"user-1",
-			"root_id":"root-1",
+			"root_id":"",
 			"message":"server-authoritative text",
 			"create_at":10,
 			"update_at":11,
@@ -72,12 +72,133 @@ func TestClient_CreatePostSendsPayloadAndReturnsAuthoritativeMessage(t *testing.
 		t.Fatalf("CreatePost returned error: %v", err)
 	}
 	want := Message{
-		ID: postID, ChannelID: channelID, UserID: "user-1", RootID: "root-1",
+		ID: postID, ChannelID: channelID, UserID: "user-1",
 		Text: "server-authoritative text", CreatedAt: 10, UpdatedAt: 11,
 		EditedAt: 12, DeletedAt: 13, ReplyCount: 4, CorrelationID: correlationID,
 	}
 	if message != want {
 		t.Fatalf("message = %#v, want %#v", message, want)
+	}
+}
+
+func TestClient_CreatePostSendsRootIDForReply(t *testing.T) {
+	const rootID = "root-1"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if got, want := payload["root_id"], rootID; got != want {
+			t.Fatalf("root_id = %#v, want %q", got, want)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"id":"reply-1","channel_id":"channel-1","root_id":"root-1","create_at":1,"pending_post_id":"correlation-1"}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := client.CreatePost(context.Background(), CreatePostRequest{
+		ChannelID:     "channel-1",
+		RootID:        rootID,
+		Message:       "reply",
+		CorrelationID: "correlation-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.RootID != rootID {
+		t.Fatalf("RootID = %q, want %q", message.RootID, rootID)
+	}
+}
+
+func TestClient_CreatePostOmitsRootIDForRootPost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if _, ok := payload["root_id"]; ok {
+			t.Fatalf("payload unexpectedly contains root_id: %#v", payload)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"id":"post-1","channel_id":"channel-1","create_at":1,"pending_post_id":"correlation-1"}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := client.CreatePost(context.Background(), CreatePostRequest{
+		ChannelID:     "channel-1",
+		Message:       "root post",
+		CorrelationID: "correlation-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.RootID != "" {
+		t.Fatalf("RootID = %q, want empty", message.RootID)
+	}
+}
+
+func TestClient_CreatePostRejectsInvalidRootIDWithoutRequest(t *testing.T) {
+	for _, rootID := range []string{"root/1", strings.Repeat("r", 129)} {
+		t.Run(rootID, func(t *testing.T) {
+			var requests atomic.Int32
+			client := newCountingMattermostClient(t, &requests)
+
+			_, err := client.CreatePost(context.Background(), CreatePostRequest{
+				ChannelID:     "channel-1",
+				RootID:        rootID,
+				Message:       "reply",
+				CorrelationID: "correlation-1",
+			})
+			if err == nil {
+				t.Fatal("CreatePost accepted invalid root ID")
+			}
+			if got := requests.Load(); got != 0 {
+				t.Fatalf("requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestClient_CreatePostRejectsMismatchedAuthoritativeRootID(t *testing.T) {
+	const token = "submitted-root-secret"
+	tests := []struct {
+		name          string
+		submittedRoot string
+		responseRoot  string
+	}{
+		{name: "reply", submittedRoot: "root-1", responseRoot: "root-2"},
+		{name: "root post", responseRoot: token},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"id":"post-1","channel_id":"channel-1","root_id":%q,"create_at":1,"pending_post_id":"correlation-1"}`, tt.responseRoot)
+			client, err := NewClient("https://chat.example.com", token, WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusCreated, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = client.CreatePost(context.Background(), CreatePostRequest{
+				ChannelID:     "channel-1",
+				RootID:        tt.submittedRoot,
+				Message:       "post",
+				CorrelationID: "correlation-1",
+			})
+			if err == nil {
+				t.Fatal("CreatePost accepted mismatched authoritative root ID")
+			}
+			assertErrorChainDoesNotContain(t, err, token)
+			assertStringsDoNotContain(t, token, fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err))
+		})
 	}
 }
 
