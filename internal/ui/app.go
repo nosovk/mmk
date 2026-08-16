@@ -155,13 +155,14 @@ type App struct {
 	renderCache *panelRenderCache
 
 	// Current context
-	activeChannelID        string
-	activeServerID         string // workspace whose data is currently loaded into the side panels
-	selectionGeneration    uint64
-	selectionObserver      SelectionObserver
-	historyRequestObserver func(HistoryRequest)
-	serverRevisions        map[string]uint64
-	serverStates           map[string]ServerViewState
+	activeChannelID         string
+	activeServerID          string // workspace whose data is currently loaded into the side panels
+	selectionGeneration     uint64
+	selectionObserver       SelectionObserver
+	historyRequestObserver  func(HistoryRequest)
+	historyRequestsObserver func([]HistoryRequest)
+	serverRevisions         map[string]uint64
+	serverStates            map[string]ServerViewState
 
 	// windowTitle is the cached terminal-window-title string, recomputed
 	// by notifyReadStateChanged on every read-state mutation and read by
@@ -194,6 +195,7 @@ type App struct {
 	mattermostSend          MattermostSendService
 	mattermostRead          MattermostReadService
 	mattermostCorrelationID func() (string, error)
+	mattermostThreadSends   map[mattermostThreadSendKey]mattermostThreadSendState
 
 	uploader UploadFunc
 
@@ -518,6 +520,7 @@ func NewApp() *App {
 		mattermostFetchingOlder:    map[HistoryRequest]bool{},
 		mattermostHistoryExhausted: map[HistoryRequest]bool{},
 		mattermostWindowScopes:     map[wintree.LeafID]*mattermostHistoryScope{},
+		mattermostThreadSends:      map[mattermostThreadSendKey]mattermostThreadSendState{},
 		mouseWheelLines:            3,
 		userNames:                  map[string]string{},
 		externalUsers:              map[string]bool{},
@@ -2567,6 +2570,11 @@ func (a *App) SetHistoryRequestObserver(observer func(HistoryRequest)) {
 	if observer != nil {
 		observer(a.activeHistoryRequest)
 	}
+}
+
+func (a *App) SetHistoryRequestsObserver(observer func([]HistoryRequest)) {
+	a.historyRequestsObserver = observer
+	a.publishMattermostHistoryRequests()
 }
 
 // SetWorkspaceSwitcher sets the callback used to switch workspaces.

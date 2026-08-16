@@ -54,6 +54,7 @@ func (a *App) installFocusedMattermostScope(serverID ids.ServerID, channelID str
 	a.releaseMattermostWindowScope(a.focusedWin)
 	scope := a.newMattermostHistoryScope(serverID, channelID)
 	a.mattermostWindowScopes[a.focusedWin] = scope
+	a.publishMattermostHistoryRequests()
 	a.setFocusedMattermostScope(scope)
 	return scope
 }
@@ -65,6 +66,7 @@ func (a *App) retainMattermostWindowScope(source, target wintree.LeafID) {
 	}
 	scope.refs++
 	a.mattermostWindowScopes[target] = scope
+	a.publishMattermostHistoryRequests()
 }
 
 func (a *App) releaseMattermostWindowScope(id wintree.LeafID) {
@@ -73,6 +75,7 @@ func (a *App) releaseMattermostWindowScope(id wintree.LeafID) {
 		return
 	}
 	delete(a.mattermostWindowScopes, id)
+	a.publishMattermostHistoryRequests()
 	scope.refs--
 	if scope.refs > 0 {
 		return
@@ -81,9 +84,34 @@ func (a *App) releaseMattermostWindowScope(id wintree.LeafID) {
 	delete(a.mattermostFetchingOlder, scope.request)
 	delete(a.mattermostHistoryExhausted, scope.request)
 	const reason = "message send canceled"
+	for key := range a.mattermostThreadSends {
+		if key.Request == scope.request {
+			delete(a.mattermostThreadSends, key)
+		}
+	}
 	for _, model := range a.modelsForChannel(scope.request.ChannelID) {
 		model.MarkDeliveryScopeFailed(string(scope.request.ServerID), scope.request.ChannelID, scope.request.Generation, reason)
 	}
+}
+
+func (a *App) publishMattermostHistoryRequests() {
+	if a.historyRequestsObserver == nil {
+		return
+	}
+	seen := make(map[HistoryRequest]struct{})
+	requests := make([]HistoryRequest, 0, len(a.mattermostWindowScopes))
+	for _, id := range a.wins.Leaves() {
+		scope := a.mattermostWindowScopes[id]
+		if scope == nil || scope.ctx.Err() != nil {
+			continue
+		}
+		if _, exists := seen[scope.request]; exists {
+			continue
+		}
+		seen[scope.request] = struct{}{}
+		requests = append(requests, scope.request)
+	}
+	a.historyRequestsObserver(requests)
 }
 
 func (a *App) cancelAllMattermostWindowScopes() {

@@ -31,6 +31,7 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	activeSelection := newMattermostActiveSelection()
 	app.SetSelectionObserver(activeSelection.Store)
 	app.SetHistoryRequestObserver(activeSelection.StoreHistoryRequest)
+	app.SetHistoryRequestsObserver(activeSelection.StoreHistoryRequests)
 	app.SetHelpFooter("Mattermost")
 	app.SetTypingEnabled(false)
 	app.SetThemeItems(nil)
@@ -74,7 +75,7 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 		ActiveSelection:         activeSelection.Load,
 		ActiveSelectionSnapshot: activeSelection.LoadSnapshot,
 		NewEventHandler: func(startup *mattermostStartup) func(context.Context, ids.ServerID, mattermost.Event) {
-			return mattermostProductionEventHandler(db, eventSend, activeSelection.Load, activeSelection.LoadHistoryRequest, startup, func(err error) {
+			return mattermostProductionEventHandler(db, eventSend, activeSelection.Load, activeSelection.LoadHistoryRequests, startup, func(err error) {
 				debuglog.WS("Mattermost realtime event error: %v", err)
 			})
 		},
@@ -537,14 +538,16 @@ type mattermostSelectionValue struct {
 }
 
 type mattermostActiveSelection struct {
-	value          atomic.Pointer[mattermostSelectionValue]
-	historyRequest atomic.Pointer[ui.HistoryRequest]
+	value           atomic.Pointer[mattermostSelectionValue]
+	historyRequest  atomic.Pointer[ui.HistoryRequest]
+	historyRequests atomic.Pointer[[]ui.HistoryRequest]
 }
 
 func newMattermostActiveSelection() *mattermostActiveSelection {
 	selection := &mattermostActiveSelection{}
 	selection.Store("", "")
 	selection.StoreHistoryRequest(ui.HistoryRequest{})
+	selection.StoreHistoryRequests(nil)
 	return selection
 }
 
@@ -570,6 +573,19 @@ func (s *mattermostActiveSelection) LoadHistoryRequest() ui.HistoryRequest {
 		return ui.HistoryRequest{}
 	}
 	return *request
+}
+
+func (s *mattermostActiveSelection) StoreHistoryRequests(requests []ui.HistoryRequest) {
+	snapshot := append([]ui.HistoryRequest(nil), requests...)
+	s.historyRequests.Store(&snapshot)
+}
+
+func (s *mattermostActiveSelection) LoadHistoryRequests() []ui.HistoryRequest {
+	requests := s.historyRequests.Load()
+	if requests == nil {
+		return nil
+	}
+	return append([]ui.HistoryRequest(nil), (*requests)...)
 }
 
 func (s *mattermostActiveSelection) LoadSnapshot() (ids.ServerID, string, uint64) {

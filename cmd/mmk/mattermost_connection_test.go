@@ -120,7 +120,7 @@ func TestUnreadStartupProductionBindingAppliesImmediatePostedEvent(t *testing.T)
 			return mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error {
 				messages <- msg
 				return nil
-			}, func() (ids.ServerID, string) { return "s2", "other" }, func() ui.HistoryRequest { return ui.HistoryRequest{} }, startup, nil)
+			}, func() (ids.ServerID, string) { return "s2", "other" }, func() []ui.HistoryRequest { return nil }, startup, nil)
 		},
 	})
 	defer stopConnectionTestStartup(t, startup)

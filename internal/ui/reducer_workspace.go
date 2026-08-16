@@ -257,6 +257,7 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	if wasMattermost {
 		scope := a.newMattermostHistoryScope(state.ServerID, "")
 		a.mattermostWindowScopes[a.focusedWin] = scope
+		a.publishMattermostHistoryRequests()
 		a.setFocusedMattermostScope(scope)
 	}
 	a.compose.Reset()

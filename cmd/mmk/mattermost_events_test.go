@@ -32,8 +32,8 @@ func TestMattermostRealtimeReplyPersistsBeforeAuthoritativeNotification(t *testi
 	request := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 7}
 	var sent []tea.Msg
 	adapter := newMattermostEventAdapter(mattermostEventDeps{
-		Cache:                db,
-		ActiveHistoryRequest: func() ui.HistoryRequest { return request },
+		Cache:               db,
+		LiveHistoryRequests: func() []ui.HistoryRequest { return []ui.HistoryRequest{request} },
 		Send: func(_ context.Context, msg tea.Msg) error {
 			if _, err := db.GetMattermostPost("s1", "reply-1"); err != nil {
 				t.Fatalf("UI notified before cache write: %v", err)
@@ -87,8 +87,8 @@ func TestMattermostRealtimeReplyPersistenceFailureAndCancellationSuppressNotific
 			notified := false
 			adapter := newMattermostEventAdapter(mattermostEventDeps{
 				Cache: tc.store,
-				ActiveHistoryRequest: func() ui.HistoryRequest {
-					return ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 1}
+				LiveHistoryRequests: func() []ui.HistoryRequest {
+					return []ui.HistoryRequest{{ServerID: "s1", ChannelID: "c1", Generation: 1}}
 				},
 				Send: func(context.Context, tea.Msg) error { notified = true; return nil },
 			})
@@ -104,11 +104,11 @@ func TestMattermostRealtimeReplyCapturesOriginScopeBeforePersistence(t *testing.
 	store := &blockingMattermostEventStore{started: make(chan struct{}), release: make(chan struct{})}
 	selection := newMattermostActiveSelection()
 	origin := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 7}
-	selection.StoreHistoryRequest(origin)
+	selection.StoreHistoryRequests([]ui.HistoryRequest{origin})
 	var sent tea.Msg
 	adapter := newMattermostEventAdapter(mattermostEventDeps{
-		Cache:                store,
-		ActiveHistoryRequest: selection.LoadHistoryRequest,
+		Cache:               store,
+		LiveHistoryRequests: selection.LoadHistoryRequests,
 		Send: func(_ context.Context, msg tea.Msg) error {
 			if _, ok := msg.(ui.MattermostRealtimePostMsg); ok {
 				sent = msg
@@ -122,13 +122,79 @@ func TestMattermostRealtimeReplyCapturesOriginScopeBeforePersistence(t *testing.
 		close(done)
 	}()
 	waitMattermostEvent(t, store.started, "blocked persistence")
-	selection.StoreHistoryRequest(ui.HistoryRequest{ServerID: "s1", ChannelID: "c2", Generation: 8})
+	selection.StoreHistoryRequests([]ui.HistoryRequest{{ServerID: "s1", ChannelID: "c2", Generation: 8}})
 	close(store.release)
 	waitMattermostEvent(t, done, "posted event completion")
 
 	got, ok := sent.(ui.MattermostRealtimePostMsg)
 	if !ok || got.Request != origin {
 		t.Fatalf("realtime=%#v want origin request %#v", sent, origin)
+	}
+}
+
+func TestMattermostRealtimeReplyRoutesAllMatchingLiveRetainedScopes(t *testing.T) {
+	db := newMattermostEventDB(t, "s1", "c1", "c2")
+	c1 := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 7}
+	c1SecondGeneration := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 9}
+	live := []ui.HistoryRequest{
+		c1,
+		c1,
+		{ServerID: "s1", ChannelID: "c2", Generation: 8},
+		c1SecondGeneration,
+		{ServerID: "s2", ChannelID: "c1", Generation: 10},
+	}
+	var sent []ui.MattermostRealtimePostMsg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache: db,
+		LiveHistoryRequests: func() []ui.HistoryRequest {
+			return append([]ui.HistoryRequest(nil), live...)
+		},
+		Send: func(_ context.Context, msg tea.Msg) error {
+			if realtime, ok := msg.(ui.MattermostRealtimePostMsg); ok {
+				sent = append(sent, realtime)
+			}
+			return nil
+		},
+		ActiveSelection: func() (ids.ServerID, string) { return "s1", "c2" },
+	})
+
+	adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "reply-1", ChannelID: "c1", RootID: "root-1", CreatedAt: 1}})
+
+	if len(sent) != 2 || sent[0].Request != c1 || sent[1].Request != c1SecondGeneration {
+		t.Fatalf("realtime scopes=%#v want exact live c1 generations %#v/%#v", sent, c1, c1SecondGeneration)
+	}
+}
+
+func TestMattermostRealtimeReplyCapturesLiveScopeSnapshotBeforePersistence(t *testing.T) {
+	store := &blockingMattermostEventStore{started: make(chan struct{}), release: make(chan struct{})}
+	origin := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 7}
+	live := []ui.HistoryRequest{origin}
+	var sent tea.Msg
+	adapter := newMattermostEventAdapter(mattermostEventDeps{
+		Cache: store,
+		LiveHistoryRequests: func() []ui.HistoryRequest {
+			return append([]ui.HistoryRequest(nil), live...)
+		},
+		Send: func(_ context.Context, msg tea.Msg) error {
+			if _, ok := msg.(ui.MattermostRealtimePostMsg); ok {
+				sent = msg
+			}
+			return nil
+		},
+	})
+	done := make(chan struct{})
+	go func() {
+		adapter.Handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "reply-1", ChannelID: "c1", RootID: "root-1", CreatedAt: 1}})
+		close(done)
+	}()
+	waitMattermostEvent(t, store.started, "blocked persistence")
+	live = []ui.HistoryRequest{{ServerID: "s1", ChannelID: "c2", Generation: 8}}
+	close(store.release)
+	waitMattermostEvent(t, done, "posted event completion")
+
+	got, ok := sent.(ui.MattermostRealtimePostMsg)
+	if !ok || got.Request != origin {
+		t.Fatalf("realtime=%#v want captured origin %#v", sent, origin)
 	}
 }
 
@@ -684,7 +750,9 @@ func TestMattermostProductionEventHandlerUsesCacheAndSelection(t *testing.T) {
 	selection := newMattermostActiveSelection()
 	selection.Store("s1", "c1")
 	var sent tea.Msg
-	handle := mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error { sent = msg; return nil }, selection.Load, func() ui.HistoryRequest { return ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 1} }, nil, nil)
+	handle := mattermostProductionEventHandler(db, func(_ context.Context, msg tea.Msg) error { sent = msg; return nil }, selection.Load, func() []ui.HistoryRequest {
+		return []ui.HistoryRequest{{ServerID: "s1", ChannelID: "c1", Generation: 1}}
+	}, nil, nil)
 
 	handle(context.Background(), "s1", mattermost.PostedEvent{Message: mattermost.Message{ID: "post-1", ChannelID: "c1", CreatedAt: 10}})
 

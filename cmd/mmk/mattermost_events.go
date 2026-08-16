@@ -21,12 +21,12 @@ type mattermostEventStore interface {
 }
 
 type mattermostEventDeps struct {
-	Cache                mattermostEventStore
-	Send                 func(context.Context, tea.Msg) error
-	ActiveSelection      func() (ids.ServerID, string)
-	ActiveHistoryRequest func() ui.HistoryRequest
-	Startup              *mattermostStartup
-	Diagnostic           func(error)
+	Cache               mattermostEventStore
+	Send                func(context.Context, tea.Msg) error
+	ActiveSelection     func() (ids.ServerID, string)
+	LiveHistoryRequests func() []ui.HistoryRequest
+	Startup             *mattermostStartup
+	Diagnostic          func(error)
 }
 
 type mattermostEventAdapter struct {
@@ -37,8 +37,8 @@ func newMattermostEventAdapter(deps mattermostEventDeps) *mattermostEventAdapter
 	return &mattermostEventAdapter{deps: deps}
 }
 
-func mattermostProductionEventHandler(cache mattermostEventStore, send func(context.Context, tea.Msg) error, activeSelection func() (ids.ServerID, string), activeHistoryRequest func() ui.HistoryRequest, startup *mattermostStartup, diagnostic func(error)) func(context.Context, ids.ServerID, mattermost.Event) {
-	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: cache, Send: send, ActiveSelection: activeSelection, ActiveHistoryRequest: activeHistoryRequest, Startup: startup, Diagnostic: diagnostic})
+func mattermostProductionEventHandler(cache mattermostEventStore, send func(context.Context, tea.Msg) error, activeSelection func() (ids.ServerID, string), liveHistoryRequests func() []ui.HistoryRequest, startup *mattermostStartup, diagnostic func(error)) func(context.Context, ids.ServerID, mattermost.Event) {
+	adapter := newMattermostEventAdapter(mattermostEventDeps{Cache: cache, Send: send, ActiveSelection: activeSelection, LiveHistoryRequests: liveHistoryRequests, Startup: startup, Diagnostic: diagnostic})
 	return adapter.Handle
 }
 
@@ -58,11 +58,11 @@ func (a *mattermostEventAdapter) Handle(ctx context.Context, serverID ids.Server
 	}
 	posted, isPosted := event.(mattermost.PostedEvent)
 	applyPosted := false
-	var realtime ui.MattermostRealtimePostMsg
+	var realtime []ui.MattermostRealtimePostMsg
 	if isPosted {
-		request := ui.HistoryRequest{}
-		if a.deps.ActiveHistoryRequest != nil {
-			request = a.deps.ActiveHistoryRequest()
+		var requests []ui.HistoryRequest
+		if a.deps.LiveHistoryRequests != nil {
+			requests = a.deps.LiveHistoryRequests()
 		}
 		if posted.Message.CreatedAt <= 0 {
 			return
@@ -102,8 +102,17 @@ func (a *mattermostEventAdapter) Handle(ctx context.Context, serverID ids.Server
 			return
 		}
 		applyPosted = claimed
-		if request.ServerID == serverID && request.ChannelID == message.ChannelID {
-			realtime = ui.MattermostRealtimePostMsg{Request: request, Message: a.mattermostRealtimeItem(serverID, message)}
+		item := a.mattermostRealtimeItem(serverID, message)
+		seen := make(map[ui.HistoryRequest]struct{}, len(requests))
+		for _, request := range requests {
+			if request.ServerID != serverID || request.ChannelID != message.ChannelID {
+				continue
+			}
+			if _, exists := seen[request]; exists {
+				continue
+			}
+			seen[request] = struct{}{}
+			realtime = append(realtime, ui.MattermostRealtimePostMsg{Request: request, Message: item})
 		}
 	}
 	if a.deps.Startup != nil {
@@ -122,9 +131,11 @@ func (a *mattermostEventAdapter) Handle(ctx context.Context, serverID ids.Server
 			}
 		}
 	}
-	if realtime.Request.ChannelID != "" && a.deps.Send != nil {
-		if err := a.deps.Send(ctx, realtime); err != nil && ctx.Err() == nil {
-			a.diagnostic(errors.New("Mattermost posted event UI notification failed"))
+	if a.deps.Send != nil {
+		for _, msg := range realtime {
+			if err := a.deps.Send(ctx, msg); err != nil && ctx.Err() == nil {
+				a.diagnostic(errors.New("Mattermost posted event UI notification failed"))
+			}
 		}
 	}
 	activeServer, activeChannel := ids.ServerID(""), ""
