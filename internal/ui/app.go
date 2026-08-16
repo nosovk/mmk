@@ -1589,13 +1589,15 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	// Use the message's own TS as the thread parent.
-	// If it's already a thread reply, use its ThreadTS instead.
-	threadTS := msg.TS
-	if msg.ThreadTS != "" && msg.ThreadTS != msg.TS {
-		threadTS = msg.ThreadTS
+	selectedID := msg.MessageID()
+	if selectedID == "" {
+		return nil
 	}
-	return a.openThreadPanel(msg, a.activeChannelID, threadTS)
+	rootID := msg.RootMessageID()
+	if rootID == "" {
+		rootID = selectedID
+	}
+	return a.openThreadPanel(msg, a.activeChannelID, rootID)
 }
 
 // openThreadPanel makes the thread panel visible for (channelID,

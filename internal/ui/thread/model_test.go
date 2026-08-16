@@ -98,6 +98,101 @@ func TestAddReply_AlwaysScrollsToBottom(t *testing.T) {
 	}
 }
 
+func TestReplaceLocalReplyMatchesCorrelationID(t *testing.T) {
+	m := New()
+	local := messages.MessageItem{
+		ID:            "local-post-1",
+		CorrelationID: "correlation-1",
+		DeliveryState: messages.DeliveryPending,
+		Text:          "pending",
+	}
+	m.SetThread(
+		messages.MessageItem{ID: "root-post-1"},
+		[]messages.MessageItem{{ID: "reply-before"}, local, {ID: "reply-after"}},
+		"channel-1",
+		"root-post-1",
+	)
+	m.selected = 1
+	_ = m.View(20, 80)
+	versionBefore := m.Version()
+
+	authoritative := messages.MessageItem{ID: "reply-post-1", RootID: "root-post-1", Text: "sent"}
+	if !m.ReplaceLocalReply("correlation-1", authoritative) {
+		t.Fatal("ReplaceLocalReply returned false")
+	}
+
+	if got := m.Replies(); len(got) != 3 || got[0].ID != "reply-before" || got[1].ID != "reply-post-1" || got[2].ID != "reply-after" {
+		t.Fatalf("replies after replacement = %#v", got)
+	}
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	if m.cache != nil || m.Version() <= versionBefore {
+		t.Fatalf("replacement did not invalidate cache/version: cache=%v before=%d after=%d", m.cache != nil, versionBefore, m.Version())
+	}
+}
+
+func TestReplaceLocalReplyCollapsesRealtimeBeforeHTTP(t *testing.T) {
+	m := New()
+	local := messages.MessageItem{
+		ID:            "local-post-1",
+		CorrelationID: "correlation-1",
+		DeliveryState: messages.DeliveryPending,
+		Text:          "pending",
+	}
+	authoritativeRealtime := messages.MessageItem{
+		ID:            "reply-post-1",
+		RootID:        "root-post-1",
+		CorrelationID: "correlation-1",
+		Text:          "realtime",
+	}
+	m.SetThread(messages.MessageItem{ID: "root-post-1"}, []messages.MessageItem{local}, "channel-1", "root-post-1")
+	m.UpsertReply(authoritativeRealtime)
+
+	authoritativeHTTP := authoritativeRealtime
+	authoritativeHTTP.Text = "http"
+	if !m.ReplaceLocalReply("correlation-1", authoritativeHTTP) {
+		t.Fatal("ReplaceLocalReply returned false")
+	}
+
+	got := m.Replies()
+	if len(got) != 1 {
+		t.Fatalf("reply count = %d, want 1: %#v", len(got), got)
+	}
+	if got[0].ID != "reply-post-1" || got[0].Text != "http" {
+		t.Fatalf("authoritative reply = %#v", got[0])
+	}
+	if m.selected != 0 {
+		t.Fatalf("selected = %d, want 0", m.selected)
+	}
+}
+
+func TestUpsertReplyDeduplicatesMattermostID(t *testing.T) {
+	m := New()
+	m.SetThread(
+		messages.MessageItem{ID: "root-post-1"},
+		[]messages.MessageItem{{ID: "reply-before"}, {ID: "reply-post-1", Text: "old"}, {ID: "reply-after"}},
+		"channel-1",
+		"root-post-1",
+	)
+	m.selected = 0
+	_ = m.View(20, 80)
+	versionBefore := m.Version()
+
+	m.UpsertReply(messages.MessageItem{ID: "reply-post-1", RootID: "root-post-1", Text: "authoritative"})
+
+	got := m.Replies()
+	if len(got) != 3 || got[0].ID != "reply-before" || got[1].Text != "authoritative" || got[2].ID != "reply-after" {
+		t.Fatalf("replies after upsert = %#v", got)
+	}
+	if m.selected != 0 {
+		t.Fatalf("selected = %d, want existing selection 0", m.selected)
+	}
+	if m.cache != nil || m.Version() <= versionBefore {
+		t.Fatalf("upsert did not invalidate cache/version: cache=%v before=%d after=%d", m.cache != nil, versionBefore, m.Version())
+	}
+}
+
 func TestNavigation(t *testing.T) {
 	m := New()
 	parent := messages.MessageItem{TS: "1700000001.000000", UserName: "alice", Text: "hi"}

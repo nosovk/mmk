@@ -48,6 +48,12 @@ func MattermostTask10Features() FeatureSet {
 	return features
 }
 
+func MattermostTask14Features() FeatureSet {
+	features := MattermostTask10Features()
+	delete(features.disabled, FeatureThreads)
+	return features
+}
+
 func (f FeatureSet) Allows(feature Feature) bool { return !f.disabled[feature] }
 
 func (a *App) allows(feature Feature) bool { return a.features.Allows(feature) }

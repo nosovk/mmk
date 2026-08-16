@@ -159,6 +159,67 @@ func TestApp_PlainClickOnMessageOpensThread(t *testing.T) {
 	}
 }
 
+func TestMattermostThreadRootOpensByMessageID(t *testing.T) {
+	a := NewApp()
+	a.features = MattermostTask14Features()
+	a.activeChannelID = "channel-1"
+	a.messagepane.SetMessages([]messages.MessageItem{{
+		ID:     "root-post-1",
+		UserID: "user-1",
+		Text:   "root",
+	}})
+
+	var fetchedRoot string
+	a.setThreadFetcherForTest(func(_ ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+		fetchedRoot = string(threadTS)
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS)}
+	})
+
+	cmd := a.openThreadForSelectedMessage()
+	if cmd == nil {
+		t.Fatal("Mattermost root with ID should open a thread")
+	}
+	_ = drainBatch(cmd)
+
+	if fetchedRoot != "root-post-1" {
+		t.Fatalf("fetched root = %q, want root-post-1", fetchedRoot)
+	}
+	if got := a.threadPanel.ThreadTS(); got != "root-post-1" {
+		t.Fatalf("thread panel identity = %q, want root-post-1", got)
+	}
+}
+
+func TestMattermostThreadReplyOpensByRootMessageID(t *testing.T) {
+	a := NewApp()
+	a.features = MattermostTask14Features()
+	a.activeChannelID = "channel-1"
+	a.messagepane.SetMessages([]messages.MessageItem{{
+		ID:     "reply-post-1",
+		RootID: "root-post-1",
+		UserID: "user-2",
+		Text:   "reply",
+	}})
+
+	var fetchedRoot string
+	a.setThreadFetcherForTest(func(_ ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+		fetchedRoot = string(threadTS)
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS)}
+	})
+
+	cmd := a.openThreadForSelectedMessage()
+	if cmd == nil {
+		t.Fatal("Mattermost reply with ID and RootID should open its root thread")
+	}
+	_ = drainBatch(cmd)
+
+	if fetchedRoot != "root-post-1" {
+		t.Fatalf("fetched root = %q, want root-post-1", fetchedRoot)
+	}
+	if got := a.threadPanel.ThreadTS(); got != "root-post-1" {
+		t.Fatalf("thread panel identity = %q, want root-post-1", got)
+	}
+}
+
 // A click that lands on the channel header chrome (above the first
 // message) must NOT open a thread -- chrome clicks are no-ops. Defends
 // the ClickAt(returns bool) plumbing.

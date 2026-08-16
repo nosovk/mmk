@@ -380,6 +380,75 @@ func (m *Model) SwapLocalSentReply(localTS string, msg messages.MessageItem) boo
 	return false
 }
 
+// ReplaceLocalReply replaces an optimistic reply identified by correlation
+// or local message ID. If the authoritative reply already arrived, both rows
+// collapse into one authoritative row at the earliest occupied position.
+func (m *Model) ReplaceLocalReply(identity string, authoritative messages.MessageItem) bool {
+	if identity == "" {
+		return false
+	}
+	localIndex := -1
+	for i := len(m.replies) - 1; i >= 0; i-- {
+		item := m.replies[i]
+		if (item.CorrelationID == identity || item.ID == identity) && item.IsTransientDelivery() {
+			localIndex = i
+			break
+		}
+	}
+	if localIndex < 0 {
+		for i := len(m.replies) - 1; i >= 0; i-- {
+			item := m.replies[i]
+			if item.CorrelationID == identity || item.ID == identity {
+				localIndex = i
+				break
+			}
+		}
+	}
+	if localIndex < 0 {
+		return false
+	}
+
+	authoritativeID := authoritative.MessageID()
+	insertAt := localIndex
+	selectedRemoved := false
+	selectedAt := -1
+	out := make([]messages.MessageItem, 0, len(m.replies))
+	for i, item := range m.replies {
+		remove := i == localIndex || authoritativeID != "" && item.MessageID() == authoritativeID
+		if remove {
+			if i < insertAt {
+				insertAt = i
+			}
+			if i == m.selected {
+				selectedRemoved = true
+			}
+			continue
+		}
+		if i == m.selected {
+			selectedAt = len(out)
+		}
+		out = append(out, item)
+	}
+	if insertAt > len(out) {
+		insertAt = len(out)
+	}
+	out = append(out, messages.MessageItem{})
+	copy(out[insertAt+1:], out[insertAt:])
+	out[insertAt] = authoritative
+	m.replies = out
+	if selectedRemoved {
+		m.selected = insertAt
+	} else if selectedAt >= 0 {
+		if selectedAt >= insertAt {
+			selectedAt++
+		}
+		m.selected = selectedAt
+	}
+	m.hasSnapped = false
+	m.InvalidateCache()
+	return true
+}
+
 // RemoveLocalSentReply removes an optimistic placeholder reply
 // identified by localTS. Used when the chat.postMessage HTTP call
 // fails and we want to roll back the instant-display add. Returns
@@ -414,6 +483,23 @@ func (m *Model) UpsertSelfSentReply(msg messages.MessageItem) {
 	if msg.TS != "" {
 		for i := len(m.replies) - 1; i >= 0; i-- {
 			if m.replies[i].TS == msg.TS {
+				m.replies[i] = msg
+				m.InvalidateCache()
+				return
+			}
+		}
+	}
+	m.replies = append(m.replies, msg)
+	m.InvalidateCache()
+	m.selected = len(m.replies) - 1
+}
+
+// UpsertReply replaces an authoritative reply with the same provider-neutral
+// message ID in place, or appends it when it is not already present.
+func (m *Model) UpsertReply(msg messages.MessageItem) {
+	if id := msg.MessageID(); id != "" {
+		for i := len(m.replies) - 1; i >= 0; i-- {
+			if m.replies[i].MessageID() == id {
 				m.replies[i] = msg
 				m.InvalidateCache()
 				return
