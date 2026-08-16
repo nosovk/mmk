@@ -14,6 +14,7 @@
 package ui
 
 import (
+	"context"
 	"image"
 	"sync"
 	"time"
@@ -215,6 +216,9 @@ type (
 		ChannelID string
 		ThreadTS  string
 		Text      string
+		Request   HistoryRequest
+		RootID    string
+		Context   context.Context
 	}
 	ThreadReplySentMsg struct {
 		ChannelID string

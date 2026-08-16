@@ -103,7 +103,13 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// fetch that produced this msg also wrote the full thread to cache,
 		// so replace only an actual stub with matching authoritative metadata.
 		if isThreadParentStub(parentMsg, m.ThreadTS) {
-			if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS)); len(cached) > 0 && cached[0].MessageID() == m.ThreadTS && !isThreadParentStub(cached[0], m.ThreadTS) {
+			var cached []messages.MessageItem
+			if m.Request.ServerID != "" {
+				cached = a.threads.CacheReadScoped(m.Request, ids.ThreadTS(m.ThreadTS))
+			} else {
+				cached = a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS))
+			}
+			if len(cached) > 0 && cached[0].MessageID() == m.ThreadTS && !isThreadParentStub(cached[0], m.ThreadTS) {
 				parentMsg = cached[0]
 			}
 		}

@@ -488,24 +488,23 @@ func reduceMattermostSendMessage(a *App, m SendMessageMsg) tea.Cmd {
 }
 
 func reduceMattermostThreadReply(a *App, m SendThreadReplyMsg) tea.Cmd {
-	request := a.activeHistoryRequest
-	if request.ChannelID == "" || m.ChannelID != request.ChannelID || m.ThreadTS == "" {
+	request := m.Request
+	if request.ChannelID == "" || request != a.activeHistoryRequest || m.ChannelID != request.ChannelID || m.RootID == "" || m.RootID != m.ThreadTS || !a.threadVisible || a.threadPanel.ChannelID() != request.ChannelID || a.threadPanel.ThreadTS() != m.RootID || m.Context == nil || m.Context.Err() != nil {
 		return nil
 	}
 	correlationID, err := a.mattermostCorrelationID()
 	if err != nil || correlationID == "" {
 		return func() tea.Msg { return statusbar.SendFailedMsg{Reason: "message send failed"} }
 	}
-	requestData := MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: m.ThreadTS, Text: m.Text, CorrelationID: correlationID}
+	requestData := MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: m.RootID, Text: m.Text, CorrelationID: correlationID}
 	a.threadPanel.AddReply(messages.MessageItem{
-		ID: correlationID, CorrelationID: correlationID, RootID: m.ThreadTS,
+		ID: correlationID, CorrelationID: correlationID, RootID: m.RootID,
 		DeliveryState: messages.DeliveryPending, DeliveryServerID: string(request.ServerID), DeliveryChannelID: request.ChannelID, DeliveryGeneration: request.Generation,
 		CreatedAt: time.Now().UnixMilli(), Format: messages.FormatMattermostPlain,
 		UserID: a.currentUserID, UserName: a.userNameFor(a.currentUserID), Text: m.Text, Timestamp: a.nowFormatted(),
 	})
 	service := a.mattermostSend
-	ctx := a.activeHistoryContext
-	return func() tea.Msg { return service.Send(ctx, requestData) }
+	return func() tea.Msg { return service.Send(m.Context, requestData) }
 }
 
 func generateMattermostCorrelationID() (string, error) {

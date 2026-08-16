@@ -9,6 +9,7 @@ import (
 	"github.com/nosovk/mmk/internal/ids"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/statusbar"
+	"github.com/nosovk/mmk/internal/ui/wintree"
 )
 
 type recordingMattermostThreadService struct {
@@ -93,6 +94,32 @@ func TestMattermostThreadRootOnlySuccessClearsCacheAndFailurePreservesIt(t *test
 	}
 }
 
+func TestMattermostScopedLiveFetchHydratesReplyOpenedRootStub(t *testing.T) {
+	a := newMattermostSendApp(t, &recordingMattermostSendService{})
+	active := a.activeHistoryRequest
+	reply := messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain, Text: "reply"}
+	root := messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain, UserID: "u1", UserName: "alice", CreatedAt: 123, Text: "authoritative root"}
+	service := &recordingMattermostThreadService{
+		cached: []messages.MessageItem{root, reply},
+		result: ThreadRepliesLoadedMsg{Request: active, ThreadTS: "root-1", Replies: []messages.MessageItem{reply}},
+	}
+	a.SetThreadService(service)
+	a.messagepane.SetMessages([]messages.MessageItem{reply})
+
+	cmd := a.openThreadForSelectedMessage()
+	if cmd == nil || !isThreadParentStub(a.threadPanel.ParentMsg(), "root-1") {
+		t.Fatalf("initial parent=%#v want root stub", a.threadPanel.ParentMsg())
+	}
+	msgs := drainBatch(cmd)
+	if len(msgs) != 2 {
+		t.Fatalf("open messages=%#v want cached and live", msgs)
+	}
+	_, _ = a.Update(msgs[1])
+	if got := a.threadPanel.ParentMsg(); !reflect.DeepEqual(got, root) {
+		t.Fatalf("hydrated parent=%#v want %#v", got, root)
+	}
+}
+
 func openMattermostThreadForSend(t *testing.T, service *recordingMattermostSendService) *App {
 	t.Helper()
 	a := newMattermostSendApp(t, service)
@@ -102,12 +129,113 @@ func openMattermostThreadForSend(t *testing.T, service *recordingMattermostSendS
 	return a
 }
 
+func mattermostThreadReplyMsg(a *App, text string) SendThreadReplyMsg {
+	return SendThreadReplyMsg{
+		ChannelID: a.activeHistoryRequest.ChannelID,
+		ThreadTS:  a.threadPanel.ThreadTS(),
+		Text:      text,
+		Request:   a.activeHistoryRequest,
+		RootID:    a.threadPanel.ThreadTS(),
+		Context:   a.activeHistoryContext,
+	}
+}
+
+func createMattermostThreadReplyIntent(t *testing.T, a *App, text string) (tea.Cmd, HistoryRequest, context.Context) {
+	t.Helper()
+	a.focusedPanel = PanelThread
+	a.threadCompose.SetValue(text)
+	request, ctx := a.activeHistoryRequest, a.activeHistoryContext
+	cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("thread reply intent command is nil")
+	}
+	return cmd, request, ctx
+}
+
+func TestMattermostThreadReplyIntentCapturesOriginScopeAndContext(t *testing.T) {
+	service := &recordingMattermostSendService{}
+	a := openMattermostThreadForSend(t, service)
+	cmd, request, ctx := createMattermostThreadReplyIntent(t, a, "origin")
+
+	msg, ok := cmd().(SendThreadReplyMsg)
+	if !ok {
+		t.Fatalf("intent=%T want SendThreadReplyMsg", cmd())
+	}
+	if msg.Request != request || msg.RootID != "root-1" || msg.Context != ctx {
+		t.Fatalf("intent=%#v want request=%#v root=root-1 context=%p", msg, request, ctx)
+	}
+}
+
+func TestMattermostDelayedThreadReplyIntentDoesNotBorrowNewScope(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*App)
+	}{
+		{name: "server", mutate: func(a *App) { a.activeHistoryRequest.ServerID = "server-2" }},
+		{name: "channel", mutate: func(a *App) {
+			a.activeHistoryRequest.ChannelID = "c2"
+			a.threadPanel.SetThread(messages.MessageItem{ID: "root-2"}, nil, "c2", "root-2")
+		}},
+		{name: "generation", mutate: func(a *App) { a.activeHistoryRequest.Generation++ }},
+		{name: "window", mutate: func(a *App) {
+			_ = a.splitWindow(wintree.SplitSideBySide)
+			_, _ = a.Update(ChannelSelectedMsg{ID: "c2", Name: "Two"})
+		}},
+		{name: "thread", mutate: func(a *App) {
+			a.threadPanel.SetThread(messages.MessageItem{ID: "root-2"}, nil, a.activeHistoryRequest.ChannelID, "root-2")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &recordingMattermostSendService{}
+			a := openMattermostThreadForSend(t, service)
+			cmd, _, oldCtx := createMattermostThreadReplyIntent(t, a, "delayed")
+			tc.mutate(a)
+			newCtx := context.WithValue(context.Background(), struct{}{}, "new")
+			a.activeHistoryContext = newCtx
+			before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
+
+			_, sendCmd := a.Update(cmd())
+			if sendCmd != nil {
+				_ = sendCmd()
+			}
+			if got := a.threadPanel.Replies(); !reflect.DeepEqual(got, before) {
+				t.Fatalf("delayed intent changed new panel from %#v to %#v", before, got)
+			}
+			if len(service.requests) != 0 || len(service.contexts) != 0 {
+				t.Fatalf("delayed intent sent requests=%#v contexts=%#v", service.requests, service.contexts)
+			}
+			if oldCtx == newCtx {
+				t.Fatal("test did not install a replacement context")
+			}
+		})
+	}
+}
+
+func TestMattermostCanceledThreadReplyIntentDoesNotSend(t *testing.T) {
+	service := &recordingMattermostSendService{}
+	a := openMattermostThreadForSend(t, service)
+	cmd, _, ctx := createMattermostThreadReplyIntent(t, a, "canceled")
+	scope := a.mattermostScope(a.activeHistoryRequest)
+	if scope == nil {
+		t.Fatal("active Mattermost scope missing")
+	}
+	scope.cancel()
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("origin context error=%v want canceled", ctx.Err())
+	}
+
+	_, sendCmd := a.Update(cmd())
+	if sendCmd != nil || len(a.threadPanel.Replies()) != 0 || len(service.requests) != 0 {
+		t.Fatalf("canceled intent sendCmd=%v replies=%#v requests=%#v", sendCmd != nil, a.threadPanel.Replies(), service.requests)
+	}
+}
+
 func TestMattermostThreadReplyOptimisticAndExactRequest(t *testing.T) {
 	service := &recordingMattermostSendService{}
 	a := openMattermostThreadForSend(t, service)
 	active := a.activeHistoryRequest
 
-	_, cmd := a.Update(SendThreadReplyMsg{ChannelID: active.ChannelID, ThreadTS: "root-1", Text: "**exact Mattermost**"})
+	_, cmd := a.Update(mattermostThreadReplyMsg(a, "**exact Mattermost**"))
 	if cmd == nil {
 		t.Fatal("send returned nil command")
 	}
@@ -135,7 +263,7 @@ func TestMattermostThreadReplySuccessReplacesOptimisticAndIncrementsRoot(t *test
 	a := openMattermostThreadForSend(t, service)
 	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
 	active := a.activeHistoryRequest
-	_, cmd := a.Update(SendThreadReplyMsg{ChannelID: active.ChannelID, ThreadTS: "root-1", Text: "reply"})
+	_, cmd := a.Update(mattermostThreadReplyMsg(a, "reply"))
 	correlationID := a.threadPanel.Replies()[0].CorrelationID
 	service.result = MattermostMessageSentMsg{
 		Request: MattermostSendRequest{ServerID: active.ServerID, ChannelID: active.ChannelID, Generation: active.Generation, RootID: "root-1", Text: "reply", CorrelationID: correlationID},
@@ -157,7 +285,7 @@ func TestMattermostThreadReplyFailureRemovesMatchingOptimisticAndReportsError(t 
 	a := openMattermostThreadForSend(t, service)
 	active := a.activeHistoryRequest
 	a.threadPanel.AddReply(messages.MessageItem{ID: "existing", RootID: "root-1", Text: "keep"})
-	_, cmd := a.Update(SendThreadReplyMsg{ChannelID: active.ChannelID, ThreadTS: "root-1", Text: "fail"})
+	_, cmd := a.Update(mattermostThreadReplyMsg(a, "fail"))
 	correlationID := a.threadPanel.Replies()[1].CorrelationID
 	service.result = MattermostMessageSendFailedMsg{Request: MattermostSendRequest{ServerID: active.ServerID, ChannelID: active.ChannelID, Generation: active.Generation, RootID: "root-1", Text: "fail", CorrelationID: correlationID}}
 
@@ -178,7 +306,7 @@ func TestMattermostThreadReplyIgnoresStaleScope(t *testing.T) {
 	service := &recordingMattermostSendService{}
 	a := openMattermostThreadForSend(t, service)
 	active := a.activeHistoryRequest
-	_, _ = a.Update(SendThreadReplyMsg{ChannelID: active.ChannelID, ThreadTS: "root-1", Text: "pending"})
+	_, _ = a.Update(mattermostThreadReplyMsg(a, "pending"))
 	before := a.threadPanel.Replies()
 	stale := MattermostSendRequest{ServerID: active.ServerID, ChannelID: active.ChannelID, Generation: active.Generation + 1, RootID: "root-1", CorrelationID: before[0].CorrelationID}
 

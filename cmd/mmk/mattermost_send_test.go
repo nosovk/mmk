@@ -153,8 +153,15 @@ func TestMattermostUISendReturnsSafeFailureForClientErrorAndUnavailableServer(t 
 
 func TestWireMattermostRuntimeSetsOnlyMattermostSendBoundary(t *testing.T) {
 	app := &recordingMattermostRuntimeApp{}
-	startup := mattermostSendStartup(map[ids.ServerID]mattermostServerContext{"s1": {client: &recordingMattermostSendClient{message: mattermost.Message{ID: "p1", ChannelID: "c1"}}, usable: true}})
-	wireMattermostRuntime(app, context.Background(), startup, nil)
+	client := &recordingMattermostSendClient{
+		message: mattermost.Message{ID: "p1", ChannelID: "c1"},
+		thread: mattermost.MessagePage{Messages: []mattermost.Message{
+			{ID: "root-1", ChannelID: "c1", UserID: "u1", Text: "root", CreatedAt: 1},
+			{ID: "reply-1", ChannelID: "c1", UserID: "u1", RootID: "root-1", Text: "reply", CreatedAt: 2},
+		}},
+	}
+	startup := mattermostSendStartup(map[ids.ServerID]mattermostServerContext{"s1": {client: client, usable: true}})
+	wireMattermostRuntime(app, context.Background(), startup, newMattermostEventDB(t, "s1", "c1"))
 
 	request := ui.MattermostSendRequest{ServerID: "s1", ChannelID: "c1", Text: "hello", CorrelationID: "corr"}
 	if app.send == nil {
@@ -162,6 +169,17 @@ func TestWireMattermostRuntimeSetsOnlyMattermostSendBoundary(t *testing.T) {
 	}
 	if app.read == nil {
 		t.Fatal("Mattermost read boundary was not wired")
+	}
+	if app.threads == nil {
+		t.Fatal("Mattermost thread boundary was not wired")
+	}
+	threadRequest := ui.HistoryRequest{ServerID: "s1", ChannelID: "c1", Generation: 7}
+	loaded, ok := app.threads.FetchScoped(context.Background(), threadRequest, "root-1").(ui.ThreadRepliesLoadedMsg)
+	if !ok || loaded.Request != threadRequest || len(loaded.Replies) != 1 || loaded.Replies[0].ID != "reply-1" {
+		t.Fatalf("thread fetch=%#v", loaded)
+	}
+	if cached := app.threads.CacheReadScoped(threadRequest, "root-1"); len(cached) != 2 || cached[0].ID != "root-1" || cached[1].ID != "reply-1" {
+		t.Fatalf("thread cache=%#v", cached)
 	}
 	if _, ok := app.send.Send(context.Background(), request).(ui.MattermostMessageSentMsg); !ok {
 		t.Fatal("Mattermost send boundary was not wired")
@@ -175,6 +193,7 @@ type recordingMattermostRuntimeApp struct {
 	history       ui.MattermostHistoryService
 	send          ui.MattermostSendService
 	read          ui.MattermostReadService
+	threads       ui.ThreadService
 	slackSetCalls int
 }
 
@@ -190,7 +209,9 @@ func (a *recordingMattermostRuntimeApp) SetMattermostReadService(read ui.Matterm
 	a.read = read
 }
 
-func (a *recordingMattermostRuntimeApp) SetThreadService(ui.ThreadService) {}
+func (a *recordingMattermostRuntimeApp) SetThreadService(threads ui.ThreadService) {
+	a.threads = threads
+}
 
 func (a *recordingMattermostRuntimeApp) SetMessageService(ui.MessageService) {
 	a.slackSetCalls++
@@ -201,6 +222,7 @@ type recordingMattermostSendClient struct {
 	message  mattermost.Message
 	err      error
 	started  chan struct{}
+	thread   mattermost.MessagePage
 }
 
 func (c *recordingMattermostSendClient) CreatePost(ctx context.Context, request mattermost.CreatePostRequest) (mattermost.Message, error) {
@@ -211,6 +233,10 @@ func (c *recordingMattermostSendClient) CreatePost(ctx context.Context, request 
 		return mattermost.Message{}, ctx.Err()
 	}
 	return c.message, c.err
+}
+
+func (c *recordingMattermostSendClient) PostThread(context.Context, string) (mattermost.MessagePage, error) {
+	return c.thread, c.err
 }
 
 func (c *recordingMattermostSendClient) ViewChannel(context.Context, string, string, string) (mattermost.ViewChannelResult, error) {
