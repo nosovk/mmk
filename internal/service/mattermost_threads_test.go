@@ -121,6 +121,63 @@ func TestMattermostThreadFetchPersistsThreadAndNewUsersAndReturnsEnrichedMessage
 	}
 }
 
+func TestMattermostThreadFetchPersistsTombstonesAndOmitsThemFromPresentation(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []mattermost.Message
+		wantIDs  []string
+	}{
+		{
+			name: "deleted reply",
+			messages: []mattermost.Message{
+				{ID: "root", ChannelID: "c1", UserID: "u1", CreatedAt: 10},
+				{ID: "deleted-reply", ChannelID: "c1", UserID: "u2", RootID: "root", CreatedAt: 20, DeletedAt: 40},
+				{ID: "reply", ChannelID: "c1", UserID: "u2", RootID: "root", CreatedAt: 30},
+			},
+			wantIDs: []string{"root", "reply"},
+		},
+		{
+			name: "deleted root",
+			messages: []mattermost.Message{
+				{ID: "root", ChannelID: "c1", UserID: "u1", CreatedAt: 10, DeletedAt: 40},
+				{ID: "reply", ChannelID: "c1", UserID: "u2", RootID: "root", CreatedAt: 20},
+			},
+			wantIDs: []string{"reply"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupMattermostHistoryDB(t)
+			client := &fakeMattermostThreadClient{page: mattermost.MessagePage{Messages: test.messages}}
+			svc := NewMattermostThreadService("s1", client, db)
+
+			messages, err := svc.Fetch(context.Background(), "c1", "root")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := historyIDs(messages); !reflect.DeepEqual(got, test.wantIDs) {
+				t.Fatalf("live ids=%v want %v", got, test.wantIDs)
+			}
+			for _, message := range test.messages {
+				post, err := db.GetMattermostPost("s1", message.ID)
+				if err != nil {
+					t.Fatalf("cached post %q: %v", message.ID, err)
+				}
+				if post.DeletedAt != message.DeletedAt {
+					t.Fatalf("cached post %q deleted_at=%d want %d", message.ID, post.DeletedAt, message.DeletedAt)
+				}
+			}
+			cached, err := svc.ReadCached("c1", "root")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := historyIDs(cached); !reflect.DeepEqual(got, test.wantIDs) {
+				t.Fatalf("cached ids=%v want %v", got, test.wantIDs)
+			}
+		})
+	}
+}
+
 func TestMattermostThreadFetchUsesCachedUsersWithoutLookup(t *testing.T) {
 	db := setupMattermostHistoryDB(t)
 	if err := db.UpsertMattermostUser("s1", cache.MattermostUser{ID: "u1", Nickname: "Cached Author"}); err != nil {

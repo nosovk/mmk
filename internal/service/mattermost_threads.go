@@ -97,6 +97,9 @@ func (s *MattermostThreadService) Fetch(ctx context.Context, channelID, rootID s
 	}
 	presented := make([]MattermostHistoryMessage, 0, len(page.Messages))
 	for _, message := range page.Messages {
+		if message.DeletedAt != 0 {
+			continue
+		}
 		name := names[message.UserID]
 		if name == "" {
 			name = message.UserID
