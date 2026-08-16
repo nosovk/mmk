@@ -136,12 +136,14 @@ type ThreadService interface {
 	// Fetch retrieves replies for threadTS in channelID from Slack.
 	// Returns a tea.Msg (typically ThreadRepliesLoadedMsg).
 	Fetch(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg
+	FetchScoped(context.Context, HistoryRequest, ids.ThreadTS) tea.Msg
 
 	// CacheRead returns cached replies (or nil) so the thread panel
 	// can populate without waiting for the network. A non-empty
 	// return causes immediate render; the subsequent Fetch result
 	// overwrites with authoritative data.
 	CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS) []messages.MessageItem
+	CacheReadScoped(HistoryRequest, ids.ThreadTS) []messages.MessageItem
 
 	// Mark marks the thread as read on Slack's servers
 	// (subscriptions.thread.mark). channelID is the parent channel,
@@ -180,7 +182,9 @@ type ThreadService interface {
 // no-ops that operation (and returns the zero value for read paths).
 type ThreadServiceFuncs struct {
 	Fetch               ThreadFetchFunc
+	FetchScoped         func(context.Context, HistoryRequest, ids.ThreadTS) tea.Msg
 	CacheRead           ThreadCacheReadFunc
+	CacheReadScoped     func(HistoryRequest, ids.ThreadTS) []messages.MessageItem
 	Mark                ThreadMarkFunc
 	SendReply           ThreadReplySendFunc
 	ListFetch           ThreadsListFetchFunc
@@ -211,11 +215,25 @@ func (t threadAdapter) Fetch(channelID ids.ChannelID, threadTS ids.ThreadTS) tea
 	return t.fns.Fetch(channelID, threadTS)
 }
 
+func (t threadAdapter) FetchScoped(ctx context.Context, request HistoryRequest, threadTS ids.ThreadTS) tea.Msg {
+	if t.fns.FetchScoped != nil {
+		return t.fns.FetchScoped(ctx, request, threadTS)
+	}
+	return t.Fetch(ids.ChannelID(request.ChannelID), threadTS)
+}
+
 func (t threadAdapter) CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS) []messages.MessageItem {
 	if t.fns.CacheRead == nil {
 		return nil
 	}
 	return t.fns.CacheRead(channelID, threadTS)
+}
+
+func (t threadAdapter) CacheReadScoped(request HistoryRequest, threadTS ids.ThreadTS) []messages.MessageItem {
+	if t.fns.CacheReadScoped != nil {
+		return t.fns.CacheReadScoped(request, threadTS)
+	}
+	return t.CacheRead(ids.ChannelID(request.ChannelID), threadTS)
 }
 
 func (t threadAdapter) Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) {

@@ -59,10 +59,46 @@ import (
 	"github.com/nosovk/mmk/internal/ui/statusbar"
 )
 
+type mattermostThreadSendKey struct {
+	Request       HistoryRequest
+	RootID        string
+	CorrelationID string
+}
+
+type mattermostThreadSendState uint8
+
+const (
+	mattermostThreadSendPending mattermostThreadSendState = iota + 1
+	mattermostThreadSendAccepted
+)
+
 var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case NewMessageMsg:
 		return reduceNewMessage(a, m), true
+
+	case MattermostRealtimePostMsg:
+		if m.Message.RootID == "" {
+			return nil, true
+		}
+		scope := a.mattermostScope(m.Request)
+		if scope == nil || scope.ctx.Err() != nil {
+			return nil, true
+		}
+		for _, mm := range a.modelsForMattermostScope(m.Request) {
+			mm.IncrementReplyCount(m.Message.RootID, m.Message.MessageID())
+		}
+		if m.Request == a.activeHistoryRequest && a.threadVisible && m.Request.ChannelID == a.threadPanel.ChannelID() && m.Message.RootID == a.threadPanel.ThreadTS() {
+			item := cloneMessageItem(m.Message)
+			if !a.threadPanel.ReplaceLocalReply(item.CorrelationID, item) {
+				a.threadPanel.UpsertReply(item)
+			}
+		}
+		key := mattermostThreadSendKey{Request: m.Request, RootID: m.Message.RootID, CorrelationID: m.Message.CorrelationID}
+		if key.CorrelationID != "" && a.mattermostThreadSends[key] == mattermostThreadSendPending {
+			a.mattermostThreadSends[key] = mattermostThreadSendAccepted
+		}
+		return nil, true
 
 	case SendMessageMsg:
 		if !a.allows(FeatureSend) {
@@ -74,7 +110,24 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return reduceSendMessage(a, m), true
 
 	case MattermostMessageSentMsg:
-		if !a.hasMattermostScope(m.Request.HistoryRequest()) {
+		request := m.Request.HistoryRequest()
+		if m.Request.RootID != "" {
+			delete(a.mattermostThreadSends, mattermostThreadSendKey{Request: request, RootID: m.Request.RootID, CorrelationID: m.Request.CorrelationID})
+		}
+		scope := a.mattermostScope(request)
+		if scope == nil || scope.ctx.Err() != nil {
+			return nil, true
+		}
+		if m.Request.RootID != "" {
+			if request == a.activeHistoryRequest && a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() {
+				item := cloneMessageItem(m.Message)
+				if !a.threadPanel.ReplaceLocalReply(m.Request.CorrelationID, item) {
+					a.threadPanel.UpsertReply(item)
+				}
+			}
+			for _, mm := range a.modelsForMattermostScope(request) {
+				mm.IncrementReplyCount(m.Request.RootID, m.Message.MessageID())
+			}
 			return nil, true
 		}
 		for _, mm := range a.modelsForChannel(m.Request.ChannelID) {
@@ -83,8 +136,28 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 
 	case MattermostMessageSendFailedMsg:
-		if !a.hasMattermostScope(m.Request.HistoryRequest()) {
+		request := m.Request.HistoryRequest()
+		key := mattermostThreadSendKey{Request: request, RootID: m.Request.RootID, CorrelationID: m.Request.CorrelationID}
+		state, tracked := a.mattermostThreadSends[key]
+		if m.Request.RootID != "" {
+			delete(a.mattermostThreadSends, key)
+		}
+		scope := a.mattermostScope(request)
+		if scope == nil || scope.ctx.Err() != nil {
 			return nil, true
+		}
+		if m.Request.RootID != "" {
+			if tracked && state == mattermostThreadSendAccepted {
+				return nil, true
+			}
+			removed := false
+			if request == a.activeHistoryRequest && a.threadVisible && m.Request.RootID == a.threadPanel.ThreadTS() && m.Request.ChannelID == a.threadPanel.ChannelID() {
+				removed = a.threadPanel.RemoveLocalReply(m.Request.CorrelationID)
+			}
+			if !removed && !tracked {
+				return nil, true
+			}
+			return func() tea.Msg { return statusbar.SendFailedMsg{Reason: "message send failed"} }, true
 		}
 		const reason = "message send failed"
 		updated := false
@@ -463,6 +536,27 @@ func reduceMattermostSendMessage(a *App, m SendMessageMsg) tea.Cmd {
 	service := a.mattermostSend
 	ctx := a.activeHistoryContext
 	return func() tea.Msg { return service.Send(ctx, requestData) }
+}
+
+func reduceMattermostThreadReply(a *App, m SendThreadReplyMsg) tea.Cmd {
+	request := m.Request
+	if request.ChannelID == "" || request != a.activeHistoryRequest || m.ChannelID != request.ChannelID || m.RootID == "" || m.RootID != m.ThreadTS || !a.threadVisible || a.threadPanel.ChannelID() != request.ChannelID || a.threadPanel.ThreadTS() != m.RootID || m.Context == nil || m.Context.Err() != nil {
+		return nil
+	}
+	correlationID, err := a.mattermostCorrelationID()
+	if err != nil || correlationID == "" {
+		return func() tea.Msg { return statusbar.SendFailedMsg{Reason: "message send failed"} }
+	}
+	requestData := MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: m.RootID, Text: m.Text, CorrelationID: correlationID}
+	a.mattermostThreadSends[mattermostThreadSendKey{Request: request, RootID: m.RootID, CorrelationID: correlationID}] = mattermostThreadSendPending
+	a.threadPanel.AddReply(messages.MessageItem{
+		ID: correlationID, CorrelationID: correlationID, RootID: m.RootID,
+		DeliveryState: messages.DeliveryPending, DeliveryServerID: string(request.ServerID), DeliveryChannelID: request.ChannelID, DeliveryGeneration: request.Generation,
+		CreatedAt: time.Now().UnixMilli(), Format: messages.FormatMattermostPlain,
+		UserID: a.currentUserID, UserName: a.userNameFor(a.currentUserID), Text: m.Text, Timestamp: a.nowFormatted(),
+	})
+	service := a.mattermostSend
+	return func() tea.Msg { return service.Send(m.Context, requestData) }
 }
 
 func generateMattermostCorrelationID() (string, error) {

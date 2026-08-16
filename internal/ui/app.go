@@ -155,12 +155,14 @@ type App struct {
 	renderCache *panelRenderCache
 
 	// Current context
-	activeChannelID     string
-	activeServerID      string // workspace whose data is currently loaded into the side panels
-	selectionGeneration uint64
-	selectionObserver   SelectionObserver
-	serverRevisions     map[string]uint64
-	serverStates        map[string]ServerViewState
+	activeChannelID         string
+	activeServerID          string // workspace whose data is currently loaded into the side panels
+	selectionGeneration     uint64
+	selectionObserver       SelectionObserver
+	historyRequestObserver  func(HistoryRequest)
+	historyRequestsObserver func([]HistoryRequest)
+	serverRevisions         map[string]uint64
+	serverStates            map[string]ServerViewState
 
 	// windowTitle is the cached terminal-window-title string, recomputed
 	// by notifyReadStateChanged on every read-state mutation and read by
@@ -193,6 +195,7 @@ type App struct {
 	mattermostSend          MattermostSendService
 	mattermostRead          MattermostReadService
 	mattermostCorrelationID func() (string, error)
+	mattermostThreadSends   map[mattermostThreadSendKey]mattermostThreadSendState
 
 	uploader UploadFunc
 
@@ -517,6 +520,7 @@ func NewApp() *App {
 		mattermostFetchingOlder:    map[HistoryRequest]bool{},
 		mattermostHistoryExhausted: map[HistoryRequest]bool{},
 		mattermostWindowScopes:     map[wintree.LeafID]*mattermostHistoryScope{},
+		mattermostThreadSends:      map[mattermostThreadSendKey]mattermostThreadSendState{},
 		mouseWheelLines:            3,
 		userNames:                  map[string]string{},
 		externalUsers:              map[string]bool{},
@@ -1582,20 +1586,32 @@ func (a *App) handleEnter() tea.Cmd {
 // click-to-open-thread path so the two entry points stay in lockstep.
 // Returns nil when there is no selected message or no threadFetcher.
 func (a *App) openThreadForSelectedMessage() tea.Cmd {
-	if !a.allows(FeatureThreads) {
+	if !a.allows(FeatureThreadPanel) {
 		return nil
 	}
 	msg, ok := a.messagepane.SelectedMessage()
 	if !ok {
 		return nil
 	}
-	// Use the message's own TS as the thread parent.
-	// If it's already a thread reply, use its ThreadTS instead.
-	threadTS := msg.TS
-	if msg.ThreadTS != "" && msg.ThreadTS != msg.TS {
-		threadTS = msg.ThreadTS
+	selectedID := msg.MessageID()
+	if selectedID == "" {
+		return nil
 	}
-	return a.openThreadPanel(msg, a.activeChannelID, threadTS)
+	rootID := msg.RootMessageID()
+	if rootID == "" {
+		rootID = selectedID
+	}
+	parent := msg
+	if rootID != selectedID {
+		parent = messages.MessageItem{Format: msg.Format}
+		if msg.ID != "" {
+			parent.ID = rootID
+		} else {
+			parent.TS = rootID
+			parent.ThreadTS = rootID
+		}
+	}
+	return a.openThreadPanel(parent, a.activeChannelID, rootID)
 }
 
 // openThreadPanel makes the thread panel visible for (channelID,
@@ -1612,16 +1628,23 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	a.applyThreadUnreadBoundary(channelID)
 
 	threads := a.threads
-	chID := ids.ChannelID(channelID)
 	tTS := ids.ThreadTS(threadTS)
 	var batch []tea.Cmd
-	if cached := threads.CacheRead(chID, tTS); len(cached) > 1 {
+	request := a.activeHistoryRequest
+	if a.features.kind != ContextMattermost {
+		request = HistoryRequest{ChannelID: channelID}
+	}
+	if cached := threads.CacheReadScoped(request, tTS); len(cached) > 1 {
 		replies := cached[1:] // strip parent; reducer expects replies-only
 		batch = append(batch, func() tea.Msg {
-			return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
+			return ThreadRepliesLoadedMsg{Request: request, ThreadTS: threadTS, Replies: replies}
 		})
 	}
-	batch = append(batch, func() tea.Msg { return threads.Fetch(chID, tTS) })
+	ctx := a.activeHistoryContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	batch = append(batch, func() tea.Msg { return threads.FetchScoped(ctx, request, tTS) })
 	return tea.Batch(batch...)
 }
 
@@ -1741,7 +1764,7 @@ func (a *App) ToggleSidebar() {
 }
 
 func (a *App) ToggleThread() {
-	if !a.allows(FeatureThreads) {
+	if !a.allows(FeatureThreadPanel) {
 		return
 	}
 	a.clearSelections()
@@ -2540,6 +2563,18 @@ func (a *App) SetSelectionObserver(observer SelectionObserver) {
 	if observer != nil {
 		observer(ids.ServerID(a.activeServerID), a.activeChannelID)
 	}
+}
+
+func (a *App) SetHistoryRequestObserver(observer func(HistoryRequest)) {
+	a.historyRequestObserver = observer
+	if observer != nil {
+		observer(a.activeHistoryRequest)
+	}
+}
+
+func (a *App) SetHistoryRequestsObserver(observer func([]HistoryRequest)) {
+	a.historyRequestsObserver = observer
+	a.publishMattermostHistoryRequests()
 }
 
 // SetWorkspaceSwitcher sets the callback used to switch workspaces.

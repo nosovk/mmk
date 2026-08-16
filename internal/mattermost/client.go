@@ -446,9 +446,76 @@ func (c *Client) ChannelPosts(ctx context.Context, channelID string, options Cha
 	return MessagePage{Messages: messages, OrderCount: len(wire.Order)}, nil
 }
 
+// PostThread returns a thread reconstructed from Mattermost's authoritative
+// order array.
+func (c *Client) PostThread(ctx context.Context, rootPostID string) (MessagePage, error) {
+	if err := validateBulkID(rootPostID); err != nil {
+		return MessagePage{}, fmt.Errorf("Mattermost root post ID: %w", err)
+	}
+	var wire postListResponse
+	endpoint := "posts/" + url.PathEscape(rootPostID) + "/thread"
+	if err := c.do(ctx, http.MethodGet, endpoint, nil, &wire); err != nil {
+		return MessagePage{}, err
+	}
+	page, err := validatePostThreadResponse(rootPostID, wire)
+	if err != nil {
+		return MessagePage{}, redactError("validate Mattermost thread", err, c.token)
+	}
+	return page, nil
+}
+
+func validatePostThreadResponse(rootPostID string, wire postListResponse) (MessagePage, error) {
+	messages := make([]Message, 0, len(wire.Order))
+	seen := make(map[string]struct{}, len(wire.Order))
+	rootPost, rootExists := wire.Posts[rootPostID]
+	rootChannelID := rootPost.ChannelID
+	for _, orderedID := range wire.Order {
+		if err := validateBulkID(orderedID); err != nil {
+			return MessagePage{}, fmt.Errorf("Mattermost ordered post ID %q: %w", orderedID, err)
+		}
+		if _, duplicate := seen[orderedID]; duplicate {
+			continue
+		}
+		seen[orderedID] = struct{}{}
+		post, ok := wire.Posts[orderedID]
+		if !ok {
+			return MessagePage{}, fmt.Errorf("Mattermost post order references missing post %q", orderedID)
+		}
+		if post.ID == "" {
+			post.ID = orderedID
+		} else if post.ID != orderedID {
+			return MessagePage{}, fmt.Errorf("Mattermost post %q has mismatched ID %q", orderedID, post.ID)
+		}
+		if post.CreatedAt <= 0 {
+			return MessagePage{}, fmt.Errorf("Mattermost post %q create_at must be positive", orderedID)
+		}
+		if strings.TrimSpace(post.ChannelID) == "" {
+			return MessagePage{}, fmt.Errorf("Mattermost post %q channel_id must not be blank", orderedID)
+		}
+		if orderedID == rootPostID {
+			if post.RootID != "" {
+				return MessagePage{}, fmt.Errorf("Mattermost requested root post %q has non-empty root_id %q", rootPostID, post.RootID)
+			}
+		} else {
+			if post.RootID != rootPostID {
+				return MessagePage{}, fmt.Errorf("Mattermost reply post %q has root_id %q, expected %q", orderedID, post.RootID, rootPostID)
+			}
+			if rootExists && post.ChannelID != rootChannelID {
+				return MessagePage{}, fmt.Errorf("Mattermost post %q belongs to channel %q, expected %q", orderedID, post.ChannelID, rootChannelID)
+			}
+		}
+		messages = append(messages, post.domain())
+	}
+	if _, ok := seen[rootPostID]; !ok {
+		return MessagePage{}, fmt.Errorf("Mattermost thread is missing requested root post %q", rootPostID)
+	}
+	return MessagePage{Messages: messages, OrderCount: len(wire.Order)}, nil
+}
+
 // CreatePostRequest contains the fields needed to create a Mattermost post.
 type CreatePostRequest struct {
 	ChannelID     string
+	RootID        string
 	Message       string
 	CorrelationID string
 }
@@ -461,12 +528,18 @@ func (c *Client) CreatePost(ctx context.Context, input CreatePostRequest) (Messa
 	if strings.TrimSpace(input.Message) == "" {
 		return Message{}, errors.New("Mattermost post message must not be blank")
 	}
+	if input.RootID != "" {
+		if err := validateBulkID(input.RootID); err != nil {
+			return Message{}, fmt.Errorf("Mattermost root post ID: %w", err)
+		}
+	}
 	if err := validatePendingPostID(input.CorrelationID); err != nil {
 		return Message{}, fmt.Errorf("Mattermost correlation ID: %w", err)
 	}
 
 	payload := createPostRequest{
 		ChannelID:     input.ChannelID,
+		RootID:        input.RootID,
 		Message:       input.Message,
 		PendingPostID: input.CorrelationID,
 	}
@@ -482,6 +555,10 @@ func (c *Client) CreatePost(ctx context.Context, input CreatePostRequest) (Messa
 	}
 	if wire.ChannelID != input.ChannelID {
 		err := fmt.Errorf("Mattermost created post belongs to channel %q, expected %q", wire.ChannelID, input.ChannelID)
+		return Message{}, redactError("validate Mattermost created post", err, c.token)
+	}
+	if wire.RootID != input.RootID {
+		err := fmt.Errorf("Mattermost created post root_id %q does not match submitted root %q", wire.RootID, input.RootID)
 		return Message{}, redactError("validate Mattermost created post", err, c.token)
 	}
 	if wire.CreatedAt <= 0 {
@@ -861,6 +938,7 @@ type postListResponse struct {
 
 type createPostRequest struct {
 	ChannelID     string `json:"channel_id"`
+	RootID        string `json:"root_id,omitempty"`
 	Message       string `json:"message"`
 	PendingPostID string `json:"pending_post_id"`
 }

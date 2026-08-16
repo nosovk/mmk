@@ -31,6 +31,7 @@
 package ui
 
 import (
+	"context"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -191,12 +192,23 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 				a.threadCompose.Reset()
 				threadTS := a.threadPanel.ThreadTS()
 				channelID := a.threadPanel.ChannelID()
+				request := HistoryRequest{}
+				rootID := ""
+				var ctx context.Context
+				if a.features.kind == ContextMattermost {
+					request = a.activeHistoryRequest
+					rootID = threadTS
+					ctx = a.activeHistoryContext
+				}
 				a.exitInsertAfterSend()
 				return func() tea.Msg {
 					return SendThreadReplyMsg{
 						ChannelID: channelID,
 						ThreadTS:  threadTS,
 						Text:      text,
+						Request:   request,
+						RootID:    rootID,
+						Context:   ctx,
 					}
 				}
 			}

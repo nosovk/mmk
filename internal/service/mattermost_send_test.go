@@ -63,6 +63,40 @@ func TestMattermostSendForwardsExactRequestAndReturnsAuthoritativeMessage(t *tes
 	}
 }
 
+func TestMattermostSendReplyForwardsRootIDAndReturnsAuthoritativeMessage(t *testing.T) {
+	ctx := context.WithValue(context.Background(), mattermostSendContextKey{}, "reply-context")
+	want := mattermost.Message{
+		ID:            "reply-authoritative",
+		ServerID:      "server-authoritative",
+		ChannelID:     "channel-authoritative",
+		RootID:        "root-authoritative",
+		Text:          "server normalized reply",
+		CorrelationID: "correlation-authoritative",
+		CreatedAt:     101,
+	}
+	client := &fakeMattermostSendClient{results: []mattermost.Message{want}}
+
+	got, err := NewMattermostSendService(client).Reply(ctx, "channel-input", "root-input", " input reply ", "correlation-input")
+	if err != nil {
+		t.Fatalf("Reply returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("message=%#v want %#v", got, want)
+	}
+	if len(client.contexts) != 1 || client.contexts[0] != ctx {
+		t.Fatalf("contexts=%#v want original context", client.contexts)
+	}
+	wantRequest := mattermost.CreatePostRequest{
+		ChannelID:     "channel-input",
+		RootID:        "root-input",
+		Message:       " input reply ",
+		CorrelationID: "correlation-input",
+	}
+	if !reflect.DeepEqual(client.requests, []mattermost.CreatePostRequest{wantRequest}) {
+		t.Fatalf("requests=%#v want %#v", client.requests, []mattermost.CreatePostRequest{wantRequest})
+	}
+}
+
 func TestMattermostSendPreservesCorrelationAcrossExplicitRetryCalls(t *testing.T) {
 	retryable := errors.New("temporary failure")
 	want := mattermost.Message{ID: "post-1", ChannelID: "channel-1", Text: "hello"}

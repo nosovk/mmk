@@ -83,6 +83,9 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return tea.Batch(batch...), true
 
 	case ThreadRepliesLoadedMsg:
+		if m.Request.ServerID != "" && m.Request != a.activeHistoryRequest {
+			return nil, true
+		}
 		if !(a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS()) {
 			return nil, true
 		}
@@ -96,15 +99,25 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		channelID := a.threadPanel.ChannelID()
 		parentMsg := a.threadPanel.ParentMsg()
-		// Permalink-opened threads start with a stub parent (TS only).
-		// The fetch that produced this msg also wrote the full thread
-		// to cache — backfill the parent row from there.
-		if parentMsg.Text == "" {
-			if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS)); len(cached) > 0 && cached[0].Text != "" {
+		replies := m.Replies
+		if m.Request.ServerID != "" {
+			replies = mergeMattermostPendingThreadReplies(m.Request, m.ThreadTS, replies, a.threadPanel.Replies())
+		}
+		// Reply/permalink opens start with an identity-only root stub. The
+		// fetch that produced this msg also wrote the full thread to cache,
+		// so replace only an actual stub with matching authoritative metadata.
+		if isThreadParentStub(parentMsg, m.ThreadTS) {
+			var cached []messages.MessageItem
+			if m.Request.ServerID != "" {
+				cached = a.threads.CacheReadScoped(m.Request, ids.ThreadTS(m.ThreadTS))
+			} else {
+				cached = a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS))
+			}
+			if len(cached) > 0 && cached[0].MessageID() == m.ThreadTS && !isThreadParentStub(cached[0], m.ThreadTS) {
 				parentMsg = cached[0]
 			}
 		}
-		a.threadPanel.SetThread(parentMsg, m.Replies, channelID, m.ThreadTS)
+		a.threadPanel.SetThread(parentMsg, replies, channelID, m.ThreadTS)
 
 		// Mark the thread as read now that the user has actually
 		// seen the replies. Server-side: fire-and-forget against
@@ -115,8 +128,8 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// UI reflects the change immediately, regardless of which
 		// path (messages pane or threads view) opened the thread.
 		latestTS := m.ThreadTS
-		if n := len(m.Replies); n > 0 {
-			if t := m.Replies[n-1].TS; t != "" {
+		if n := len(replies); n > 0 {
+			if t := replies[n-1].TS; t != "" {
 				latestTS = t
 			}
 		}
@@ -194,8 +207,11 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return func() tea.Msg { return threads.ListFetch(team) }, true
 
 	case SendThreadReplyMsg:
-		if !a.allows(FeatureThreads) || !a.allows(FeatureSend) {
+		if !a.allows(FeatureThreadPanel) || !a.allows(FeatureSend) {
 			return nil, true
+		}
+		if a.features.kind == ContextMattermost && a.activeHistoryRequest.ChannelID != "" {
+			return reduceMattermostThreadReply(a, m), true
 		}
 		a.selfSend.MarkInFlight(m.ChannelID)
 		// Instant-display: append an optimistic placeholder to the
@@ -280,4 +296,62 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}, true
 	}
 	return nil, false
+}
+
+func mergeMattermostPendingThreadReplies(request HistoryRequest, rootID string, authoritative, current []messages.MessageItem) []messages.MessageItem {
+	seenIDs := make(map[string]struct{}, len(authoritative))
+	seenCorrelations := make(map[string]struct{}, len(authoritative))
+	for _, item := range authoritative {
+		if id := item.MessageID(); id != "" {
+			seenIDs[id] = struct{}{}
+		}
+		if item.CorrelationID != "" {
+			seenCorrelations[item.CorrelationID] = struct{}{}
+		}
+	}
+	merged := append([]messages.MessageItem(nil), authoritative...)
+	for _, item := range current {
+		if item.DeliveryState != messages.DeliveryPending || item.DeliveryServerID != string(request.ServerID) || item.DeliveryChannelID != request.ChannelID || item.DeliveryGeneration != request.Generation || item.RootID != rootID {
+			continue
+		}
+		if _, exists := seenIDs[item.MessageID()]; exists && item.MessageID() != "" {
+			continue
+		}
+		if _, exists := seenCorrelations[item.CorrelationID]; exists && item.CorrelationID != "" {
+			continue
+		}
+		merged = append(merged, item)
+		if id := item.MessageID(); id != "" {
+			seenIDs[id] = struct{}{}
+		}
+		if item.CorrelationID != "" {
+			seenCorrelations[item.CorrelationID] = struct{}{}
+		}
+	}
+	return merged
+}
+
+func isThreadParentStub(msg messages.MessageItem, rootID string) bool {
+	if rootID == "" || msg.MessageID() != rootID {
+		return false
+	}
+	return msg.CorrelationID == "" &&
+		msg.FailureReason == "" &&
+		msg.DeliveryServerID == "" &&
+		msg.DeliveryChannelID == "" &&
+		msg.DeliveryGeneration == 0 &&
+		msg.CreatedAt == 0 &&
+		msg.RootID == "" &&
+		msg.UserName == "" &&
+		msg.UserID == "" &&
+		msg.Text == "" &&
+		msg.Timestamp == "" &&
+		msg.DateStr == "" &&
+		msg.ReplyCount == 0 &&
+		len(msg.Reactions) == 0 &&
+		len(msg.Attachments) == 0 &&
+		!msg.IsEdited &&
+		msg.Subtype == "" &&
+		len(msg.Blocks) == 0 &&
+		len(msg.LegacyAttachments) == 0
 }

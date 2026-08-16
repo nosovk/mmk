@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nosovk/mmk/internal/ids"
+	"github.com/nosovk/mmk/internal/mattermost"
 	"github.com/nosovk/mmk/internal/service"
 	"github.com/nosovk/mmk/internal/ui"
 	"github.com/nosovk/mmk/internal/ui/messages"
@@ -40,7 +41,14 @@ func (s mattermostUISendService) Send(ctx context.Context, request ui.Mattermost
 		cancel()
 	}()
 
-	message, err := service.NewMattermostSendService(serverContext.client).Send(callCtx, request.ChannelID, request.Text, request.CorrelationID)
+	sender := service.NewMattermostSendService(serverContext.client)
+	var message mattermost.Message
+	var err error
+	if request.RootID != "" {
+		message, err = sender.Reply(callCtx, request.ChannelID, request.RootID, request.Text, request.CorrelationID)
+	} else {
+		message, err = sender.Send(callCtx, request.ChannelID, request.Text, request.CorrelationID)
+	}
 	if err != nil {
 		return mattermostSendFailed(request)
 	}

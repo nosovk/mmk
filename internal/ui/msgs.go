@@ -14,6 +14,7 @@
 package ui
 
 import (
+	"context"
 	"image"
 	"sync"
 	"time"
@@ -102,6 +103,10 @@ type (
 		ServerID  ids.ServerID
 		ChannelID string
 	}
+	MattermostRealtimePostMsg struct {
+		Request HistoryRequest
+		Message messages.MessageItem
+	}
 	MattermostOlderMessagesLoadedMsg struct {
 		Request          HistoryRequest
 		AnchorID         string
@@ -189,6 +194,7 @@ type (
 		ServerID      ids.ServerID
 		ChannelID     string
 		Generation    uint64
+		RootID        string
 		Text          string
 		CorrelationID string
 	}
@@ -206,6 +212,7 @@ type (
 		ParentMsg messages.MessageItem
 	}
 	ThreadRepliesLoadedMsg struct {
+		Request  HistoryRequest
 		ThreadTS string
 		Replies  []messages.MessageItem
 	}
@@ -213,6 +220,9 @@ type (
 		ChannelID string
 		ThreadTS  string
 		Text      string
+		Request   HistoryRequest
+		RootID    string
+		Context   context.Context
 	}
 	ThreadReplySentMsg struct {
 		ChannelID string

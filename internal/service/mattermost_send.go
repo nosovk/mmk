@@ -21,11 +21,20 @@ func NewMattermostSendService(client mattermostSendClient) *MattermostSendServic
 }
 
 func (s *MattermostSendService) Send(ctx context.Context, channelID, text, correlationID string) (mattermost.Message, error) {
+	return s.send(ctx, channelID, "", text, correlationID)
+}
+
+func (s *MattermostSendService) Reply(ctx context.Context, channelID, rootID, text, correlationID string) (mattermost.Message, error) {
+	return s.send(ctx, channelID, rootID, text, correlationID)
+}
+
+func (s *MattermostSendService) send(ctx context.Context, channelID, rootID, text, correlationID string) (mattermost.Message, error) {
 	if s == nil || isNilInterface(s.client) {
 		return mattermost.Message{}, errors.New("send Mattermost message: client unavailable")
 	}
 	message, err := s.client.CreatePost(ctx, mattermost.CreatePostRequest{
 		ChannelID:     channelID,
+		RootID:        rootID,
 		Message:       text,
 		CorrelationID: correlationID,
 	})

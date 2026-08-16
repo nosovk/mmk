@@ -305,6 +305,32 @@ func TestMattermostScopeRequestsRemainGloballyUniqueAcrossWindows(t *testing.T) 
 	}
 }
 
+func TestMattermostLiveHistoryRequestsTrackRetainedSplitScopes(t *testing.T) {
+	a := newMattermostSendApp(t, &recordingMattermostSendService{})
+	var snapshots [][]HistoryRequest
+	a.SetHistoryRequestsObserver(func(requests []HistoryRequest) {
+		snapshots = append(snapshots, append([]HistoryRequest(nil), requests...))
+	})
+	c1 := a.activeHistoryRequest
+	w1 := a.focusedWin
+	_ = a.splitWindow(wintree.SplitSideBySide)
+	w2 := a.focusedWin
+	_, _ = a.Update(ChannelSelectedMsg{ID: "c2", Name: "Two"})
+	c2 := a.activeHistoryRequest
+
+	if got := snapshots[len(snapshots)-1]; !reflect.DeepEqual(got, []HistoryRequest{c1, c2}) {
+		t.Fatalf("live requests=%#v want c1/c2 %#v", got, []HistoryRequest{c1, c2})
+	}
+	a.releaseMattermostWindowScope(w1)
+	if got := snapshots[len(snapshots)-1]; !reflect.DeepEqual(got, []HistoryRequest{c2}) {
+		t.Fatalf("after c1 release live requests=%#v want c2 only", got)
+	}
+	a.releaseMattermostWindowScope(w2)
+	if got := snapshots[len(snapshots)-1]; len(got) != 0 {
+		t.Fatalf("after final release live requests=%#v want empty", got)
+	}
+}
+
 func TestMattermostRecentCompletionOnlyClearsItsOwnScopeSyncing(t *testing.T) {
 	a, _, w1, w2, c1, c2 := twoChannelMattermostVerifyingApp(t)
 	if !mattermostSyncingVisible(a) {

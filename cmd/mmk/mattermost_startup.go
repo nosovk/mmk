@@ -19,6 +19,7 @@ import (
 	"github.com/nosovk/mmk/internal/service"
 	"github.com/nosovk/mmk/internal/ui"
 	"github.com/nosovk/mmk/internal/ui/channelfinder"
+	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/sidebar"
 	"github.com/nosovk/mmk/internal/ui/workspace"
 )
@@ -29,6 +30,8 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	app := ui.NewApp()
 	activeSelection := newMattermostActiveSelection()
 	app.SetSelectionObserver(activeSelection.Store)
+	app.SetHistoryRequestObserver(activeSelection.StoreHistoryRequest)
+	app.SetHistoryRequestsObserver(activeSelection.StoreHistoryRequests)
 	app.SetHelpFooter("Mattermost")
 	app.SetTypingEnabled(false)
 	app.SetThemeItems(nil)
@@ -72,7 +75,7 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 		ActiveSelection:         activeSelection.Load,
 		ActiveSelectionSnapshot: activeSelection.LoadSnapshot,
 		NewEventHandler: func(startup *mattermostStartup) func(context.Context, ids.ServerID, mattermost.Event) {
-			return mattermostProductionEventHandler(db, eventSend, activeSelection.Load, startup, func(err error) {
+			return mattermostProductionEventHandler(db, eventSend, activeSelection.Load, activeSelection.LoadHistoryRequests, startup, func(err error) {
 				debuglog.WS("Mattermost realtime event error: %v", err)
 			})
 		},
@@ -231,6 +234,7 @@ type mattermostRuntimeApp interface {
 	SetMattermostHistoryService(ui.MattermostHistoryService)
 	SetMattermostSendService(ui.MattermostSendService)
 	SetMattermostReadService(ui.MattermostReadService)
+	SetThreadService(ui.ThreadService)
 }
 
 func wireMattermostRuntime(app mattermostRuntimeApp, runCtx context.Context, startup *mattermostStartup, db *cache.DB) {
@@ -239,6 +243,14 @@ func wireMattermostRuntime(app mattermostRuntimeApp, runCtx context.Context, sta
 	app.SetMattermostReadService(ui.NewMattermostReadService(newMattermostUIReadService(runCtx, startup, func(err error) {
 		debuglog.WS("%v", err)
 	}).View))
+	app.SetThreadService(ui.NewThreadService(ui.ThreadServiceFuncs{
+		CacheReadScoped: func(request ui.HistoryRequest, rootID ids.ThreadTS) []messages.MessageItem {
+			return mattermostUIThreadAdapter(startup, db, request).CacheRead(ids.ChannelID(request.ChannelID), rootID)
+		},
+		FetchScoped: func(ctx context.Context, request ui.HistoryRequest, rootID ids.ThreadTS) tea.Msg {
+			return mattermostUIThreadAdapter(startup, db, request).Fetch(ctx, ids.ChannelID(request.ChannelID), rootID)
+		},
+	}))
 }
 
 type mattermostUIReadService struct {
@@ -526,12 +538,16 @@ type mattermostSelectionValue struct {
 }
 
 type mattermostActiveSelection struct {
-	value atomic.Pointer[mattermostSelectionValue]
+	value           atomic.Pointer[mattermostSelectionValue]
+	historyRequest  atomic.Pointer[ui.HistoryRequest]
+	historyRequests atomic.Pointer[[]ui.HistoryRequest]
 }
 
 func newMattermostActiveSelection() *mattermostActiveSelection {
 	selection := &mattermostActiveSelection{}
 	selection.Store("", "")
+	selection.StoreHistoryRequest(ui.HistoryRequest{})
+	selection.StoreHistoryRequests(nil)
 	return selection
 }
 
@@ -545,6 +561,31 @@ func (s *mattermostActiveSelection) Store(serverID ids.ServerID, channelID strin
 		}
 	}
 	s.value.Store(&mattermostSelectionValue{serverID: serverID, channelID: channelID, generation: generation})
+}
+
+func (s *mattermostActiveSelection) StoreHistoryRequest(request ui.HistoryRequest) {
+	s.historyRequest.Store(&request)
+}
+
+func (s *mattermostActiveSelection) LoadHistoryRequest() ui.HistoryRequest {
+	request := s.historyRequest.Load()
+	if request == nil {
+		return ui.HistoryRequest{}
+	}
+	return *request
+}
+
+func (s *mattermostActiveSelection) StoreHistoryRequests(requests []ui.HistoryRequest) {
+	snapshot := append([]ui.HistoryRequest(nil), requests...)
+	s.historyRequests.Store(&snapshot)
+}
+
+func (s *mattermostActiveSelection) LoadHistoryRequests() []ui.HistoryRequest {
+	requests := s.historyRequests.Load()
+	if requests == nil {
+		return nil
+	}
+	return append([]ui.HistoryRequest(nil), (*requests)...)
 }
 
 func (s *mattermostActiveSelection) LoadSnapshot() (ids.ServerID, string, uint64) {

@@ -241,7 +241,7 @@ func reduceServerSwitched(a *App, state ServerViewState) tea.Cmd {
 
 func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.Cmd {
 	wasMattermost := a.features.kind == ContextMattermost
-	a.features = MattermostTask10Features()
+	a.features = MattermostTask14Features()
 	previousChannelID := ""
 	if preserveSelection {
 		previousChannelID = a.activeChannelID
@@ -257,6 +257,7 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	if wasMattermost {
 		scope := a.newMattermostHistoryScope(state.ServerID, "")
 		a.mattermostWindowScopes[a.focusedWin] = scope
+		a.publishMattermostHistoryRequests()
 		a.setFocusedMattermostScope(scope)
 	}
 	a.compose.Reset()

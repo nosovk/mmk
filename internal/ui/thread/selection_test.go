@@ -192,3 +192,30 @@ func TestThreadSelection_ExtendUnchangedDoesNotDirty(t *testing.T) {
 		t.Errorf("ExtendSelectionAt with unchanged end anchor must not bump version (before=%d after=%d)", beforeVersion, m.version)
 	}
 }
+
+func TestMattermostThreadSelectionDistinguishesIDOnlyReplies(t *testing.T) {
+	m := New()
+	m.SetThread(messages.MessageItem{ID: "root-post-1", Text: "root"}, []messages.MessageItem{
+		{ID: "reply-post-1", UserName: "alice", Text: "first mattermost reply"},
+		{ID: "reply-post-2", UserName: "bob", Text: "second mattermost reply"},
+	}, "channel-1", "root-post-1")
+	_ = m.View(40, 60)
+
+	if len(m.replyIDToIdx) != 2 || m.replyIDToIdx["reply-post-1"] != 0 || m.replyIDToIdx["reply-post-2"] != 1 {
+		t.Fatalf("reply index = %#v, want distinct provider-neutral IDs", m.replyIDToIdx)
+	}
+	firstY := m.chromeHeight + m.entryOffsets[0] - m.vp.YOffset()
+	secondY := m.chromeHeight + m.entryOffsets[1] + m.cache[1].height - 1 - m.vp.YOffset()
+	m.BeginSelectionAt(firstY, 0)
+	if got := m.selRange.Start.MessageID; got != "reply-post-1" {
+		t.Fatalf("start anchor ID = %q, want reply-post-1", got)
+	}
+	m.ExtendSelectionAt(secondY, 60)
+	if got := m.selRange.End.MessageID; got != "reply-post-2" {
+		t.Fatalf("end anchor ID = %q, want reply-post-2", got)
+	}
+	text, ok := m.EndSelection()
+	if !ok || !strings.Contains(text, "first mattermost reply") || !strings.Contains(text, "second mattermost reply") {
+		t.Fatalf("selection = %q, ok=%v", text, ok)
+	}
+}

@@ -149,7 +149,7 @@ type Model struct {
 	userGroups    map[string]string
 
 	// Mouse selection state. selRange is the user's drag selection.
-	// replyIDToIdx maps reply TS -> entry index in m.cache for O(1)
+	// replyIDToIdx maps provider-neutral reply ID -> entry index in m.cache for O(1)
 	// anchor resolution; rebuilt on every cache build. lastViewHeight is
 	// captured during View() so ScrollHintForDrag knows the reply-area
 	// bounds without needing the App to plumb them through.
@@ -380,6 +380,75 @@ func (m *Model) SwapLocalSentReply(localTS string, msg messages.MessageItem) boo
 	return false
 }
 
+// ReplaceLocalReply replaces an optimistic reply identified by correlation
+// or local message ID. If the authoritative reply already arrived, both rows
+// collapse into one authoritative row at the earliest occupied position.
+func (m *Model) ReplaceLocalReply(identity string, authoritative messages.MessageItem) bool {
+	if identity == "" {
+		return false
+	}
+	localIndex := -1
+	for i := len(m.replies) - 1; i >= 0; i-- {
+		item := m.replies[i]
+		if (item.CorrelationID == identity || item.ID == identity) && item.IsTransientDelivery() {
+			localIndex = i
+			break
+		}
+	}
+	if localIndex < 0 {
+		for i := len(m.replies) - 1; i >= 0; i-- {
+			item := m.replies[i]
+			if item.CorrelationID == identity || item.ID == identity {
+				localIndex = i
+				break
+			}
+		}
+	}
+	if localIndex < 0 {
+		return false
+	}
+
+	authoritativeID := authoritative.MessageID()
+	insertAt := localIndex
+	selectedRemoved := false
+	selectedAt := -1
+	out := make([]messages.MessageItem, 0, len(m.replies))
+	for i, item := range m.replies {
+		remove := i == localIndex || authoritativeID != "" && item.MessageID() == authoritativeID
+		if remove {
+			if i < insertAt {
+				insertAt = i
+			}
+			if i == m.selected {
+				selectedRemoved = true
+			}
+			continue
+		}
+		if i == m.selected {
+			selectedAt = len(out)
+		}
+		out = append(out, item)
+	}
+	if insertAt > len(out) {
+		insertAt = len(out)
+	}
+	out = append(out, messages.MessageItem{})
+	copy(out[insertAt+1:], out[insertAt:])
+	out[insertAt] = authoritative
+	m.replies = out
+	if selectedRemoved {
+		m.selected = insertAt
+	} else if selectedAt >= 0 {
+		if selectedAt >= insertAt {
+			selectedAt++
+		}
+		m.selected = selectedAt
+	}
+	m.hasSnapped = false
+	m.InvalidateCache()
+	return true
+}
+
 // RemoveLocalSentReply removes an optimistic placeholder reply
 // identified by localTS. Used when the chat.postMessage HTTP call
 // fails and we want to roll back the instant-display add. Returns
@@ -390,6 +459,24 @@ func (m *Model) RemoveLocalSentReply(localTS string) bool {
 	}
 	for i := len(m.replies) - 1; i >= 0; i-- {
 		if m.replies[i].TS == localTS {
+			m.replies = append(m.replies[:i], m.replies[i+1:]...)
+			m.InvalidateCache()
+			if m.selected >= len(m.replies) && len(m.replies) > 0 {
+				m.selected = len(m.replies) - 1
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) RemoveLocalReply(identity string) bool {
+	if identity == "" {
+		return false
+	}
+	for i := len(m.replies) - 1; i >= 0; i-- {
+		item := m.replies[i]
+		if (item.CorrelationID == identity || item.ID == identity) && item.IsTransientDelivery() {
 			m.replies = append(m.replies[:i], m.replies[i+1:]...)
 			m.InvalidateCache()
 			if m.selected >= len(m.replies) && len(m.replies) > 0 {
@@ -414,6 +501,23 @@ func (m *Model) UpsertSelfSentReply(msg messages.MessageItem) {
 	if msg.TS != "" {
 		for i := len(m.replies) - 1; i >= 0; i-- {
 			if m.replies[i].TS == msg.TS {
+				m.replies[i] = msg
+				m.InvalidateCache()
+				return
+			}
+		}
+	}
+	m.replies = append(m.replies, msg)
+	m.InvalidateCache()
+	m.selected = len(m.replies) - 1
+}
+
+// UpsertReply replaces an authoritative reply with the same provider-neutral
+// message ID in place, or appends it when it is not already present.
+func (m *Model) UpsertReply(msg messages.MessageItem) {
+	if id := msg.MessageID(); id != "" {
+		for i := len(m.replies) - 1; i >= 0; i-- {
+			if m.replies[i].MessageID() == id {
 				m.replies[i] = msg
 				m.InvalidateCache()
 				return
@@ -452,8 +556,8 @@ func (m *Model) IsEmpty() bool {
 }
 
 // HasReply returns true when the open thread contains a reply with the
-// given TS. App.Update uses this to decide whether to invalidate the
-// thread cache on ImageReadyMsg.
+// given provider-neutral message ID. App.Update uses this to decide whether
+// to invalidate the thread cache on ImageReadyMsg.
 //
 // Note: replyIDToIdx is built lazily during View() (see the cache-build
 // path), so HasReply may return false for replies whose cache hasn't
@@ -461,11 +565,11 @@ func (m *Model) IsEmpty() bool {
 // thread, View() runs at least once before any image bytes arrive.
 // Returning false when the index is nil is the safe default; the cache
 // is rebuilt on the next frame anyway.
-func (m *Model) HasReply(ts string) bool {
+func (m *Model) HasReply(messageID string) bool {
 	if m.replyIDToIdx == nil {
 		return false
 	}
-	_, ok := m.replyIDToIdx[ts]
+	_, ok := m.replyIDToIdx[messageID]
 	return ok
 }
 
@@ -1080,7 +1184,7 @@ func (m *Model) anchorAt(absLine, col int) (selection.Anchor, bool) {
 		}
 		var msgID string
 		if e.replyIdx >= 0 && e.replyIdx < len(m.replies) {
-			msgID = m.replies[e.replyIdx].TS
+			msgID = m.replies[e.replyIdx].MessageID()
 		}
 		return selection.Anchor{MessageID: msgID, Line: j, Col: plainCol}, true
 	}
@@ -1445,7 +1549,9 @@ func (m *Model) View(height, width int) string {
 				flushes:          attachFlushes,
 				reactionHits:     reactHits,
 			})
-			m.replyIDToIdx[reply.TS] = i
+			if id := reply.MessageID(); id != "" {
+				m.replyIDToIdx[id] = i
+			}
 		}
 		m.cacheWidth = width
 		m.cacheReplyLen = len(m.replies)
@@ -1764,7 +1870,7 @@ func (m *Model) blockkitContext(msg messages.MessageItem, userNames, channelName
 		MaxRows:     imgCtx.MaxRows,
 		MaxCols:     imgCtx.MaxCols,
 		UserNames:   userNames,
-		MessageTS:   msg.TS,
+		MessageTS:   msg.MessageID(),
 		Channel:     m.channelID,
 		RenderText: func(s string, un map[string]string) string {
 			return messages.RenderSlackMarkdownWith(s, messages.RenderSlackMarkdownOpts{
@@ -1993,7 +2099,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 				Name:   att.Name,
 				URL:    att.URL,
 				Thumbs: imgThumbs,
-			}, m.channelID, msg.TS, contentWidth, 0 /* baseRow */, attIdx, 0 /* contentColBase */)
+			}, m.channelID, msg.MessageID(), contentWidth, 0 /* baseRow */, attIdx, 0 /* contentColBase */)
 			blocks = append(blocks, strings.Join(res.Lines, "\n"))
 			flushes = append(flushes, res.Flushes...)
 			attachmentLineCount += len(res.Lines)
