@@ -189,6 +189,7 @@ type (
 		ServerID      ids.ServerID
 		ChannelID     string
 		Generation    uint64
+		RootID        string
 		Text          string
 		CorrelationID string
 	}
@@ -206,6 +207,7 @@ type (
 		ParentMsg messages.MessageItem
 	}
 	ThreadRepliesLoadedMsg struct {
+		Request  HistoryRequest
 		ThreadTS string
 		Replies  []messages.MessageItem
 	}

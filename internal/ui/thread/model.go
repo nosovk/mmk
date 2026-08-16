@@ -470,6 +470,24 @@ func (m *Model) RemoveLocalSentReply(localTS string) bool {
 	return false
 }
 
+func (m *Model) RemoveLocalReply(identity string) bool {
+	if identity == "" {
+		return false
+	}
+	for i := len(m.replies) - 1; i >= 0; i-- {
+		item := m.replies[i]
+		if (item.CorrelationID == identity || item.ID == identity) && item.IsTransientDelivery() {
+			m.replies = append(m.replies[:i], m.replies[i+1:]...)
+			m.InvalidateCache()
+			if m.selected >= len(m.replies) && len(m.replies) > 0 {
+				m.selected = len(m.replies) - 1
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // UpsertSelfSentReply is the optimistic-add variant of AddReply for
 // thread replies the user just sent themselves. If a reply with the
 // same TS already exists (e.g. a WS echo arrived faster than the

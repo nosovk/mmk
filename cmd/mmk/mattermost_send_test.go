@@ -45,6 +45,22 @@ func TestMattermostUISendUsesRequestServerAfterServerSwitchAndForwardsCorrelatio
 	}
 }
 
+func TestMattermostUISendReplyForwardsRootAndCorrelation(t *testing.T) {
+	client := &recordingMattermostSendClient{message: mattermost.Message{ID: "reply-1", ChannelID: "c1", RootID: "root-1", CorrelationID: "corr-1"}}
+	startup := mattermostSendStartup(map[ids.ServerID]mattermostServerContext{"s1": {client: client, usable: true}})
+	request := ui.MattermostSendRequest{ServerID: "s1", ChannelID: "c1", Generation: 7, RootID: "root-1", Text: "exact", CorrelationID: "corr-1"}
+
+	got := (mattermostUISendService{ctx: context.Background(), startup: startup}).Send(context.Background(), request)
+
+	if _, ok := got.(ui.MattermostMessageSentMsg); !ok {
+		t.Fatalf("message=%#v", got)
+	}
+	want := mattermost.CreatePostRequest{ChannelID: "c1", RootID: "root-1", Message: "exact", CorrelationID: "corr-1"}
+	if !reflect.DeepEqual(client.requests, []mattermost.CreatePostRequest{want}) {
+		t.Fatalf("requests=%#v want %#v", client.requests, []mattermost.CreatePostRequest{want})
+	}
+}
+
 func TestMattermostUISendCombinesRunAndUISendCancellation(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -173,6 +189,8 @@ func (a *recordingMattermostRuntimeApp) SetMattermostSendService(send ui.Matterm
 func (a *recordingMattermostRuntimeApp) SetMattermostReadService(read ui.MattermostReadService) {
 	a.read = read
 }
+
+func (a *recordingMattermostRuntimeApp) SetThreadService(ui.ThreadService) {}
 
 func (a *recordingMattermostRuntimeApp) SetMessageService(ui.MessageService) {
 	a.slackSetCalls++

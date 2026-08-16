@@ -83,6 +83,9 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return tea.Batch(batch...), true
 
 	case ThreadRepliesLoadedMsg:
+		if m.Request.ServerID != "" && m.Request != a.activeHistoryRequest {
+			return nil, true
+		}
 		if !(a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS()) {
 			return nil, true
 		}
@@ -196,6 +199,9 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case SendThreadReplyMsg:
 		if !a.allows(FeatureThreadPanel) || !a.allows(FeatureSend) {
 			return nil, true
+		}
+		if a.features.kind == ContextMattermost && a.activeHistoryRequest.ChannelID != "" {
+			return reduceMattermostThreadReply(a, m), true
 		}
 		a.selfSend.MarkInFlight(m.ChannelID)
 		// Instant-display: append an optimistic placeholder to the

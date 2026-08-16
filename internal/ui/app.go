@@ -1624,16 +1624,23 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	a.applyThreadUnreadBoundary(channelID)
 
 	threads := a.threads
-	chID := ids.ChannelID(channelID)
 	tTS := ids.ThreadTS(threadTS)
 	var batch []tea.Cmd
-	if cached := threads.CacheRead(chID, tTS); len(cached) > 1 {
+	request := a.activeHistoryRequest
+	if a.features.kind != ContextMattermost {
+		request = HistoryRequest{ChannelID: channelID}
+	}
+	if cached := threads.CacheReadScoped(request, tTS); len(cached) > 1 {
 		replies := cached[1:] // strip parent; reducer expects replies-only
 		batch = append(batch, func() tea.Msg {
-			return ThreadRepliesLoadedMsg{ThreadTS: threadTS, Replies: replies}
+			return ThreadRepliesLoadedMsg{Request: request, ThreadTS: threadTS, Replies: replies}
 		})
 	}
-	batch = append(batch, func() tea.Msg { return threads.Fetch(chID, tTS) })
+	ctx := a.activeHistoryContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	batch = append(batch, func() tea.Msg { return threads.FetchScoped(ctx, request, tTS) })
 	return tea.Batch(batch...)
 }
 

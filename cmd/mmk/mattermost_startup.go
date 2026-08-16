@@ -19,6 +19,7 @@ import (
 	"github.com/nosovk/mmk/internal/service"
 	"github.com/nosovk/mmk/internal/ui"
 	"github.com/nosovk/mmk/internal/ui/channelfinder"
+	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/sidebar"
 	"github.com/nosovk/mmk/internal/ui/workspace"
 )
@@ -231,6 +232,7 @@ type mattermostRuntimeApp interface {
 	SetMattermostHistoryService(ui.MattermostHistoryService)
 	SetMattermostSendService(ui.MattermostSendService)
 	SetMattermostReadService(ui.MattermostReadService)
+	SetThreadService(ui.ThreadService)
 }
 
 func wireMattermostRuntime(app mattermostRuntimeApp, runCtx context.Context, startup *mattermostStartup, db *cache.DB) {
@@ -239,6 +241,14 @@ func wireMattermostRuntime(app mattermostRuntimeApp, runCtx context.Context, sta
 	app.SetMattermostReadService(ui.NewMattermostReadService(newMattermostUIReadService(runCtx, startup, func(err error) {
 		debuglog.WS("%v", err)
 	}).View))
+	app.SetThreadService(ui.NewThreadService(ui.ThreadServiceFuncs{
+		CacheReadScoped: func(request ui.HistoryRequest, rootID ids.ThreadTS) []messages.MessageItem {
+			return mattermostUIThreadAdapter(startup, db, request).CacheRead(ids.ChannelID(request.ChannelID), rootID)
+		},
+		FetchScoped: func(ctx context.Context, request ui.HistoryRequest, rootID ids.ThreadTS) tea.Msg {
+			return mattermostUIThreadAdapter(startup, db, request).Fetch(ctx, ids.ChannelID(request.ChannelID), rootID)
+		},
+	}))
 }
 
 type mattermostUIReadService struct {

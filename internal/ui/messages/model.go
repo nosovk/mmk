@@ -1569,7 +1569,7 @@ func (m *Model) IncrementReplyCount(parentTS, replyTS string) {
 	}
 
 	for i, msg := range m.messages {
-		if msg.TS == parentTS {
+		if msg.MessageID() == parentTS {
 			m.messages[i].ReplyCount++
 			m.cache = nil
 			m.dirty()
