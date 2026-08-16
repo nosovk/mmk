@@ -187,36 +187,82 @@ func TestMattermostThreadRootOpensByMessageID(t *testing.T) {
 	if got := a.threadPanel.ThreadTS(); got != "root-post-1" {
 		t.Fatalf("thread panel identity = %q, want root-post-1", got)
 	}
+	if got := a.threadPanel.ParentMsg(); got.ID != "root-post-1" || got.Text != "root" {
+		t.Fatalf("root parent = %#v, want selected root post", got)
+	}
 }
 
 func TestMattermostThreadReplyOpensByRootMessageID(t *testing.T) {
 	a := NewApp()
 	a.features = MattermostTask14Features()
 	a.activeChannelID = "channel-1"
-	a.messagepane.SetMessages([]messages.MessageItem{{
+	selectedReply := messages.MessageItem{
 		ID:     "reply-post-1",
 		RootID: "root-post-1",
 		UserID: "user-2",
 		Text:   "reply",
-	}})
+	}
+	a.messagepane.SetMessages([]messages.MessageItem{selectedReply})
+	root := messages.MessageItem{ID: "root-post-1", UserID: "user-1", Text: "true root"}
 
 	var fetchedRoot string
-	a.setThreadFetcherForTest(func(_ ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
-		fetchedRoot = string(threadTS)
-		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS)}
-	})
+	a.SetThreadService(NewThreadService(ThreadServiceFuncs{
+		CacheRead: func(_ ids.ChannelID, threadTS ids.ThreadTS) []messages.MessageItem {
+			if string(threadTS) != "root-post-1" {
+				return nil
+			}
+			return []messages.MessageItem{root, selectedReply}
+		},
+		Fetch: func(_ ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+			fetchedRoot = string(threadTS)
+			return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: []messages.MessageItem{selectedReply}}
+		},
+	}))
 
 	cmd := a.openThreadForSelectedMessage()
 	if cmd == nil {
 		t.Fatal("Mattermost reply with ID and RootID should open its root thread")
 	}
-	_ = drainBatch(cmd)
+	if got := a.threadPanel.ParentMsg(); got.ID != "root-post-1" || got.Text != "" {
+		t.Fatalf("initial parent = %#v, want root-identity stub", got)
+	}
+	for _, msg := range drainBatch(cmd) {
+		_, _ = a.Update(msg)
+	}
 
 	if fetchedRoot != "root-post-1" {
 		t.Fatalf("fetched root = %q, want root-post-1", fetchedRoot)
 	}
 	if got := a.threadPanel.ThreadTS(); got != "root-post-1" {
 		t.Fatalf("thread panel identity = %q, want root-post-1", got)
+	}
+	if got := a.threadPanel.ParentMsg(); got.ID != "root-post-1" || got.Text != "true root" {
+		t.Fatalf("loaded parent = %#v, want authoritative root", got)
+	}
+}
+
+func TestSlackThreadReplyStillUsesThreadTSRootIdentity(t *testing.T) {
+	a := NewApp()
+	a.activeChannelID = "C1"
+	a.messagepane.SetMessages([]messages.MessageItem{{
+		TS:       "2.0",
+		ThreadTS: "1.0",
+		UserID:   "U2",
+		Text:     "reply",
+	}})
+	a.setThreadFetcherForTest(func(_ ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS)}
+	})
+
+	cmd := a.openThreadForSelectedMessage()
+	if cmd == nil {
+		t.Fatal("Slack reply should open its root thread")
+	}
+	if got := a.threadPanel.ParentMsg(); got.TS != "1.0" || got.ThreadTS != "1.0" || got.Text != "" {
+		t.Fatalf("Slack initial parent = %#v, want root-identity stub", got)
+	}
+	if got := a.threadPanel.ThreadTS(); got != "1.0" {
+		t.Fatalf("Slack thread identity = %q, want 1.0", got)
 	}
 }
 
@@ -282,7 +328,7 @@ func TestApp_DragDoesNotOpenThread(t *testing.T) {
 	}
 }
 
-func TestDragControllerPlainMessageClickHonorsFeatureThreads(t *testing.T) {
+func TestDragControllerPlainMessageClickHonorsThreadPanelFeature(t *testing.T) {
 	a := newTestAppWithMessages(t)
 	a.features = MattermostTask8Features()
 	called := false

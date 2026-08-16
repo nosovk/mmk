@@ -104,12 +104,56 @@ func TestMattermostThreadsPanelEnabledWhileSidebarThreadsRemainDisabled(t *testi
 		InitialActive: true,
 	}})
 
-	if !a.features.Allows(FeatureThreads) {
+	if !a.features.Allows(FeatureThreadPanel) {
 		t.Fatal("Mattermost channel-level thread panels should be enabled")
+	}
+	if a.features.Allows(FeatureThreads) {
+		t.Fatal("Mattermost workspace-wide Threads workflow should remain disabled")
 	}
 	a.sidebar.SelectThreadsRow()
 	if a.sidebar.IsThreadsSelected() {
 		t.Fatal("Mattermost workspace-wide Threads row should remain disabled")
+	}
+}
+
+func TestMattermostThreadPanelReplyAllowedWhileGlobalThreadsDestinationRejected(t *testing.T) {
+	a := NewApp()
+	_, _ = a.Update(ServerReadyMsg{Server: ServerViewState{ServerID: "server-1", InitialActive: true}})
+	a.activeChannelID = "channel-1"
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-post-1", Text: "root"}})
+	a.SetThreadService(NewThreadService(ThreadServiceFuncs{
+		Fetch: func(_ ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+			return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: []messages.MessageItem{}}
+		},
+		SendReply: func(_ ids.ChannelID, _ ids.ThreadTS, _ string) tea.Msg {
+			return ThreadReplySentMsg{}
+		},
+	}))
+
+	if cmd := a.openThreadForSelectedMessage(); cmd == nil || !a.threadVisible {
+		t.Fatal("Mattermost channel thread panel should open")
+	}
+	if _, cmd := a.Update(SendThreadReplyMsg{ChannelID: "channel-1", ThreadTS: "root-post-1", Text: "reply"}); cmd == nil {
+		t.Fatal("Mattermost channel thread reply should cross the panel capability gate")
+	}
+
+	if _, cmd := a.Update(ThreadsViewActivatedMsg{}); cmd != nil || a.view == ViewThreads {
+		t.Fatalf("global Threads activation crossed disabled gate: cmd=%v view=%v", cmd != nil, a.view)
+	}
+	a.channelFinder.Open()
+	for _, r := range "Threads" {
+		a.channelFinder.HandleKey(string(r))
+	}
+	cmd := handleChannelFinderMode(a, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("seeded synthetic Threads destination should remain inaccessible")
+	}
+}
+
+func TestSlackFeaturesEnableThreadPanelAndGlobalThreads(t *testing.T) {
+	features := SlackFeatures()
+	if !features.Allows(FeatureThreadPanel) || !features.Allows(FeatureThreads) {
+		t.Fatalf("Slack features: panel=%v global=%v", features.Allows(FeatureThreadPanel), features.Allows(FeatureThreads))
 	}
 }
 

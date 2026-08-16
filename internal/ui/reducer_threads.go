@@ -194,7 +194,7 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return func() tea.Msg { return threads.ListFetch(team) }, true
 
 	case SendThreadReplyMsg:
-		if !a.allows(FeatureThreads) || !a.allows(FeatureSend) {
+		if !a.allows(FeatureThreadPanel) || !a.allows(FeatureSend) {
 			return nil, true
 		}
 		a.selfSend.MarkInFlight(m.ChannelID)

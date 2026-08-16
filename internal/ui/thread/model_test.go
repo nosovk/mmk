@@ -604,6 +604,19 @@ func TestHasReply(t *testing.T) {
 	}
 }
 
+func TestHasReplyUsesMattermostMessageID(t *testing.T) {
+	m := New()
+	m.SetThread(messages.MessageItem{ID: "root-post-1"}, []messages.MessageItem{
+		{ID: "reply-post-1", Text: "first"},
+		{ID: "reply-post-2", Text: "second"},
+	}, "channel-1", "root-post-1")
+	_ = m.View(20, 60)
+
+	if !m.HasReply("reply-post-1") || !m.HasReply("reply-post-2") {
+		t.Fatalf("Mattermost reply index = %#v", m.replyIDToIdx)
+	}
+}
+
 func TestThreadPatchUserName_UpdatesMatchingRowsAndUserNamesMap(t *testing.T) {
 	m := New()
 	parent := messages.MessageItem{TS: "1.0", UserID: "U1", UserName: "U1", Text: "parent"}

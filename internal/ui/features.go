@@ -13,6 +13,7 @@ type Feature uint8
 
 const (
 	FeatureThreads Feature = iota
+	FeatureThreadPanel
 	FeatureReactions
 	FeatureUploads
 	FeatureEditDelete
@@ -50,7 +51,7 @@ func MattermostTask10Features() FeatureSet {
 
 func MattermostTask14Features() FeatureSet {
 	features := MattermostTask10Features()
-	delete(features.disabled, FeatureThreads)
+	delete(features.disabled, FeatureThreadPanel)
 	return features
 }
 
@@ -69,7 +70,7 @@ func (a *App) helpEntries() []help.Entry {
 		"mark unread": FeatureMarkUnread, "search workspace": FeatureWorkspaceSearch,
 		"new message": FeatureNewConversation, "copy permalink": FeaturePermalink,
 		"set status": FeaturePresence, "insert mode": FeatureSend,
-		"toggle thread": FeatureThreads, "save thread": FeatureThreads,
+		"toggle thread": FeatureThreadPanel, "save thread": FeatureThreadPanel,
 	}
 	out := make([]help.Entry, 0, len(entries))
 	for _, entry := range entries {

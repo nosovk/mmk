@@ -149,7 +149,7 @@ type Model struct {
 	userGroups    map[string]string
 
 	// Mouse selection state. selRange is the user's drag selection.
-	// replyIDToIdx maps reply TS -> entry index in m.cache for O(1)
+	// replyIDToIdx maps provider-neutral reply ID -> entry index in m.cache for O(1)
 	// anchor resolution; rebuilt on every cache build. lastViewHeight is
 	// captured during View() so ScrollHintForDrag knows the reply-area
 	// bounds without needing the App to plumb them through.
@@ -538,8 +538,8 @@ func (m *Model) IsEmpty() bool {
 }
 
 // HasReply returns true when the open thread contains a reply with the
-// given TS. App.Update uses this to decide whether to invalidate the
-// thread cache on ImageReadyMsg.
+// given provider-neutral message ID. App.Update uses this to decide whether
+// to invalidate the thread cache on ImageReadyMsg.
 //
 // Note: replyIDToIdx is built lazily during View() (see the cache-build
 // path), so HasReply may return false for replies whose cache hasn't
@@ -547,11 +547,11 @@ func (m *Model) IsEmpty() bool {
 // thread, View() runs at least once before any image bytes arrive.
 // Returning false when the index is nil is the safe default; the cache
 // is rebuilt on the next frame anyway.
-func (m *Model) HasReply(ts string) bool {
+func (m *Model) HasReply(messageID string) bool {
 	if m.replyIDToIdx == nil {
 		return false
 	}
-	_, ok := m.replyIDToIdx[ts]
+	_, ok := m.replyIDToIdx[messageID]
 	return ok
 }
 
@@ -1166,7 +1166,7 @@ func (m *Model) anchorAt(absLine, col int) (selection.Anchor, bool) {
 		}
 		var msgID string
 		if e.replyIdx >= 0 && e.replyIdx < len(m.replies) {
-			msgID = m.replies[e.replyIdx].TS
+			msgID = m.replies[e.replyIdx].MessageID()
 		}
 		return selection.Anchor{MessageID: msgID, Line: j, Col: plainCol}, true
 	}
@@ -1531,7 +1531,9 @@ func (m *Model) View(height, width int) string {
 				flushes:          attachFlushes,
 				reactionHits:     reactHits,
 			})
-			m.replyIDToIdx[reply.TS] = i
+			if id := reply.MessageID(); id != "" {
+				m.replyIDToIdx[id] = i
+			}
 		}
 		m.cacheWidth = width
 		m.cacheReplyLen = len(m.replies)

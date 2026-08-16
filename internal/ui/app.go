@@ -1582,7 +1582,7 @@ func (a *App) handleEnter() tea.Cmd {
 // click-to-open-thread path so the two entry points stay in lockstep.
 // Returns nil when there is no selected message or no threadFetcher.
 func (a *App) openThreadForSelectedMessage() tea.Cmd {
-	if !a.allows(FeatureThreads) {
+	if !a.allows(FeatureThreadPanel) {
 		return nil
 	}
 	msg, ok := a.messagepane.SelectedMessage()
@@ -1597,7 +1597,17 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 	if rootID == "" {
 		rootID = selectedID
 	}
-	return a.openThreadPanel(msg, a.activeChannelID, rootID)
+	parent := msg
+	if rootID != selectedID {
+		parent = messages.MessageItem{Format: msg.Format}
+		if msg.ID != "" {
+			parent.ID = rootID
+		} else {
+			parent.TS = rootID
+			parent.ThreadTS = rootID
+		}
+	}
+	return a.openThreadPanel(parent, a.activeChannelID, rootID)
 }
 
 // openThreadPanel makes the thread panel visible for (channelID,
@@ -1743,7 +1753,7 @@ func (a *App) ToggleSidebar() {
 }
 
 func (a *App) ToggleThread() {
-	if !a.allows(FeatureThreads) {
+	if !a.allows(FeatureThreadPanel) {
 		return
 	}
 	a.clearSelections()
