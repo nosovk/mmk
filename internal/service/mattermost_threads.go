@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/mattermost"
@@ -34,11 +35,11 @@ func NewMattermostThreadService(serverID string, client mattermostThreadClient, 
 func (s *MattermostThreadService) ReadCached(channelID, rootID string) ([]MattermostHistoryMessage, error) {
 	posts, err := s.store.ListMattermostThreadPosts(s.serverID, channelID, rootID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list cached Mattermost thread posts: %w", err)
 	}
 	users, err := s.store.ListMattermostUsers(s.serverID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list cached Mattermost thread users: %w", err)
 	}
 	names := make(map[string]string, len(users))
 	for _, user := range users {
@@ -48,16 +49,22 @@ func (s *MattermostThreadService) ReadCached(channelID, rootID string) ([]Matter
 }
 
 func (s *MattermostThreadService) Fetch(ctx context.Context, channelID, rootID string) ([]MattermostHistoryMessage, error) {
+	if strings.TrimSpace(channelID) == "" {
+		return nil, errors.New("fetch Mattermost thread: channel ID must not be blank")
+	}
+	if s.client == nil {
+		return nil, errors.New("fetch Mattermost thread: client unavailable")
+	}
 	page, err := s.client.PostThread(ctx, rootID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetch Mattermost thread: %w", err)
 	}
 	if err := validateMattermostThread(page.Messages, channelID, rootID); err != nil {
 		return nil, err
 	}
 	cachedUsers, err := s.store.ListMattermostUsers(s.serverID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list cached Mattermost thread users: %w", err)
 	}
 	names := make(map[string]string, len(cachedUsers))
 	for _, user := range cachedUsers {
@@ -82,7 +89,7 @@ func (s *MattermostThreadService) Fetch(ctx context.Context, channelID, rootID s
 		resolved, err = s.client.UsersByIDs(ctx, unknown)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return nil, err
+				return nil, fmt.Errorf("resolve Mattermost thread authors: %w", err)
 			}
 			resolved = nil
 		}
@@ -90,23 +97,15 @@ func (s *MattermostThreadService) Fetch(ctx context.Context, channelID, rootID s
 	users := make([]cache.MattermostUser, len(resolved))
 	for i, user := range resolved {
 		users[i] = cacheUserRecord(user)
-		names[user.ID] = user.DisplayName()
 	}
 	if err := s.store.UpsertMattermostHistoryContext(ctx, s.serverID, posts, users); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cache Mattermost thread: %w", err)
 	}
-	presented := make([]MattermostHistoryMessage, 0, len(page.Messages))
-	for _, message := range page.Messages {
-		if message.DeletedAt != 0 {
-			continue
-		}
-		name := names[message.UserID]
-		if name == "" {
-			name = message.UserID
-		}
-		presented = append(presented, MattermostHistoryMessage{Message: message, UserName: name})
+	presented, err := s.ReadCached(channelID, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("read merged Mattermost thread: %w", err)
 	}
-	return presentMattermostThread(presented, rootID), nil
+	return presented, nil
 }
 
 func validateMattermostThread(messages []mattermost.Message, channelID, rootID string) error {

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/mattermost"
@@ -13,11 +14,20 @@ import (
 
 type fakeMattermostThreadClient struct {
 	page       mattermost.MessagePage
+	postErr    error
 	userErr    error
 	users      []mattermost.User
 	postCalls  int
 	postRootID string
 	userCalls  [][]string
+}
+
+type fakeMattermostThreadStore struct {
+	posts    []cache.MattermostPost
+	postErr  error
+	users    []cache.MattermostUser
+	userErr  error
+	writeErr error
 }
 
 type contextRecordingThreadStore struct {
@@ -34,19 +44,35 @@ func (*contextRecordingThreadStore) ListMattermostUsers(string) ([]cache.Matterm
 
 func (s *contextRecordingThreadStore) UpsertMattermostHistoryContext(ctx context.Context, _ string, _ []cache.MattermostPost, _ []cache.MattermostUser) error {
 	close(s.writeEntered)
-	<-ctx.Done()
-	return ctx.Err()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(time.Second):
+		return errors.New("timed out waiting for caller context cancellation")
+	}
 }
 
 func (f *fakeMattermostThreadClient) PostThread(_ context.Context, rootID string) (mattermost.MessagePage, error) {
 	f.postCalls++
 	f.postRootID = rootID
-	return f.page, nil
+	return f.page, f.postErr
 }
 
 func (f *fakeMattermostThreadClient) UsersByIDs(_ context.Context, ids []string) ([]mattermost.User, error) {
 	f.userCalls = append(f.userCalls, append([]string(nil), ids...))
 	return f.users, f.userErr
+}
+
+func (s *fakeMattermostThreadStore) ListMattermostThreadPosts(string, string, string) ([]cache.MattermostPost, error) {
+	return s.posts, s.postErr
+}
+
+func (s *fakeMattermostThreadStore) ListMattermostUsers(string) ([]cache.MattermostUser, error) {
+	return s.users, s.userErr
+}
+
+func (s *fakeMattermostThreadStore) UpsertMattermostHistoryContext(context.Context, string, []cache.MattermostPost, []cache.MattermostUser) error {
+	return s.writeErr
 }
 
 func TestMattermostThreadReadCachedReturnsRootFirstChronologicalMessages(t *testing.T) {
@@ -173,6 +199,145 @@ func TestMattermostThreadFetchPersistsTombstonesAndOmitsThemFromPresentation(t *
 			}
 			if got := historyIDs(cached); !reflect.DeepEqual(got, test.wantIDs) {
 				t.Fatalf("cached ids=%v want %v", got, test.wantIDs)
+			}
+		})
+	}
+}
+
+func TestMattermostThreadFetchReturnsMergedCacheStateAfterPersistence(t *testing.T) {
+	db := setupMattermostHistoryDB(t)
+	if err := db.UpsertMattermostHistory("s1", []cache.MattermostPost{
+		{ID: "root", ChannelID: "c1", UserID: "u1", Text: "newer cached edit", CreatedAt: 10, UpdatedAt: 50, EditedAt: 50},
+		{ID: "reply", ChannelID: "c1", UserID: "u2", RootID: "root", Text: "deleted concurrently", CreatedAt: 20, DeletedAt: 60},
+	}, []cache.MattermostUser{
+		{ID: "u1", Nickname: "Cached Root"},
+		{ID: "u2", Nickname: "Cached Reply"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeMattermostThreadClient{page: mattermost.MessagePage{Messages: []mattermost.Message{
+		{ID: "reply", ChannelID: "c1", UserID: "u2", RootID: "root", Text: "stale live reply", CreatedAt: 20, UpdatedAt: 30},
+		{ID: "root", ChannelID: "c1", UserID: "u1", Text: "stale live root", CreatedAt: 10, UpdatedAt: 30},
+	}}}
+
+	messages, err := NewMattermostThreadService("s1", client, db).Fetch(context.Background(), "c1", "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := historyIDs(messages), []string{"root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids=%v want %v", got, want)
+	}
+	if messages[0].Message.Text != "newer cached edit" || messages[0].Message.UpdatedAt != 50 || messages[0].UserName != "Cached Root" {
+		t.Fatalf("root=%#v", messages[0])
+	}
+}
+
+func TestMattermostThreadFetchRejectsBlankChannelBeforeClientCall(t *testing.T) {
+	for _, channelID := range []string{"", " \t\n "} {
+		t.Run(strings.ReplaceAll(channelID, " ", "space"), func(t *testing.T) {
+			client := &fakeMattermostThreadClient{}
+
+			_, err := NewMattermostThreadService("s1", client, setupMattermostHistoryDB(t)).Fetch(context.Background(), channelID, "root")
+			if err == nil || !strings.Contains(err.Error(), "channel") {
+				t.Fatalf("err=%v want channel validation error", err)
+			}
+			if client.postCalls != 0 {
+				t.Fatalf("post calls=%d want 0", client.postCalls)
+			}
+		})
+	}
+}
+
+func TestMattermostThreadFetchReturnsControlledErrorWhenClientUnavailable(t *testing.T) {
+	_, err := NewMattermostThreadService("s1", nil, setupMattermostHistoryDB(t)).Fetch(context.Background(), "c1", "root")
+	if err == nil || !strings.Contains(err.Error(), "client unavailable") {
+		t.Fatalf("err=%v want client unavailable", err)
+	}
+}
+
+func TestMattermostThreadDependencyErrorsIncludeOperationContext(t *testing.T) {
+	sentinel := errors.New("sentinel")
+	rootPage := mattermost.MessagePage{Messages: []mattermost.Message{{ID: "root", ChannelID: "c1", CreatedAt: 10}}}
+	tests := []struct {
+		name     string
+		run      func() error
+		wantText string
+		wantErr  error
+	}{
+		{
+			name: "read cached posts",
+			run: func() error {
+				_, err := NewMattermostThreadService("s1", nil, &fakeMattermostThreadStore{postErr: sentinel}).ReadCached("c1", "root")
+				return err
+			},
+			wantText: "list cached Mattermost thread posts",
+			wantErr:  sentinel,
+		},
+		{
+			name: "read cached users",
+			run: func() error {
+				_, err := NewMattermostThreadService("s1", nil, &fakeMattermostThreadStore{userErr: sentinel}).ReadCached("c1", "root")
+				return err
+			},
+			wantText: "list cached Mattermost thread users",
+			wantErr:  sentinel,
+		},
+		{
+			name: "fetch thread",
+			run: func() error {
+				_, err := NewMattermostThreadService("s1", &fakeMattermostThreadClient{postErr: sentinel}, &fakeMattermostThreadStore{}).Fetch(context.Background(), "c1", "root")
+				return err
+			},
+			wantText: "fetch Mattermost thread",
+			wantErr:  sentinel,
+		},
+		{
+			name: "list users before enrichment",
+			run: func() error {
+				_, err := NewMattermostThreadService("s1", &fakeMattermostThreadClient{page: rootPage}, &fakeMattermostThreadStore{userErr: sentinel}).Fetch(context.Background(), "c1", "root")
+				return err
+			},
+			wantText: "list cached Mattermost thread users",
+			wantErr:  sentinel,
+		},
+		{
+			name: "author lookup cancellation",
+			run: func() error {
+				page := mattermost.MessagePage{Messages: []mattermost.Message{{ID: "root", ChannelID: "c1", UserID: "u1", CreatedAt: 10}}}
+				_, err := NewMattermostThreadService("s1", &fakeMattermostThreadClient{page: page, userErr: context.Canceled}, &fakeMattermostThreadStore{}).Fetch(context.Background(), "c1", "root")
+				return err
+			},
+			wantText: "resolve Mattermost thread authors",
+			wantErr:  context.Canceled,
+		},
+		{
+			name: "persist thread",
+			run: func() error {
+				_, err := NewMattermostThreadService("s1", &fakeMattermostThreadClient{page: rootPage}, &fakeMattermostThreadStore{writeErr: sentinel}).Fetch(context.Background(), "c1", "root")
+				return err
+			},
+			wantText: "cache Mattermost thread",
+			wantErr:  sentinel,
+		},
+		{
+			name: "read merged thread",
+			run: func() error {
+				store := &fakeMattermostThreadStore{}
+				store.posts = nil
+				client := &fakeMattermostThreadClient{page: rootPage}
+				store.postErr = sentinel
+				_, err := NewMattermostThreadService("s1", client, store).Fetch(context.Background(), "c1", "root")
+				return err
+			},
+			wantText: "read merged Mattermost thread",
+			wantErr:  sentinel,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.run()
+			if !errors.Is(err, test.wantErr) || !strings.Contains(err.Error(), test.wantText) {
+				t.Fatalf("err=%v want wrapping %v with %q", err, test.wantErr, test.wantText)
 			}
 		})
 	}
@@ -305,9 +470,18 @@ func TestMattermostThreadFetchPassesCallerContextToStoreWrite(t *testing.T) {
 		_, err := NewMattermostThreadService("s1", client, store).Fetch(ctx, "c1", "root")
 		done <- err
 	}()
-	<-store.writeEntered
+	select {
+	case <-store.writeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for store write")
+	}
 	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("err=%v want context canceled", err)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err=%v want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Fetch completion")
 	}
 }
