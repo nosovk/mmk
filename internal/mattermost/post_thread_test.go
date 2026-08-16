@@ -21,7 +21,7 @@ func TestClient_PostThreadRequestsEndpointAndReconstructsOrder(t *testing.T) {
 		if got, want := r.URL.EscapedPath(), "/api/v4/posts/root-1/thread"; got != want {
 			t.Errorf("path=%q want %q", got, want)
 		}
-		_, _ = io.WriteString(w, `{"order":["root-1","reply-1","reply-1"],"posts":{"root-1":{"channel_id":"channel-1","user_id":"user-1","message":"root","create_at":10},"reply-1":{"id":"reply-1","channel_id":"channel-1","user_id":"user-2","root_id":"root-1","message":"reply","create_at":20},"unordered":{"id":"unordered","channel_id":"channel-1","root_id":"root-1","create_at":30}}}`)
+		_, _ = io.WriteString(w, `{"order":["root-1","reply-1","reply-2","reply-1"],"posts":{"reply-2":{"id":"reply-2","channel_id":"channel-1","user_id":"user-3","root_id":"root-1","message":"second reply","create_at":30},"unordered":{"id":"unordered","channel_id":"channel-1","root_id":"root-1","create_at":40},"root-1":{"channel_id":"channel-1","user_id":"user-1","message":"root","create_at":10},"reply-1":{"id":"reply-1","channel_id":"channel-1","user_id":"user-2","root_id":"root-1","message":"first reply","create_at":20}}}`)
 	}))
 	defer server.Close()
 
@@ -36,9 +36,10 @@ func TestClient_PostThreadRequestsEndpointAndReconstructsOrder(t *testing.T) {
 	want := MessagePage{
 		Messages: []Message{
 			{ID: "root-1", ChannelID: "channel-1", UserID: "user-1", Text: "root", CreatedAt: 10},
-			{ID: "reply-1", ChannelID: "channel-1", UserID: "user-2", RootID: "root-1", Text: "reply", CreatedAt: 20},
+			{ID: "reply-1", ChannelID: "channel-1", UserID: "user-2", RootID: "root-1", Text: "first reply", CreatedAt: 20},
+			{ID: "reply-2", ChannelID: "channel-1", UserID: "user-3", RootID: "root-1", Text: "second reply", CreatedAt: 30},
 		},
-		OrderCount: 3,
+		OrderCount: 4,
 	}
 	if !reflect.DeepEqual(page, want) {
 		t.Fatalf("page=%#v want %#v", page, want)
