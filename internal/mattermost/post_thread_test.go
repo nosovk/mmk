@@ -109,6 +109,24 @@ func TestClient_PostThreadRejectsCrossChannelPostBeforeRoot(t *testing.T) {
 	}
 }
 
+func TestClient_PostThreadRejectsBlankChannelID(t *testing.T) {
+	tests := []struct {
+		name, body string
+	}{
+		{"root", `{"order":["root-1"],"posts":{"root-1":{"id":"root-1","create_at":1}}}`},
+		{"reply", `{"order":["root-1","reply-1"],"posts":{"root-1":{"id":"root-1","channel_id":"channel-1","create_at":1},"reply-1":{"id":"reply-1","root_id":"root-1","create_at":2}}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newJSONMattermostClient(t, tt.body)
+			_, err := client.PostThread(context.Background(), "root-1")
+			if err == nil || !strings.Contains(err.Error(), "channel_id must not be blank") {
+				t.Fatalf("error=%v want blank channel_id error", err)
+			}
+		})
+	}
+}
+
 func TestClient_PostThreadRequiresRootPost(t *testing.T) {
 	client := newJSONMattermostClient(t, `{"order":["root-1"],"posts":{"root-1":{"id":"root-1","channel_id":"channel-1","root_id":"other-root","create_at":1}}}`)
 	_, err := client.PostThread(context.Background(), "root-1")
@@ -150,5 +168,38 @@ func TestClient_PostThreadPreservesContextCancellation(t *testing.T) {
 	_, err = client.PostThread(ctx, "root-1")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v want context.Canceled", err)
+	}
+}
+
+func TestClient_PostThreadResponseValidationRedactsToken(t *testing.T) {
+	const token = "pat-super-secret"
+	tests := []struct {
+		name, body string
+	}{
+		{"ordered ID", `{"order":["pat-super-secret"],"posts":{}}`},
+		{"wire ID", `{"order":["root-1"],"posts":{"root-1":{"id":"pat-super-secret","channel_id":"channel-1","create_at":1}}}`},
+		{"root ID", `{"order":["root-1","reply-1"],"posts":{"root-1":{"id":"root-1","channel_id":"channel-1","create_at":1},"reply-1":{"id":"reply-1","channel_id":"channel-1","root_id":"pat-super-secret","create_at":2}}}`},
+		{"channel ID", `{"order":["root-1","reply-1"],"posts":{"root-1":{"id":"root-1","channel_id":"channel-1","create_at":1},"reply-1":{"id":"reply-1","channel_id":"pat-super-secret","root_id":"root-1","create_at":2}}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(tt.body)),
+				}, nil
+			})}
+			client, err := NewClient("https://chat.example.com", token, WithHTTPClient(httpClient))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.PostThread(context.Background(), "root-1")
+			if err == nil {
+				t.Fatal("PostThread accepted invalid response")
+			}
+			assertErrorChainDoesNotContain(t, err, token)
+			assertStringsDoNotContain(t, token, fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err))
+		})
 	}
 }

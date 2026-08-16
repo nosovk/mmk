@@ -457,7 +457,14 @@ func (c *Client) PostThread(ctx context.Context, rootPostID string) (MessagePage
 	if err := c.do(ctx, http.MethodGet, endpoint, nil, &wire); err != nil {
 		return MessagePage{}, err
 	}
+	page, err := validatePostThreadResponse(rootPostID, wire)
+	if err != nil {
+		return MessagePage{}, redactError("validate Mattermost thread", err, c.token)
+	}
+	return page, nil
+}
 
+func validatePostThreadResponse(rootPostID string, wire postListResponse) (MessagePage, error) {
 	messages := make([]Message, 0, len(wire.Order))
 	seen := make(map[string]struct{}, len(wire.Order))
 	rootPost, rootExists := wire.Posts[rootPostID]
@@ -481,6 +488,9 @@ func (c *Client) PostThread(ctx context.Context, rootPostID string) (MessagePage
 		}
 		if post.CreatedAt <= 0 {
 			return MessagePage{}, fmt.Errorf("Mattermost post %q create_at must be positive", orderedID)
+		}
+		if strings.TrimSpace(post.ChannelID) == "" {
+			return MessagePage{}, fmt.Errorf("Mattermost post %q channel_id must not be blank", orderedID)
 		}
 		if orderedID == rootPostID {
 			if post.RootID != "" {
