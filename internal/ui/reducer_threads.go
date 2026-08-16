@@ -96,11 +96,11 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		channelID := a.threadPanel.ChannelID()
 		parentMsg := a.threadPanel.ParentMsg()
-		// Permalink-opened threads start with a stub parent (TS only).
-		// The fetch that produced this msg also wrote the full thread
-		// to cache — backfill the parent row from there.
-		if parentMsg.Text == "" {
-			if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS)); len(cached) > 0 && cached[0].Text != "" {
+		// Reply/permalink opens start with an identity-only root stub. The
+		// fetch that produced this msg also wrote the full thread to cache,
+		// so replace only an actual stub with matching authoritative metadata.
+		if isThreadParentStub(parentMsg, m.ThreadTS) {
+			if cached := a.threads.CacheRead(ids.ChannelID(channelID), ids.ThreadTS(m.ThreadTS)); len(cached) > 0 && cached[0].MessageID() == m.ThreadTS && !isThreadParentStub(cached[0], m.ThreadTS) {
 				parentMsg = cached[0]
 			}
 		}
@@ -280,4 +280,29 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}, true
 	}
 	return nil, false
+}
+
+func isThreadParentStub(msg messages.MessageItem, rootID string) bool {
+	if rootID == "" || msg.MessageID() != rootID {
+		return false
+	}
+	return msg.CorrelationID == "" &&
+		msg.FailureReason == "" &&
+		msg.DeliveryServerID == "" &&
+		msg.DeliveryChannelID == "" &&
+		msg.DeliveryGeneration == 0 &&
+		msg.CreatedAt == 0 &&
+		msg.RootID == "" &&
+		msg.UserName == "" &&
+		msg.UserID == "" &&
+		msg.Text == "" &&
+		msg.Timestamp == "" &&
+		msg.DateStr == "" &&
+		msg.ReplyCount == 0 &&
+		len(msg.Reactions) == 0 &&
+		len(msg.Attachments) == 0 &&
+		!msg.IsEdited &&
+		msg.Subtype == "" &&
+		len(msg.Blocks) == 0 &&
+		len(msg.LegacyAttachments) == 0
 }

@@ -574,6 +574,16 @@ func TestThread_LegacyTextFallback_WhenImageContextOff(t *testing.T) {
 	}
 }
 
+func TestBlockkitContextUsesProviderNeutralMessageID(t *testing.T) {
+	m := New()
+	m.SetThread(messages.MessageItem{ID: "root-post-1"}, nil, "channel-1", "root-post-1")
+
+	ctx := m.blockkitContext(messages.MessageItem{ID: "reply-post-1"}, nil, nil)
+	if ctx.MessageTS != "reply-post-1" {
+		t.Fatalf("blockkit message identity = %q, want reply-post-1", ctx.MessageTS)
+	}
+}
+
 func TestHasReply(t *testing.T) {
 	m := New()
 

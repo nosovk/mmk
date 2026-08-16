@@ -241,6 +241,50 @@ func TestMattermostThreadReplyOpensByRootMessageID(t *testing.T) {
 	}
 }
 
+func TestMattermostThreadReplyBackfillsAuthoritativeEmptyTextRoot(t *testing.T) {
+	a := NewApp()
+	a.features = MattermostTask14Features()
+	a.activeChannelID = "channel-1"
+	selectedReply := messages.MessageItem{
+		ID:     "reply-post-1",
+		RootID: "root-post-1",
+		UserID: "user-2",
+		Text:   "reply",
+	}
+	a.messagepane.SetMessages([]messages.MessageItem{selectedReply})
+	authoritativeRoot := messages.MessageItem{
+		ID:        "root-post-1",
+		UserID:    "user-1",
+		UserName:  "alice",
+		CreatedAt: 1_723_456_789_000,
+		Timestamp: "12:34 PM",
+		Text:      "",
+	}
+	a.SetThreadService(NewThreadService(ThreadServiceFuncs{
+		CacheRead: func(_ ids.ChannelID, _ ids.ThreadTS) []messages.MessageItem {
+			return []messages.MessageItem{authoritativeRoot, selectedReply}
+		},
+		Fetch: func(_ ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+			return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: []messages.MessageItem{selectedReply}}
+		},
+	}))
+
+	cmd := a.openThreadForSelectedMessage()
+	if cmd == nil {
+		t.Fatal("Mattermost reply should open its root thread")
+	}
+	if got := a.threadPanel.ParentMsg(); got.ID != "root-post-1" || got.UserID != "" {
+		t.Fatalf("initial parent = %#v, want metadata-less root stub", got)
+	}
+	for _, msg := range drainBatch(cmd) {
+		_, _ = a.Update(msg)
+	}
+
+	if got := a.threadPanel.ParentMsg(); got.ID != authoritativeRoot.ID || got.UserID != authoritativeRoot.UserID || got.UserName != authoritativeRoot.UserName || got.CreatedAt != authoritativeRoot.CreatedAt || got.Timestamp != authoritativeRoot.Timestamp || got.Text != "" {
+		t.Fatalf("loaded parent = %#v, want authoritative empty-text root %#v", got, authoritativeRoot)
+	}
+}
+
 func TestSlackThreadReplyStillUsesThreadTSRootIdentity(t *testing.T) {
 	a := NewApp()
 	a.activeChannelID = "C1"

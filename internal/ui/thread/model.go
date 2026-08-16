@@ -1852,7 +1852,7 @@ func (m *Model) blockkitContext(msg messages.MessageItem, userNames, channelName
 		MaxRows:     imgCtx.MaxRows,
 		MaxCols:     imgCtx.MaxCols,
 		UserNames:   userNames,
-		MessageTS:   msg.TS,
+		MessageTS:   msg.MessageID(),
 		Channel:     m.channelID,
 		RenderText: func(s string, un map[string]string) string {
 			return messages.RenderSlackMarkdownWith(s, messages.RenderSlackMarkdownOpts{
@@ -2081,7 +2081,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 				Name:   att.Name,
 				URL:    att.URL,
 				Thumbs: imgThumbs,
-			}, m.channelID, msg.TS, contentWidth, 0 /* baseRow */, attIdx, 0 /* contentColBase */)
+			}, m.channelID, msg.MessageID(), contentWidth, 0 /* baseRow */, attIdx, 0 /* contentColBase */)
 			blocks = append(blocks, strings.Join(res.Lines, "\n"))
 			flushes = append(flushes, res.Flushes...)
 			attachmentLineCount += len(res.Lines)
