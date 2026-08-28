@@ -109,7 +109,7 @@ func TestMattermostUISendConvertsAuthoritativeMessageAndCapturedUser(t *testing.
 
 	got := (mattermostUISendService{ctx: context.Background(), startup: startup}).Send(context.Background(), request)
 
-	want := messages.MessageItem{ID: "opaque-post-id", CorrelationID: "opaque-correlation/id:1", CreatedAt: 1234, RootID: "root-1", Format: messages.FormatMattermostPlain, UserID: "u1", UserName: "Captured Name", Text: "server text", ReplyCount: 9, IsEdited: true}
+	want := messages.MessageItem{ID: "opaque-post-id", CorrelationID: "opaque-correlation/id:1", CreatedAt: 1234, RootID: "root-1", UserID: "u1", UserName: "Captured Name", Text: "server text", ReplyCount: 9, IsEdited: true}
 	sent, ok := got.(ui.MattermostMessageSentMsg)
 	if !ok || !reflect.DeepEqual(sent.Request, request) || !reflect.DeepEqual(sent.Message, want) {
 		t.Fatalf("message=%#v want request=%#v item=%#v", got, request, want)

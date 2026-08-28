@@ -48,8 +48,7 @@ type ChannelItem struct {
 	// Slack's muted_channels user pref). Muted channels render with a
 	// dimmer foreground and suppress their unread dot; they also do
 	// not contribute to the aggregate unread badges on collapsed
-	// section headers. Sourced from service.MuteStore in
-	// buildChannelItem.
+	// section headers.
 	IsMuted bool
 }
 
@@ -1497,8 +1496,7 @@ func (m *Model) sectionDisplayMeta(sectionKey string) (name, emoji string) {
 				if name == "" {
 					// Built-in sections Slack sends without a user-set
 					// name need a friendly fallback. Today only "stars"
-					// reaches this branch (other unnamed system types
-					// are filtered by SectionStore.includeInSidebar).
+					// reaches this branch.
 					if meta.Type == "stars" {
 						name = "Starred"
 					} else {

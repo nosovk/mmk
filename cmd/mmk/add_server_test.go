@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -10,20 +11,45 @@ import (
 	"github.com/nosovk/mmk/internal/config"
 )
 
-func TestParseTopLevelCommandRecognizesAddServerOnlyWithoutPATArgs(t *testing.T) {
-	command, err := parseTopLevelCommand([]string{"mmk", "--add-server"})
-	if err != nil || command != commandAddServer {
-		t.Fatalf("command = %q, err = %v", command, err)
+func TestParseTopLevelCommandRecognizesSupportedCommands(t *testing.T) {
+	tests := []struct {
+		args []string
+		want topLevelCommand
+	}{
+		{[]string{"mmk"}, commandRun},
+		{[]string{"mmk", "--add-server"}, commandAddServer},
+		{[]string{"mmk", "--version"}, commandVersion},
+		{[]string{"mmk", "--help"}, commandHelp},
 	}
+	for _, test := range tests {
+		command, err := parseTopLevelCommand(test.args)
+		if err != nil || command != test.want {
+			t.Errorf("parseTopLevelCommand(%q) = %q, %v; want %q", test.args, command, err, test.want)
+		}
+	}
+
 	if _, err := parseTopLevelCommand([]string{"mmk", "--add-server", "pat-must-not-be-argv"}); err == nil {
 		t.Fatal("add-server accepted a PAT-shaped positional argument")
 	}
+	if _, err := parseTopLevelCommand([]string{"mmk", "--add-workspace"}); err == nil {
+		t.Fatal("removed Slack command was accepted")
+	}
+	for _, alias := range []string{"-v", "version", "-h", "help"} {
+		if _, err := parseTopLevelCommand([]string{"mmk", alias}); err == nil {
+			t.Errorf("unsupported alias %q was accepted", alias)
+		}
+	}
 }
 
-func TestHelpExposesAddServer(t *testing.T) {
+func TestHelpIsMattermostOnly(t *testing.T) {
 	help := helpText("test")
 	if !strings.Contains(help, "mmk --add-server") || !strings.Contains(help, "Mattermost") {
 		t.Fatalf("help missing add-server:\n%s", help)
+	}
+	for _, forbidden := range []string{"Slack", "workspace", "--remint", "--dump-", "--diagnostic"} {
+		if strings.Contains(help, forbidden) {
+			t.Fatalf("help contains removed Slack surface %q:\n%s", forbidden, help)
+		}
 	}
 }
 
@@ -89,7 +115,7 @@ func TestSaveMattermostRegistryUsesDedicatedPathsAndNeverTouchesConfig(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
 	}
 	if _, err := os.Stat(lockPath); err != nil {

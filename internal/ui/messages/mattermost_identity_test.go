@@ -50,9 +50,17 @@ func TestMattermostPlainRendererPreservesLiteralTextAndStripsControls(t *testing
 	}
 }
 
+func TestDefaultMessageRenderingIsLiteralMattermostText(t *testing.T) {
+	m := New([]MessageItem{{ID: "p1", UserName: "alice", Text: "*literal* <https://example.com|label>"}}, "general")
+	out := ansi.Strip(m.View(10, 80))
+	if !strings.Contains(out, "*literal* <https://example.com|label>") {
+		t.Fatalf("default message text was interpreted instead of rendered literally: %q", out)
+	}
+}
+
 func TestMessageRendererSanitizesRemoteUsernameControls(t *testing.T) {
 	name := "Al\x1b[31mice\x1b]8;;https://evil.example\x07link\x1b]8;;\x1b\\ bell\x07 esc\x1b c1\u009b31m"
-	m := New([]MessageItem{{ID: "p1", UserName: name, Text: "body", Format: FormatMattermostPlain}}, "general")
+	m := New([]MessageItem{{ID: "p1", UserName: name, Text: "body"}}, "general")
 	out := m.View(10, 60)
 	plain := ansi.Strip(out)
 	if !strings.Contains(plain, "Alicelink bell esc131m") {

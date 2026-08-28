@@ -46,56 +46,20 @@ func TestBuildStandardEmojiURL(t *testing.T) {
 	}
 }
 
-func TestCodepointsForShortcode_Builtin(t *testing.T) {
-	cases := []struct {
-		name string
-		want []rune // expected codepoints
-	}{
-		{"thumbsup", []rune{0x1F44D}},
-		{"heart", []rune{0x2764, 0xFE0F}},
-		{"male-astronaut", []rune{0x1F468, 0x200D, 0x1F680}},
-		{"warning", []rune{0x26A0, 0xFE0F}},
-		{"fire", []rune{0x1F525}},
-	}
-	for _, c := range cases {
-		got, ok := CodepointsForShortcode(c.name)
-		if !ok {
-			t.Errorf("CodepointsForShortcode(%q): ok=false, want a standard-emoji hit", c.name)
-			continue
-		}
-		if !runesEqual(got, c.want) {
-			t.Errorf("CodepointsForShortcode(%q) = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
 func TestCodepointsForShortcode_Unknown(t *testing.T) {
 	if _, ok := CodepointsForShortcode("definitely_not_an_emoji_name_xyz"); ok {
 		t.Errorf("CodepointsForShortcode(unknown): ok=true, want false")
 	}
 }
 
-func runesEqual(a, b []rune) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func TestBuildCustomEmojiURL(t *testing.T) {
 	customs := map[string]string{
-		"party_parrot": "https://emoji.slack-edge.com/T01/party_parrot/abc.gif",
-		"company_logo": "https://emoji.slack-edge.com/T01/company_logo/def.png",
-		"shipit":       "alias:rocket",       // alias to a built-in
+		"party_parrot": "https://emoji.example.com/party_parrot.gif",
+		"company_logo": "https://emoji.example.com/company_logo.png",
 		"yay":          "alias:party_parrot", // alias to a custom
 		"chain_a":      "alias:chain_b",
 		"chain_b":      "alias:chain_c",
-		"chain_c":      "https://emoji.slack-edge.com/T01/chain_c/xyz.png",
+		"chain_c":      "https://emoji.example.com/chain_c.png",
 		"loop_a":       "alias:loop_b",
 		"loop_b":       "alias:loop_a",
 	}
@@ -106,18 +70,14 @@ func TestBuildCustomEmojiURL(t *testing.T) {
 		wantOK  bool
 	}{
 		// Direct custom: URL returned verbatim.
-		{"party_parrot", "https://emoji.slack-edge.com/T01/party_parrot/abc.gif", true},
-		{"company_logo", "https://emoji.slack-edge.com/T01/company_logo/def.png", true},
-
-		// alias:<builtin>: resolves to the standard emoji URL.
-		// rocket = U+1F680 = 1f680.png
-		{"shipit", CDNBaseURL + "1f680.png", true},
+		{"party_parrot", "https://emoji.example.com/party_parrot.gif", true},
+		{"company_logo", "https://emoji.example.com/company_logo.png", true},
 
 		// alias:<custom>: resolves through to the custom's URL.
-		{"yay", "https://emoji.slack-edge.com/T01/party_parrot/abc.gif", true},
+		{"yay", "https://emoji.example.com/party_parrot.gif", true},
 
 		// Multi-hop alias chain.
-		{"chain_a", "https://emoji.slack-edge.com/T01/chain_c/xyz.png", true},
+		{"chain_a", "https://emoji.example.com/chain_c.png", true},
 
 		// Alias cycle: detected, returns ok=false.
 		{"loop_a", "", false},
@@ -134,65 +94,10 @@ func TestBuildCustomEmojiURL(t *testing.T) {
 	}
 }
 
-func TestComposeSkinTonedCodepoints(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want []rune
-		ok   bool
-	}{
-		// Slack reaction-API form.
-		{"slack thumbsup tone 3", "thumbsup::skin-tone-3", []rune{0x1F44D, 0x1F3FD}, true},
-		{"slack +1 tone 2", "+1::skin-tone-2", []rune{0x1F44D, 0x1F3FC}, true},
-		// kyokomi form.
-		{"kyokomi wave tone 5", "wave_tone5", []rune{0x1F44B, 0x1F3FF}, true},
-		// No tone suffix.
-		{"no suffix", "thumbsup", nil, false},
-		// Tone out of range.
-		{"slack tone 6", "thumbsup::skin-tone-6", nil, false},
-		// Unknown base.
-		{"unknown base", "definitely_not_an_emoji_xyz_tone3", nil, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, ok := ComposeSkinTonedCodepoints(c.in)
-			if ok != c.ok {
-				t.Errorf("ComposeSkinTonedCodepoints(%q) ok = %v, want %v", c.in, ok, c.ok)
-			}
-			if ok && !runesEqual(got, c.want) {
-				t.Errorf("ComposeSkinTonedCodepoints(%q) = %v, want %v", c.in, got, c.want)
-			}
-		})
-	}
-}
-
-func TestURLForShortcode_SkinTonedFallback(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		// Direct kyokomi hit — uses CodepointsForShortcode first.
-		{"thumbsup_tone3 (kyokomi)", "thumbsup_tone3", CDNBaseURL + "1f44d-1f3fd.png"},
-		// Slack-form fallback via ComposeSkinTonedCodepoints.
-		{"thumbsup slack form", "thumbsup::skin-tone-2", CDNBaseURL + "1f44d-1f3fc.png"},
-		{"+1 slack form (alias)", "+1::skin-tone-3", CDNBaseURL + "1f44d-1f3fd.png"},
-		{"+1_tone3 (kyokomi miss)", "+1_tone3", CDNBaseURL + "1f44d-1f3fd.png"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, ok := URLForShortcode(c.in, nil)
-			if !ok || got != c.want {
-				t.Errorf("URLForShortcode(%q) = (%q, %v), want (%q, true)", c.in, got, ok, c.want)
-			}
-		})
-	}
-}
-
 func TestURLForShortcode(t *testing.T) {
 	customs := map[string]string{
-		"party_parrot": "https://emoji.slack-edge.com/T01/party_parrot/abc.gif",
-		"thumbsup":     "https://emoji.slack-edge.com/T01/our_thumbs/def.png", // workspace override
+		"party_parrot": "https://emoji.example.com/party_parrot.gif",
+		"thumbsup":     "https://emoji.example.com/our_thumbs.png",
 	}
 	cases := []struct {
 		name    string
@@ -200,13 +105,10 @@ func TestURLForShortcode(t *testing.T) {
 		wantOK  bool
 	}{
 		// Workspace custom wins over kyokomi for the same name.
-		{"thumbsup", "https://emoji.slack-edge.com/T01/our_thumbs/def.png", true},
+		{"thumbsup", "https://emoji.example.com/our_thumbs.png", true},
 
 		// Custom-only name.
-		{"party_parrot", "https://emoji.slack-edge.com/T01/party_parrot/abc.gif", true},
-
-		// kyokomi-only name.
-		{"heart", CDNBaseURL + "2764-fe0f.png", true},
+		{"party_parrot", "https://emoji.example.com/party_parrot.gif", true},
 
 		// Unknown.
 		{"never_defined", "", false},

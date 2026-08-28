@@ -21,10 +21,12 @@ import (
 	"github.com/nosovk/mmk/internal/ui/channelfinder"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/sidebar"
+	"github.com/nosovk/mmk/internal/ui/styles"
 	"github.com/nosovk/mmk/internal/ui/workspace"
+	"golang.design/x/clipboard"
 )
 
-func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.DB) error {
+func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.DB, clipboardOK bool, clipboardReader func(clipboard.Format) []byte) error {
 	runCtx, stopRun := context.WithCancel(context.Background())
 	defer stopRun()
 	app := ui.NewApp()
@@ -34,10 +36,14 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	app.SetHistoryRequestsObserver(activeSelection.StoreHistoryRequests)
 	app.SetHelpFooter("Mattermost")
 	app.SetTypingEnabled(false)
-	app.SetThemeItems(nil)
+	configureMattermostThemeItems(app)
 	app.SetThemeOverrides(cfg.Theme)
 	app.SetMouseWheelLines(cfg.Appearance.MouseWheelLines)
 	app.SetSidebarStaleThreshold(0)
+	app.SetClipboardAvailable(clipboardOK)
+	if clipboardReader != nil {
+		app.SetClipboardReader(clipboardReader)
+	}
 
 	var program *tea.Program
 	pending := make([]tea.Msg, 0, len(registry.Servers)*3)
@@ -113,6 +119,14 @@ func runMattermost(registry config.ServerRegistry, cfg config.Config, db *cache.
 	return err
 }
 
+type mattermostThemeApp interface {
+	SetThemeItems([]string)
+}
+
+func configureMattermostThemeItems(app mattermostThemeApp) {
+	app.SetThemeItems(styles.ThemeNames())
+}
+
 func mattermostConnectionStateSender(send func(tea.Msg)) func(ids.ServerID, mattermost.ConnectionState) {
 	return func(serverID ids.ServerID, state mattermost.ConnectionState) {
 		railState := workspace.ItemStateConnecting
@@ -160,20 +174,6 @@ func loadingServers(items []workspace.WorkspaceItem) []ui.LoadingServer {
 		servers[i] = ui.LoadingServer{ID: items[i].ID, Name: items[i].Name}
 	}
 	return servers
-}
-
-type startupModeKind uint8
-
-const (
-	startupSlack startupModeKind = iota
-	startupMattermost
-)
-
-func startupMode(registry config.ServerRegistry) startupModeKind {
-	if len(registry.Servers) > 0 {
-		return startupMattermost
-	}
-	return startupSlack
 }
 
 type mattermostSnapshotStore interface {

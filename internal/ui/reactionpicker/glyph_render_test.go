@@ -23,11 +23,8 @@ import (
 // behind the shortcode fallback, this test fails.
 func TestPickerRendersFireGlyph(t *testing.T) {
 	m := New()
-	m.SetFrecentEmoji([]EmojiEntry{})
+	m.SetFrecentEmoji([]EmojiEntry{{Name: "fire", Unicode: "\U0001F525"}})
 	m.Open("Cxxx", "1.0", nil)
-	for _, ch := range "fire" {
-		m.HandleKey(string(ch))
-	}
 	view := m.View(120)
 	if !strings.Contains(view, "\U0001F525") {
 		t.Errorf("rendered picker does NOT contain 🔥 glyph for :fire: search")
@@ -47,11 +44,8 @@ func TestPickerRendersFireGlyph(t *testing.T) {
 // overlay path was dropping wide-character cells.
 func TestViewOverlayPreservesFireGlyph(t *testing.T) {
 	m := New()
-	m.SetFrecentEmoji([]EmojiEntry{})
+	m.SetFrecentEmoji([]EmojiEntry{{Name: "fire", Unicode: "\U0001F525"}})
 	m.Open("Cxxx", "1.0", nil)
-	for _, ch := range "fire" {
-		m.HandleKey(string(ch))
-	}
 	background := strings.Repeat(" \n", 30)
 	overlaid := m.ViewOverlay(120, 30, background)
 	if !strings.Contains(overlaid, "\U0001F525") {
@@ -71,11 +65,8 @@ func TestViewOverlayPreservesFireGlyph(t *testing.T) {
 // is layout-safe.
 func TestPickerFallsBackForVS16Emoji(t *testing.T) {
 	m := New()
-	m.SetFrecentEmoji([]EmojiEntry{})
+	m.SetFrecentEmoji([]EmojiEntry{{Name: "heart", Unicode: "\u2764\uFE0F"}})
 	m.Open("Cxxx", "1.0", nil)
-	for _, ch := range "heart" {
-		m.HandleKey(string(ch))
-	}
 	view := m.View(120)
 	if !strings.Contains(view, ":heart:") {
 		t.Errorf("rendered picker does NOT contain literal :heart: text for VS16-anchored emoji")
@@ -91,11 +82,8 @@ func TestPickerFallsBackForVS16Emoji(t *testing.T) {
 // the broken-glyph Unicode sequence.
 func TestPickerFallsBackForZWJSequence(t *testing.T) {
 	m := New()
-	m.SetFrecentEmoji([]EmojiEntry{})
+	m.SetFrecentEmoji([]EmojiEntry{{Name: "rainbow-flag", Unicode: "\U0001F3F3\uFE0F\u200D\U0001F308"}})
 	m.Open("Cxxx", "1.0", nil)
-	for _, ch := range "rainbow-f" {
-		m.HandleKey(string(ch))
-	}
 	view := m.View(120)
 	if !strings.Contains(view, ":rainbow-flag:") {
 		t.Errorf("rendered picker does NOT contain literal :rainbow-flag: for ZWJ-sequence emoji")
@@ -132,7 +120,8 @@ func TestViewOverlayPreservesKittyPlacementSGR(t *testing.T) {
 	const wantSGR = "\x1b[38;2;0;0;42m"
 	placement := wantSGR + "\U0010EEEE\u0305\u0305\U0010EEEE\u0305\u0306\x1b[39m"
 
-	thumbURL := slkemoji.CDNBaseURL + "1f44d.png"
+	thumbURL := "https://emoji.example.com/thumbsup.png"
+	customs := map[string]string{"thumbsup": thumbURL}
 	ff := newFakePickerFetcher()
 	ff.setPrerendered(slkemoji.EmojiCacheKey(thumbURL), goimage.Pt(2, 1), imgpkg.Render{
 		Cells: goimage.Pt(2, 1),
@@ -140,11 +129,12 @@ func TestViewOverlayPreservesKittyPlacementSGR(t *testing.T) {
 	})
 
 	m := New()
+	m.SetCustomEmoji(customs)
 	m.Open("C123", "1234.5678", nil)
 	m.SetEmojiContext(EmojiContext{
 		PlaceCtx: slkemoji.PlaceContext{Fetcher: ff},
 		Cells:    2,
-		Customs:  nil,
+		Customs:  customs,
 	})
 
 	for _, ch := range "thumbsup" {

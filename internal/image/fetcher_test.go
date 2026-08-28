@@ -12,19 +12,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/nosovk/mmk/internal/slackhttp"
 )
 
-// TestTryDownload_NoCustomUserAgent verifies two related facts about
-// the image fetcher after the BrowserTransport switch:
-//  1. The fetcher no longer announces itself with the legacy
-//     mmk/inline-image-fetcher User-Agent (which was just as flagable
-//     as Go-http-client/1.1).
-//  2. BrowserTransport correctly *skips* header injection for
-//     non-Slack hosts (the test uses a 127.0.0.1 httptest server),
-//     so the browser UA does not leak to arbitrary destinations.
-func TestTryDownload_NoCustomUserAgent(t *testing.T) {
+func TestTryDownloadUsesInjectedClientWithoutAddingCredentials(t *testing.T) {
 	var gotHeaders http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header.Clone()
@@ -34,10 +24,13 @@ func TestTryDownload_NoCustomUserAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := slackhttp.NewBrowserHTTPClient(nil)
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		req.Header.Set("X-Provider-Auth", "owned-by-provider")
+		return http.DefaultTransport.RoundTrip(req)
+	})}
 	f := &Fetcher{http: client}
 
-	body, _, status, err := f.tryDownload(context.Background(), srv.URL, TeamAuth{})
+	body, _, status, err := f.tryDownload(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("tryDownload: %v", err)
 	}
@@ -48,16 +41,49 @@ func TestTryDownload_NoCustomUserAgent(t *testing.T) {
 		t.Fatalf("body = %q", body)
 	}
 
-	// 127.0.0.1 is NOT a Slack host, so BrowserTransport correctly skips
-	// header injection. This confirms host-scoping is working.
-	if ua := gotHeaders.Get("User-Agent"); strings.HasPrefix(ua, "Mozilla/5.0") {
-		t.Errorf("browser UA leaked to non-Slack host: %q", ua)
+	if got := gotHeaders.Get("X-Provider-Auth"); got != "owned-by-provider" {
+		t.Errorf("provider-owned auth header = %q", got)
 	}
-	// The old explicit mmk-specific UA must be gone — the fetcher no
-	// longer sets one. Go's default ("Go-http-client/1.1") is the
-	// expected fallback when no transport injects one.
+	if got := gotHeaders.Get("Authorization"); got != "" {
+		t.Errorf("fetcher added Authorization header %q", got)
+	}
+	if got := gotHeaders.Get("Cookie"); got != "" {
+		t.Errorf("fetcher added Cookie header %q", got)
+	}
 	if ua := gotHeaders.Get("User-Agent"); strings.Contains(ua, "mmk/inline-image-fetcher") {
 		t.Errorf("legacy mmk-specific UA still present: %q", ua)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestDownloadRetriesRateLimits(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Write([]byte("image-bytes"))
+	}))
+	defer srv.Close()
+
+	f := &Fetcher{http: http.DefaultClient}
+	body, contentType, err := f.download(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	if hits != 2 {
+		t.Fatalf("hits = %d, want 2", hits)
+	}
+	if string(body) != "image-bytes" || contentType != "image/png" {
+		t.Fatalf("download = (%q, %q)", body, contentType)
 	}
 }
 

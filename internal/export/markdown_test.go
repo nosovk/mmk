@@ -59,10 +59,12 @@ func TestThreadToMarkdown_Reactions(t *testing.T) {
 	}
 }
 
-func TestThreadToMarkdown_BoldConverted(t *testing.T) {
-	parent := messages.MessageItem{UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "*important*"}
+func TestThreadToMarkdown_PreservesMattermostCommonMark(t *testing.T) {
+	body := "**important** See [runbook](https://mattermost.example/runbook) and ask @alice."
+	parent := messages.MessageItem{UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: body}
 	got := ThreadToMarkdown(parent, nil, nil, nil)
-	if !strings.Contains(got, "**important**") {
-		t.Errorf("bold not converted, got:\n%s", got)
+	want := "**alice** — 2026-05-18 3:04 PM\n" + body + "\n"
+	if got != want {
+		t.Fatalf("saved Mattermost thread changed CommonMark:\n got %q\nwant %q", got, want)
 	}
 }

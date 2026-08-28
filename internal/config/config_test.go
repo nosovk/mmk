@@ -670,52 +670,6 @@ team_id = "T03QQQRRR"
 	}
 }
 
-func TestEffectiveUseSlackSections_DefaultTrue(t *testing.T) {
-	cfg := Config{}
-	if !cfg.EffectiveUseSlackSections("T1") {
-		t.Errorf("default should be true")
-	}
-}
-
-func TestEffectiveUseSlackSections_GlobalFalse(t *testing.T) {
-	f := false
-	cfg := Config{General: General{UseSlackSections: &f}}
-	if cfg.EffectiveUseSlackSections("T1") {
-		t.Errorf("global=false should disable")
-	}
-}
-
-func TestEffectiveUseSlackSections_WorkspaceOverride(t *testing.T) {
-	tr, fa := true, false
-	// Global=true (default), workspace=false → false
-	cfg := Config{
-		Workspaces: map[string]Workspace{
-			"work": {TeamID: "T1", UseSlackSections: &fa},
-		},
-	}
-	if cfg.EffectiveUseSlackSections("T1") {
-		t.Errorf("workspace override (false) should win over global (true)")
-	}
-	// Global=false, workspace=true → true
-	cfg2 := Config{
-		General: General{UseSlackSections: &fa},
-		Workspaces: map[string]Workspace{
-			"work": {TeamID: "T1", UseSlackSections: &tr},
-		},
-	}
-	if !cfg2.EffectiveUseSlackSections("T1") {
-		t.Errorf("workspace override (true) should win over global (false)")
-	}
-}
-
-func TestEffectiveUseSlackSections_UnknownTeamUsesGlobal(t *testing.T) {
-	f := false
-	cfg := Config{General: General{UseSlackSections: &f}}
-	if cfg.EffectiveUseSlackSections("T_UNKNOWN") {
-		t.Errorf("unknown team should fall through to global=false")
-	}
-}
-
 func TestMatchSectionAndOrder_ExplicitOrder(t *testing.T) {
 	c := Config{
 		Sections: map[string]SectionDef{
@@ -754,9 +708,7 @@ func TestMatchSectionAndOrder_GlobPattern(t *testing.T) {
 
 func TestMatchSectionAndOrder_NonNumericSuffixTreatedAsLiteral(t *testing.T) {
 	// "weird:abc" — suffix after colon is not an integer. Whole thing
-	// is the pattern; order defaults to 0. Slack channel names can't
-	// contain colons, so this match will only succeed if a user
-	// literally configures such a pattern; we don't error on it.
+	// is the pattern; order defaults to 0.
 	c := Config{
 		Sections: map[string]SectionDef{
 			"Misc": {Channels: []string{"weird:abc"}, Order: 1},
@@ -816,48 +768,5 @@ func TestMatchSectionAndOrder_WorkspaceOverride(t *testing.T) {
 	// Global is shadowed for T01.
 	if section, _ := c.MatchSectionAndOrder("T01", "eng-foo"); section != "" {
 		t.Errorf(`MatchSectionAndOrder("T01","eng-foo") = %q, want "" (workspace shadows global)`, section)
-	}
-}
-
-func TestWorkspaceVersionTSRoundTrips(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	contents := `
-[workspaces.acme]
-team_id = "T04T4TH8W"
-version_ts = "1785403654"
-`
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	ws, ok := cfg.Workspaces["acme"]
-	if !ok {
-		t.Fatal("workspace acme not loaded")
-	}
-	if ws.VersionTS != "1785403654" {
-		t.Errorf("VersionTS = %q; want 1785403654", ws.VersionTS)
-	}
-}
-
-func TestWorkspaceVersionTSOptional(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	contents := `
-[workspaces.acme]
-team_id = "T04T4TH8W"
-`
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := cfg.Workspaces["acme"].VersionTS; got != "" {
-		t.Errorf("VersionTS = %q; want empty when unset", got)
 	}
 }

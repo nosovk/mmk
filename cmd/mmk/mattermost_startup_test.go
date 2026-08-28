@@ -17,18 +17,30 @@ import (
 	"github.com/nosovk/mmk/internal/mattermost"
 	"github.com/nosovk/mmk/internal/service"
 	"github.com/nosovk/mmk/internal/ui"
+	"github.com/nosovk/mmk/internal/ui/styles"
 	"github.com/nosovk/mmk/internal/ui/workspace"
 )
 
-func TestStartupModeSelectsMattermostForAnyRegisteredServer(t *testing.T) {
-	if startupMode(config.NewServerRegistry()) != startupSlack {
-		t.Fatal("empty registry must preserve Slack fallback")
+func TestMattermostStartupProvidesSelectableThemeItems(t *testing.T) {
+	app := &recordingMattermostThemeApp{}
+
+	configureMattermostThemeItems(app)
+
+	want := styles.ThemeNames()
+	if len(app.items) == 0 {
+		t.Fatal("Mattermost startup provided no selectable themes")
 	}
-	registry := config.NewServerRegistry()
-	registry.Servers = []config.MattermostServer{{ID: "s1"}}
-	if startupMode(registry) != startupMattermost {
-		t.Fatal("non-empty registry must select Mattermost")
+	if strings.Join(app.items, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("theme items = %#v, want %#v", app.items, want)
 	}
+}
+
+type recordingMattermostThemeApp struct {
+	items []string
+}
+
+func (a *recordingMattermostThemeApp) SetThemeItems(items []string) {
+	a.items = append([]string(nil), items...)
 }
 
 func TestMattermostStartupHydratesCacheBeforeBlockedLiveAndIsolatesFailure(t *testing.T) {

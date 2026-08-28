@@ -14,8 +14,6 @@
 package ui
 
 import (
-	"context"
-
 	tea "charm.land/bubbletea/v2"
 	"golang.design/x/clipboard"
 
@@ -40,9 +38,6 @@ type ChannelCacheReadFunc func(channelID ids.ChannelID) []messages.MessageItem
 
 // OlderMessagesFetchFunc is called when the user scrolls to the top of a channel.
 type OlderMessagesFetchFunc func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg
-
-// MessageSendFunc is called when the user sends a message. Returns a tea.Msg with the result.
-type MessageSendFunc func(channelID ids.ChannelID, text string) tea.Msg
 
 // UploadFunc performs an upload of one or more files to a channel
 // (with optional thread). It returns a tea.Cmd whose terminal
@@ -81,9 +76,6 @@ type ThreadCacheReadFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS) []
 // seen. Implementations should be best-effort and non-blocking.
 type ThreadMarkFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS)
 
-// ThreadReplySendFunc is called when the user sends a thread reply.
-type ThreadReplySendFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg
-
 // ThreadsListFetchFunc loads the involved-threads list for a workspace.
 // Returns the resulting tea.Msg (typically ThreadsListLoadedMsg).
 type ThreadsListFetchFunc func(teamID ids.TeamID) tea.Msg
@@ -91,9 +83,6 @@ type ThreadsListFetchFunc func(teamID ids.TeamID) tea.Msg
 type ReactionAddFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error
 type ReactionRemoveFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error
 
-// PermalinkFetchFunc is called to fetch the Slack permalink for a message.
-// For thread replies, pass the reply's ts; Slack returns a thread-aware URL.
-type PermalinkFetchFunc func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error)
 type FrecentLoadFunc func(limit int) []reactionpicker.EmojiEntry
 type FrecentRecordFunc func(emoji string)
 

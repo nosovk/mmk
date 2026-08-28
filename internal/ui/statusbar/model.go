@@ -393,16 +393,6 @@ type CopyFailedMsg struct{}
 // CopiedClearMsg is the follow-up tick that clears the toast.
 type CopiedClearMsg struct{}
 
-// PermalinkCopiedMsg is delivered when a message permalink has been copied to
-// the clipboard. App handles it by setting the toast to "Copied permalink"
-// and scheduling a CopiedClearMsg.
-type PermalinkCopiedMsg struct{}
-
-// PermalinkCopyFailedMsg is delivered when fetching the permalink fails.
-// App handles it by setting the toast to "Failed to copy link" and
-// scheduling a CopiedClearMsg.
-type PermalinkCopyFailedMsg struct{}
-
 // DNDTickMsg is delivered once a minute while DND is active so the
 // status bar can refresh its countdown segment. The App schedules the
 // tick on each StatusChangeMsg and reschedules from the tick handler

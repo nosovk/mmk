@@ -67,7 +67,7 @@ func (s mattermostUIHistoryService) fetch(ctx context.Context, request ui.Histor
 func mattermostHistoryItems(source []service.MattermostHistoryMessage) []messages.MessageItem {
 	out := make([]messages.MessageItem, len(source))
 	for i, item := range source {
-		out[i] = messages.MessageItem{ID: item.Message.ID, CorrelationID: item.Message.CorrelationID, CreatedAt: item.Message.CreatedAt, RootID: item.Message.RootID, Format: messages.FormatMattermostPlain, UserID: item.Message.UserID, UserName: item.UserName, Text: item.Message.Text, ReplyCount: int(item.Message.ReplyCount), IsEdited: item.Message.EditedAt != 0}
+		out[i] = messages.MessageItem{ID: item.Message.ID, CorrelationID: item.Message.CorrelationID, CreatedAt: item.Message.CreatedAt, RootID: item.Message.RootID, UserID: item.Message.UserID, UserName: item.UserName, Text: item.Message.Text, ReplyCount: int(item.Message.ReplyCount), IsEdited: item.Message.EditedAt != 0}
 	}
 	return out
 }

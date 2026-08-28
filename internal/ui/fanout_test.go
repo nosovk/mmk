@@ -8,7 +8,6 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -161,65 +160,6 @@ func TestFanout_MarkReadOnlyOnFocusedSelection(t *testing.T) {
 	}
 	if got := a.winModels[w1].LastReadTS(); got != "5.0" {
 		t.Fatalf("unfocused window's lastReadTS must be unchanged: got %q, want %q", got, "5.0")
-	}
-}
-
-// localPlaceholderTS returns the optimistic "local:" placeholder TS at
-// the tail of m, failing the test if none is there.
-func localPlaceholderTS(t *testing.T, m *messages.Model) string {
-	t.Helper()
-	msgs := m.Messages()
-	if len(msgs) == 0 || !strings.HasPrefix(msgs[len(msgs)-1].TS, "local:") {
-		t.Fatalf("expected a local: placeholder at the tail, got %+v", msgs)
-	}
-	return msgs[len(msgs)-1].TS
-}
-
-func modelHasTS(m *messages.Model, ts string) bool {
-	for _, item := range m.Messages() {
-		if item.TS == ts {
-			return true
-		}
-	}
-	return false
-}
-
-// TestFanout_OptimisticSendSwapsInSiblingWindow pins the optimistic-
-// send lifecycle across same-channel siblings: SendMessageMsg renders
-// the placeholder in BOTH windows, and the MessageSentMsg swap
-// replaces it with the authoritative message in BOTH.
-func TestFanout_OptimisticSendSwapsInSiblingWindow(t *testing.T) {
-	a, w1, w2 := sameChannelApp(t)
-	_, _ = a.Update(SendMessageMsg{ChannelID: "C1", Text: "hello"})
-	ts1 := localPlaceholderTS(t, a.winModels[w1])
-	ts2 := localPlaceholderTS(t, a.winModels[w2])
-	if ts1 != ts2 {
-		t.Fatalf("siblings must share the placeholder localTS: %q vs %q", ts1, ts2)
-	}
-	_, _ = a.Update(MessageSentMsg{ChannelID: "C1", LocalTS: ts1, Message: messages.MessageItem{
-		TS: "100.0", UserID: "ME", UserName: "me", Text: "hello", Timestamp: "1:00 PM",
-	}})
-	for _, w := range []wintree.LeafID{w1, w2} {
-		if modelHasTS(a.winModels[w], ts1) {
-			t.Fatalf("window %v still shows the placeholder after the swap", w)
-		}
-		if !modelHasTS(a.winModels[w], "100.0") {
-			t.Fatalf("window %v missing the authoritative message after the swap", w)
-		}
-	}
-}
-
-// TestFanout_FailedSendRollsBackInSiblingWindow: MessageSendFailedMsg
-// removes the optimistic placeholder from BOTH same-channel windows.
-func TestFanout_FailedSendRollsBackInSiblingWindow(t *testing.T) {
-	a, w1, w2 := sameChannelApp(t)
-	_, _ = a.Update(SendMessageMsg{ChannelID: "C1", Text: "hello"})
-	ts := localPlaceholderTS(t, a.winModels[w1])
-	_, _ = a.Update(MessageSendFailedMsg{ChannelID: "C1", LocalTS: ts, Reason: "boom"})
-	for _, w := range []wintree.LeafID{w1, w2} {
-		if modelHasTS(a.winModels[w], ts) {
-			t.Fatalf("window %v still shows the placeholder after rollback", w)
-		}
 	}
 }
 

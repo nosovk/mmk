@@ -2,7 +2,7 @@
 //
 // Message-lifecycle reducer for App.Update (Phase 4i).
 //
-// Owns the eleven Update arms that cover the inbound and outbound
+// Owns the Mattermost send and remaining message lifecycle arms
 // message lifecycle for channel messages (thread-reply lifecycle
 // lives in reducer_threads.go):
 //
@@ -12,12 +12,8 @@
 //	                           guards), append-to-pane or
 //	                           mark-channel-unread, and threads-list
 //	                           dirty-bump for replies.
-//	SendMessageMsg           - user send: optimistic placeholder +
-//	                           chat.postMessage call.
-//	MessageSentMsg           - send landed: swap placeholder for
-//	                           authoritative message.
-//	MessageSendFailedMsg     - send failed: roll back placeholder
-//	                           + fire SendFailed toast.
+//	SendMessageMsg           - user send: Mattermost optimistic
+//	                           placeholder + scoped send.
 //	EditMessageMsg           - user edit: chat.update call.
 //	MessageEditedMsg         - edit result: leave edit mode + on
 //	                           failure fire EditFailed toast.
@@ -54,7 +50,6 @@ import (
 
 	"github.com/nosovk/mmk/internal/debuglog"
 	"github.com/nosovk/mmk/internal/ids"
-	"github.com/nosovk/mmk/internal/slack/mrkdwn"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/statusbar"
 )
@@ -104,10 +99,7 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if !a.allows(FeatureSend) {
 			return nil, true
 		}
-		if a.features.kind == ContextMattermost {
-			return reduceMattermostSendMessage(a, m), true
-		}
-		return reduceSendMessage(a, m), true
+		return reduceMattermostSendMessage(a, m), true
 
 	case MattermostMessageSentMsg:
 		request := m.Request.HistoryRequest()
@@ -168,52 +160,6 @@ var reduceSend reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return func() tea.Msg { return statusbar.SendFailedMsg{Reason: reason} }, true
-
-	case MessageSentMsg:
-		// The chat.postMessage HTTP response landed. If a
-		// "local:..." placeholder is in the pane from the
-		// instant-display path (SendMessageMsg above), swap it for
-		// the authoritative message. Otherwise -- e.g. test paths
-		// firing MessageSentMsg directly, or the user navigated
-		// away and back between Enter and the HTTP response --
-		// fall back to UpsertSelfSent which appends-or-replaces
-		// by Slack TS.
-		//
-		// UpsertSelfSent is also the fallback for any racing WS
-		// echo that managed to slip past selfSendInFlight: if
-		// AppendMessage stored the echo's normalised text first,
-		// UpsertSelfSent replaces it with our converted-mrkdwn
-		// text. See internal/ui/messages/model.go for both
-		// methods' contracts.
-		if m.Message.TS == "" {
-			return nil, true
-		}
-		a.selfSend.RecordSent(m.Message.TS)
-		for _, mm := range a.modelsForChannel(m.ChannelID) {
-			// Per-model clone: fresh post responses carry no
-			// reactions today, but a shared Reactions array across
-			// sibling models would corrupt on the first in-place
-			// UpdateReaction — clone is the cheap insurance.
-			item := cloneMessageItem(m.Message)
-			if !mm.SwapLocalSent(m.LocalTS, item) {
-				mm.UpsertSelfSent(item)
-			}
-		}
-		return nil, true
-
-	case MessageSendFailedMsg:
-		// The chat.postMessage HTTP call failed; roll back the
-		// optimistic placeholder so the user can see the send
-		// didn't go through. A toast surfaces the reason.
-		if m.LocalTS != "" {
-			for _, mm := range a.modelsForChannel(m.ChannelID) {
-				mm.RemoveLocalSent(m.LocalTS)
-			}
-		}
-		reason := m.Reason
-		return func() tea.Msg {
-			return statusbar.SendFailedMsg{Reason: reason}
-		}, true
 
 	case EditMessageMsg:
 		if !a.allows(FeatureEditDelete) {
@@ -346,7 +292,7 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 		return nil
 	}
 	// Skip the WS echo of our own optimistic add. The corresponding
-	// MessageSentMsg / ThreadReplySentMsg already updated the UI
+	// Mattermost send result messages already updated the UI
 	// and scheduled side effects; redoing them here would
 	// double-render.
 	if a.selfSend.IsSelfSent(m.Message.TS) {
@@ -441,65 +387,6 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 	return nil
 }
 
-// reduceSendMessage handles SendMessageMsg. Extracted to keep the
-// reduceSend dispatch switch readable -- this arm does optimistic
-// placeholder + async chat.postMessage + LocalTS attachment.
-func reduceSendMessage(a *App, m SendMessageMsg) tea.Cmd {
-	// Mark in-flight regardless of whether a sender is wired --
-	// the user's send intent is what controls WS-echo suppression
-	// for self-user messages on this channel.
-	a.selfSend.MarkInFlight(m.ChannelID)
-	// Instant-display: append an optimistic placeholder for the
-	// active channel immediately, before the chat.postMessage HTTP
-	// round-trip. The placeholder carries a "local:<n>" TS so the
-	// MessageSentMsg / MessageSendFailedMsg handler can find and
-	// swap (or remove) it once the HTTP result lands.
-	//
-	// We only render the placeholder in windows viewing the send's
-	// channel (the focused window plus any same-channel siblings —
-	// they must show the optimistic message too). For background
-	// sends (rare -- would require sending while in a different
-	// view) no window matches and we skip the placeholder; the HTTP
-	// response will fall back to UpsertSelfSent's append path.
-	//
-	// Convert the user-typed CommonMark to Slack mrkdwn before
-	// rendering so the placeholder picks up bold / italic / code /
-	// link styling immediately. Without this, "**bold**" would
-	// render literally until the chat.postMessage HTTP response
-	// landed and the swap dropped in Slack's converted form. The
-	// converter is the same one used by client.SendMessage, so the
-	// placeholder and the swapped message render identically for
-	// the common case (no rich_text_block paragraph quirks).
-	localTS := a.selfSend.NextLocalTS()
-	optimisticText, _ := mrkdwn.Convert(m.Text)
-	for _, mm := range a.modelsForChannel(m.ChannelID) {
-		mm.AppendMessage(messages.MessageItem{
-			TS:        localTS,
-			UserID:    a.currentUserID,
-			UserName:  a.userNameFor(a.currentUserID),
-			Text:      optimisticText,
-			Timestamp: a.nowFormatted(),
-		})
-	}
-	messageSvc := a.messageSvc
-	chID, text := ids.ChannelID(m.ChannelID), m.Text
-	return func() tea.Msg {
-		result := messageSvc.Send(chID, text)
-		// Attach LocalTS so the receiving handler can swap or
-		// remove the placeholder. Senders shouldn't need to know
-		// about LocalTS themselves.
-		switch r := result.(type) {
-		case MessageSentMsg:
-			r.LocalTS = localTS
-			return r
-		case MessageSendFailedMsg:
-			r.LocalTS = localTS
-			return r
-		}
-		return result
-	}
-}
-
 func reduceMattermostSendMessage(a *App, m SendMessageMsg) tea.Cmd {
 	request := a.activeHistoryRequest
 	if request.ChannelID == "" || m.ChannelID != request.ChannelID {
@@ -524,7 +411,6 @@ func reduceMattermostSendMessage(a *App, m SendMessageMsg) tea.Cmd {
 		DeliveryChannelID:  request.ChannelID,
 		DeliveryGeneration: request.Generation,
 		CreatedAt:          time.Now().UnixMilli(),
-		Format:             messages.FormatMattermostPlain,
 		UserID:             a.currentUserID,
 		UserName:           a.userNameFor(a.currentUserID),
 		Text:               m.Text,
@@ -552,8 +438,8 @@ func reduceMattermostThreadReply(a *App, m SendThreadReplyMsg) tea.Cmd {
 	a.threadPanel.AddReply(messages.MessageItem{
 		ID: correlationID, CorrelationID: correlationID, RootID: m.RootID,
 		DeliveryState: messages.DeliveryPending, DeliveryServerID: string(request.ServerID), DeliveryChannelID: request.ChannelID, DeliveryGeneration: request.Generation,
-		CreatedAt: time.Now().UnixMilli(), Format: messages.FormatMattermostPlain,
-		UserID: a.currentUserID, UserName: a.userNameFor(a.currentUserID), Text: m.Text, Timestamp: a.nowFormatted(),
+		CreatedAt: time.Now().UnixMilli(),
+		UserID:    a.currentUserID, UserName: a.userNameFor(a.currentUserID), Text: m.Text, Timestamp: a.nowFormatted(),
 	})
 	service := a.mattermostSend
 	return func() tea.Msg { return service.Send(m.Context, requestData) }
@@ -569,7 +455,7 @@ func generateMattermostCorrelationID() (string, error) {
 
 func (a *App) retrySelectedMattermostMessage() tea.Cmd {
 	item, ok := a.messagepane.SelectedMessage()
-	if !ok || item.Format != messages.FormatMattermostPlain || item.DeliveryState != messages.DeliveryFailed || item.CorrelationID == "" {
+	if !ok || item.DeliveryState != messages.DeliveryFailed || item.CorrelationID == "" {
 		return nil
 	}
 	active := a.activeHistoryRequest

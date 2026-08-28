@@ -153,14 +153,14 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case ChannelSelectedMsg:
 		cmd, fetchFired := reduceChannelSelected(a, m)
-		// Permalink completion. !fetchFired means no MessagesLoadedMsg
+		// Workspace-search completion. !fetchFired means no MessagesLoadedMsg
 		// is coming (tier-1 fresh cache, or the upload-guard early
 		// return), so complete authoritatively now — otherwise the
 		// pending nav would leak and could later hijack the selection.
 		// When a fetch WAS fired, defer to the authoritative
 		// MessagesLoadedMsg completion and only do a best-effort select
 		// here.
-		if nav := a.completePendingLinkNav(m.ID, !fetchFired); nav != nil {
+		if nav := a.completePendingMessageNav(m.ID, !fetchFired); nav != nil {
 			cmd = tea.Batch(cmd, nav)
 		}
 		return cmd, true
@@ -206,12 +206,12 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 				mm.SetMessages(cloneMessageItems(m.Messages))
 			}
 		}
-		// Authoritative permalink completion: this is the freshest
+		// Authoritative workspace-search completion: this is the freshest
 		// data we'll get for this channel. Focused-window semantics
-		// (completePendingLinkNav selects in a.messagepane), so keep
+		// (completePendingMessageNav selects in a.messagepane), so keep
 		// the legacy active-channel gate.
 		if m.ChannelID == a.activeChannelID {
-			return a.completePendingLinkNav(m.ChannelID, true), true
+			return a.completePendingMessageNav(m.ChannelID, true), true
 		}
 		return nil, true
 

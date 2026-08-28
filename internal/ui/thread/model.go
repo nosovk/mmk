@@ -16,11 +16,9 @@ import (
 	imgpkg "github.com/nosovk/mmk/internal/image"
 	"github.com/nosovk/mmk/internal/ui/imgrender"
 	"github.com/nosovk/mmk/internal/ui/messages"
-	"github.com/nosovk/mmk/internal/ui/messages/blockkit"
 	"github.com/nosovk/mmk/internal/ui/scrollbar"
 	"github.com/nosovk/mmk/internal/ui/selection"
 	"github.com/nosovk/mmk/internal/ui/styles"
-	"github.com/nosovk/mmk/internal/usergroups"
 )
 
 var thickLeftBorder = lipgloss.Border{Left: "▌"}
@@ -146,7 +144,6 @@ type Model struct {
 	// cache that depends on these maps) to detect changes without hashing.
 	userNamesV    uint64
 	channelNamesV uint64
-	userGroups    map[string]string
 
 	// Mouse selection state. selRange is the user's drag selection.
 	// replyIDToIdx maps provider-neutral reply ID -> entry index in m.cache for O(1)
@@ -555,16 +552,28 @@ func (m *Model) IsEmpty() bool {
 	return m.threadTS == ""
 }
 
-// HasReply returns true when the open thread contains a reply with the
-// given provider-neutral message ID. App.Update uses this to decide whether
-// to invalidate the thread cache on ImageReadyMsg.
+// HasMessage returns true when the open thread contains the root or a reply
+// with the given provider-neutral message ID. App.Update uses this to decide
+// whether to invalidate the thread cache on ImageReadyMsg.
 //
 // Note: replyIDToIdx is built lazily during View() (see the cache-build
-// path), so HasReply may return false for replies whose cache hasn't
+// path), so HasMessage may return false for replies whose cache hasn't
 // been built yet. That's acceptable for v1 — when the user opens a
 // thread, View() runs at least once before any image bytes arrive.
 // Returning false when the index is nil is the safe default; the cache
 // is rebuilt on the next frame anyway.
+func (m *Model) HasMessage(messageID string) bool {
+	if m.parent.MessageID() == messageID {
+		return true
+	}
+	if m.replyIDToIdx == nil {
+		return false
+	}
+	_, ok := m.replyIDToIdx[messageID]
+	return ok
+}
+
+// HasReply reports whether a reply has the given provider-neutral ID.
 func (m *Model) HasReply(messageID string) bool {
 	if m.replyIDToIdx == nil {
 		return false
@@ -690,19 +699,6 @@ func (m *Model) SetAvatarFunc(fn messages.AvatarFunc) {
 func (m *Model) SetUserNames(names map[string]string) {
 	m.userNames = names
 	m.userNamesV++
-	m.InvalidateCache()
-}
-
-// SetUserGroups sets the workspace-scoped usergroup ID -> handle map used
-// to resolve bare <!subteam^SID> mentions in the parent and replies.
-// No-op when the new map matches the current one -- App.SetUserGroups
-// fires on every workspace switch, and busting the render cache for an
-// identical set is pure waste.
-func (m *Model) SetUserGroups(groups map[string]string) {
-	if usergroups.Equal(m.userGroups, groups) {
-		return
-	}
-	m.userGroups = usergroups.Copy(groups)
 	m.InvalidateCache()
 }
 
@@ -1414,11 +1410,9 @@ func (m *Model) View(height, width int) string {
 
 	// Render the parent message once -- it now lives at the top of the
 	// scrollable viewContent (chrome only carries the header + separator).
-	// We discard the parent's image flushes and reaction-hit rects in v1:
-	// parent attachments are rare and threading flushes through the cache
-	// lifecycle adds complexity; reply flushes and hit rects ARE captured
-	// in the per-reply loop below.
-	parentContent, _, _ := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, false)
+	// Parent reaction-hit rects are not interactive, but image flushes must
+	// follow the same side-channel path as reply attachments.
+	parentContent, parentFlushes, _ := m.renderThreadMessage(m.parent, width, m.userNames, m.channelNames, false)
 	parentSeparator := lipgloss.NewStyle().
 		Width(width).
 		Background(styles.Background).
@@ -1428,6 +1422,15 @@ func (m *Model) View(height, width int) string {
 	parentBlockHeight := lipgloss.Height(parentBlock)
 
 	if len(m.replies) == 0 {
+		var kittyFlushBuf bytes.Buffer
+		for _, fl := range parentFlushes {
+			if fl != nil {
+				_ = fl(&kittyFlushBuf)
+			}
+		}
+		if kittyFlushBuf.Len() > 0 {
+			_, _ = imgpkg.KittyOutput.Write(kittyFlushBuf.Bytes())
+		}
 		emptyHeight := replyAreaHeight - parentBlockHeight
 		if emptyHeight < 1 {
 			emptyHeight = 1
@@ -1647,6 +1650,11 @@ func (m *Model) View(height, width int) string {
 		// content are known to get mangled by the bubbletea/lipgloss
 		// renderer, so we bypass the frame buffer.
 		var kittyFlushBuf bytes.Buffer
+		for _, fl := range parentFlushes {
+			if fl != nil {
+				_ = fl(&kittyFlushBuf)
+			}
+		}
 
 		// entryOffsets / totalLines mirror the BORDERED viewContent. Each
 		// reply takes lipgloss.Height(borderedReply) lines (== e.height,
@@ -1852,46 +1860,6 @@ func (m *Model) HitTestReaction(row, col int) (replyIdx int, emoji string, ok bo
 // (mirroring messages.Model). v1: per-block Hit and SixelRows from
 // imgrender are discarded — click-to-preview from a thread reply and
 // inline sixel emission are out of scope.
-// blockkitContext wires the thread pane's host dependencies into a
-// blockkit.Context. Mirrors messages.Model.blockkitContext so Block
-// Kit blocks and legacy attachments render identically in the thread
-// panel and the main message pane.
-func (m *Model) blockkitContext(msg messages.MessageItem, userNames, channelNames map[string]string) blockkit.Context {
-	var imgCtx imgrender.ImageContext
-	if m.imgRenderer != nil {
-		imgCtx = m.imgRenderer.Context()
-	}
-	send := imgCtx.SendMsg
-	return blockkit.Context{
-		Protocol:    imgCtx.Protocol,
-		Fetcher:     imgCtx.Fetcher,
-		KittyRender: imgCtx.KittyRender,
-		CellPixels:  imgCtx.CellPixels,
-		MaxRows:     imgCtx.MaxRows,
-		MaxCols:     imgCtx.MaxCols,
-		UserNames:   userNames,
-		MessageTS:   msg.MessageID(),
-		Channel:     m.channelID,
-		RenderText: func(s string, un map[string]string) string {
-			return messages.RenderSlackMarkdownWith(s, messages.RenderSlackMarkdownOpts{
-				UserNames:    un,
-				ChannelNames: channelNames,
-				UserGroups:   m.userGroups,
-				PlaceCtx:     m.emojiCtx.PlaceCtx,
-				EmojiCells:   m.emojiCtx.Cells,
-				Customs:      m.emojiCtx.Customs,
-				EmojiFlushes: nil,
-			})
-		},
-		WrapText: messages.WordWrap,
-		SendMsg: func(v any) {
-			if send != nil {
-				send(v)
-			}
-		},
-	}
-}
-
 func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNames map[string]string, channelNames map[string]string, isSelected bool) (string, []func(io.Writer) error, []reactionEntryHit) {
 	line := styles.Username.Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
@@ -1905,45 +1873,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 	// image attachments. Walked by the View() loop for visible entries.
 	// Mirrors the messages-pane named-return `flushes` slice.
 	var flushes []func(io.Writer) error
-	bodyOpts := messages.RenderSlackMarkdownOpts{
-		UserNames:    userNames,
-		ChannelNames: channelNames,
-		UserGroups:   m.userGroups,
-		PlaceCtx:     m.emojiCtx.PlaceCtx,
-		EmojiCells:   m.emojiCtx.Cells,
-		Customs:      m.emojiCtx.Customs,
-		EmojiFlushes: &flushes,
-	}
-	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdownWith(messages.MessageTextSource(msg), bodyOpts), contentWidth))
-
-	// Block Kit blocks + legacy attachments render between the body
-	// text and file attachments, mirroring the main message pane's
-	// renderMessagePlain. Image flushes are aggregated into the shared
-	// `flushes` slice; per-image Hit/SixelRows are discarded (v1 thread
-	// rendering, consistent with the file-attachment path below).
-	bkCtx := m.blockkitContext(msg, userNames, channelNames)
-	var bkLines []string
-	bkInteractive := false
-	if len(msg.Blocks) > 0 {
-		res := blockkit.Render(msg.Blocks, bkCtx, contentWidth)
-		bkLines = append(bkLines, res.Lines...)
-		flushes = append(flushes, res.Flushes...)
-		bkInteractive = bkInteractive || res.Interactive
-	}
-	if len(msg.LegacyAttachments) > 0 {
-		res := blockkit.RenderLegacy(msg.LegacyAttachments, bkCtx, contentWidth)
-		bkLines = append(bkLines, res.Lines...)
-		flushes = append(flushes, res.Flushes...)
-		bkInteractive = bkInteractive || res.Interactive
-	}
-	if bkInteractive {
-		bkLines = append(bkLines, styles.Timestamp.Render("↗ open in Slack to interact"))
-	}
-	bkBlock := ""
-	bkLineCount := len(bkLines)
-	if bkLineCount > 0 {
-		bkBlock = "\n" + strings.Join(bkLines, "\n")
-	}
+	text := styles.MessageText.Render(messages.RenderMattermostPlain(msg.Text, contentWidth))
 
 	var reactionLine string
 	// pillSpecs captures one entry per real (non-"+") reaction pill in
@@ -2111,7 +2041,6 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 	// of the reply content (pre-border, pre-tint):
 	//   row 0: username + timestamp line
 	//   rows [1 .. 1+textRows): wrapped body text
-	//   rows [.. +bkLineCount): block kit + legacy attachment content
 	//   rows [.. +attachmentLineCount): file attachments
 	//   rows [reactionRowBase ..): reaction lines
 	// buildCache wraps the content with a thick left border in col 0
@@ -2119,7 +2048,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 	var reactionHits []reactionEntryHit
 	if len(pillSpecs) > 0 && reactionLineCount > 0 {
 		const contentColBase = 1 // thick left border occupies col 0 of linesNormal
-		reactionRowBase := 1 + lipgloss.Height(text) + bkLineCount + attachmentLineCount
+		reactionRowBase := 1 + lipgloss.Height(text) + attachmentLineCount
 		for _, ps := range pillSpecs {
 			row := reactionRowBase + ps.lineIdx
 			reactionHits = append(reactionHits, reactionEntryHit{
@@ -2132,5 +2061,5 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		}
 	}
 
-	return line + "\n" + text + bkBlock + attachmentLines + reactionLine, flushes, reactionHits
+	return line + "\n" + text + attachmentLines + reactionLine, flushes, reactionHits
 }

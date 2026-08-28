@@ -767,7 +767,7 @@ func TestModel_HandleImageReady_PerEntryInvalidation(t *testing.T) {
 //
 // Before the fix HandleAvatarReady did m.cache = nil, forcing
 // buildCache to walk every message and re-run the markdown / wordwrap
-// / blockkit pipeline. Now it mirrors HandleImageReady's per-TS stale
+// attachment pipeline. Now it mirrors HandleImageReady's per-TS stale
 // path: only the affected messages rebuild on the next View(), via
 // partialRebuild.
 func TestModel_HandleAvatarReady_PerUserStaleInvalidation(t *testing.T) {
@@ -1250,15 +1250,16 @@ func TestModel_SetEmojiContext_InvalidatesCache(t *testing.T) {
 	}
 }
 
-func TestModel_RenderMessageWithImageEmoji_WarmCache(t *testing.T) {
+func TestModel_RenderMessagePreservesLiteralMattermostEmojiShortcode(t *testing.T) {
 	emojiutil.SetImageMode(true, 2)
 	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
 
-	thumbURL := emojiutil.CDNBaseURL + "1f44d.png"
+	customURL := "https://mattermost.example/emoji/party_parrot.png"
 	heartURL := emojiutil.CDNBaseURL + "2764-fe0f.png"
+	customs := map[string]string{"party_parrot": customURL}
 
 	ff := newFakePlaceFetcher() // defined in render_test.go
-	ff.setPrerendered(emojiutil.EmojiCacheKey(thumbURL), stdimage.Pt(2, 1), imgpkg.Render{
+	ff.setPrerendered(emojiutil.EmojiCacheKey(customURL), stdimage.Pt(2, 1), imgpkg.Render{
 		Cells: stdimage.Pt(2, 1),
 		Lines: []string{"\U0010EEEE\U0010EEEE"},
 	})
@@ -1271,37 +1272,35 @@ func TestModel_RenderMessageWithImageEmoji_WarmCache(t *testing.T) {
 		TS:        "1.0",
 		UserName:  "alice",
 		UserID:    "U1",
-		Text:      "hi :thumbsup: and \u2764\uFE0F",
+		Text:      "hi :thumbsup: and :party_parrot: and \u2764\uFE0F",
 		Timestamp: "10:30 AM",
 		Reactions: []ReactionItem{
-			{Emoji: "thumbsup", Count: 3, HasReacted: false},
+			{Emoji: "party_parrot", Count: 3, HasReacted: false},
 		},
 	}}
 	m := New(msgs, "general")
 	m.SetEmojiContext(EmojiContext{
 		PlaceCtx: emojiutil.PlaceContext{Fetcher: ff},
 		Cells:    2,
-		Customs:  nil,
+		Customs:  customs,
 	})
 
 	out := m.View(24, 80)
 
-	// The rendered output should contain kitty placeholder runes
-	// (from the warm-path Place calls), NOT the literal ":thumbsup:"
-	// text or the bare unicode glyph.
+	// Reactions may use image rendering, but Mattermost body text remains
+	// literal and must not expand Slack-style emoji shortcodes.
 	if !strings.Contains(out, "\U0010EEEE") {
-		t.Errorf("rendered view does not contain kitty placeholder runes; image mode appears inactive\noutput=%q", out)
+		t.Errorf("rendered reaction does not contain kitty placeholder runes; image mode appears inactive\noutput=%q", out)
 	}
-	if strings.Contains(out, ":thumbsup:") {
-		t.Errorf("rendered view contains literal :thumbsup: text; image mode did not replace it\noutput=%q", out)
+	if !strings.Contains(out, ":thumbsup:") {
+		t.Errorf("rendered view did not preserve literal Mattermost shortcode\noutput=%q", out)
 	}
 }
 
 // TestModel_RenderMessageWithImageEmoji_FlushesThreaded guards against a
 // regression where renderMessagePlain dropped the named-return `flushes`
-// slice (carrying body-text + reaction-pill emoji kitty upload callbacks)
-// in favor of returning only `allFlushes` (carrying blockkit/attachment
-// callbacks). When that happens kitty placeholder runes appear in the
+// slice (carrying reaction-pill emoji kitty upload callbacks) in favor of
+// returning only attachment callbacks. When that happens kitty placeholder runes appear in the
 // rendered output but the image bytes are never transmitted, producing
 // blank cells in the terminal.
 //
@@ -1311,7 +1310,8 @@ func TestModel_RenderMessageWithImageEmoji_FlushesThreaded(t *testing.T) {
 	emojiutil.SetImageMode(true, 2)
 	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
 
-	thumbURL := emojiutil.CDNBaseURL + "1f44d.png"
+	customURL := "https://mattermost.example/emoji/party_parrot.png"
+	customs := map[string]string{"party_parrot": customURL}
 
 	// Sentinel OnFlush makes the produced flush callback observable.
 	// The fake fetcher's prerender memo carries the same callback that
@@ -1320,7 +1320,7 @@ func TestModel_RenderMessageWithImageEmoji_FlushesThreaded(t *testing.T) {
 	// cache and the assertion below will fire.
 	flushCalled := false
 	ff := newFakePlaceFetcher()
-	ff.setPrerendered(emojiutil.EmojiCacheKey(thumbURL), stdimage.Pt(2, 1), imgpkg.Render{
+	ff.setPrerendered(emojiutil.EmojiCacheKey(customURL), stdimage.Pt(2, 1), imgpkg.Render{
 		Cells: stdimage.Pt(2, 1),
 		Lines: []string{"\U0010EEEE\U0010EEEE"},
 		OnFlush: func(_ io.Writer) error {
@@ -1333,17 +1333,17 @@ func TestModel_RenderMessageWithImageEmoji_FlushesThreaded(t *testing.T) {
 		TS:        "1.0",
 		UserName:  "alice",
 		UserID:    "U1",
-		Text:      "hi :thumbsup:",
+		Text:      "hi :party_parrot:",
 		Timestamp: "10:30 AM",
 		Reactions: []ReactionItem{
-			{Emoji: "thumbsup", Count: 3, HasReacted: false},
+			{Emoji: "party_parrot", Count: 3, HasReacted: false},
 		},
 	}}
 	m := New(msgs, "general")
 	m.SetEmojiContext(EmojiContext{
 		PlaceCtx: emojiutil.PlaceContext{Fetcher: ff},
 		Cells:    2,
-		Customs:  nil,
+		Customs:  customs,
 	})
 
 	_ = m.View(24, 80)

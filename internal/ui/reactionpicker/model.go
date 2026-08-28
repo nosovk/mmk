@@ -78,7 +78,7 @@ func (m *Model) HandleEmojiImageReady(url string) {
 	_ = url
 }
 
-// New creates a new reaction picker with the full emoji list.
+// New creates an empty reaction picker. Provider emoji are supplied later.
 func New() *Model {
 	m := &Model{}
 	m.buildEmojiList()
@@ -104,10 +104,9 @@ func (m *Model) buildEmojiList() {
 	})
 }
 
-// SetCustomEmoji rebuilds the searchable emoji list from built-ins plus
-// the active workspace's custom emoji map (as returned by Slack's
-// emoji.list, name -> URL or "alias:target"). Customs shadow built-ins
-// of the same name. Pass nil to reset to built-ins only.
+// SetCustomEmoji rebuilds the searchable emoji list from the active
+// provider's custom emoji map (name -> URL or "alias:target"). Pass nil
+// to reset to an empty list.
 func (m *Model) SetCustomEmoji(customs map[string]string) {
 	entries := slkemoji.BuildEntries(customs)
 	m.allEmoji = make([]EmojiEntry, 0, len(entries))
@@ -286,16 +285,9 @@ func (m *Model) HandleKey(keyStr string) *ReactionResult {
 			return nil
 		}
 		selected := list[m.selected]
-		// Canonicalize to the primary short_name Slack records: the picker
-		// offers iamcal aliases (e.g. both "+1" and "thumbsup" for 👍), and
-		// existing reactions are stored under the canonical name, so
-		// canonicalizing here keeps the wire name and add/remove detection
-		// consistent. Workspace custom emoji shadow standard names and pass
-		// through unchanged.
-		name := slkemoji.CanonicalSlackName(selected.Name, m.emojiCtx.Customs)
 		return &ReactionResult{
-			Emoji:  name,
-			Remove: m.isExistingReaction(name),
+			Emoji:  selected.Name,
+			Remove: m.isExistingReaction(selected.Name),
 		}
 
 	case "up":

@@ -1,8 +1,32 @@
 package ui
 
 import (
+	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
+
+func TestNewAppComposeStandardEmojiAutocompleteSelectsLiteralShortcode(t *testing.T) {
+	a := NewApp()
+	_ = a.compose.Focus()
+	for _, r := range ":roc" {
+		a.compose, _ = a.compose.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+
+	if !a.compose.IsEmojiActive() {
+		t.Fatal("typing :roc in a fresh App did not open emoji autocomplete")
+	}
+	view := a.compose.EmojiPickerView(40)
+	if !strings.Contains(view, ":rocket:") || !strings.Contains(view, "🚀") {
+		t.Fatalf("fresh App emoji picker missing canonical rocket entry: %q", view)
+	}
+
+	a.compose, _ = a.compose.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := a.compose.Value(); got != ":rocket: " {
+		t.Fatalf("selected emoji inserted %q, want literal provider shortcode %q", got, ":rocket: ")
+	}
+}
 
 // TestEmojiImageReady_Debounces guards the coalescing behavior of the
 // EmojiImageReadyMsg reducer arm. On a busy channel with many cold-cache

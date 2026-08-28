@@ -66,7 +66,7 @@ func TestMattermostRealtimeReplyPersistsBeforeAuthoritativeNotification(t *testi
 	}
 	want := ui.MattermostRealtimePostMsg{Request: request, Message: messages.MessageItem{
 		ID: "reply-1", CorrelationID: "corr-1", CreatedAt: 123, RootID: "root-1",
-		Format: messages.FormatMattermostPlain, UserID: "u2", UserName: "Bob Builder",
+		UserID: "u2", UserName: "Bob Builder",
 		Text: "authoritative", ReplyCount: 3, IsEdited: true,
 	}}
 	if !reflect.DeepEqual(got, want) {

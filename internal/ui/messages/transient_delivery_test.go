@@ -40,10 +40,10 @@ func TestReplaceLocalMessageFindsCorrelationOrLocalID(t *testing.T) {
 func TestReplaceLocalMessageCollapsesAuthoritativeRowThatArrivedFirst(t *testing.T) {
 	m := New([]MessageItem{
 		{ID: "local:opaque", CorrelationID: "corr/opaque", DeliveryState: DeliveryPending, Text: "pending"},
-		{ID: "post/opaque", CorrelationID: "corr/opaque", Format: FormatMattermostPlain, Text: "history"},
+		{ID: "post/opaque", CorrelationID: "corr/opaque", Text: "history"},
 	}, "general")
 
-	response := MessageItem{ID: "post/opaque", CorrelationID: "corr/opaque", Format: FormatMattermostPlain, Text: "post response"}
+	response := MessageItem{ID: "post/opaque", CorrelationID: "corr/opaque", Text: "post response"}
 	if !m.ReplaceLocalMessage("corr/opaque", response) {
 		t.Fatal("ReplaceLocalMessage returned false")
 	}
@@ -53,9 +53,9 @@ func TestReplaceLocalMessageCollapsesAuthoritativeRowThatArrivedFirst(t *testing
 }
 
 func TestMattermostCorrelationReconciliationHandlesBothAuthoritativeEventOrders(t *testing.T) {
-	local := MessageItem{ID: "local:opaque", CorrelationID: "corr/opaque", DeliveryState: DeliveryPending, Format: FormatMattermostPlain, Text: "pending"}
-	history := MessageItem{ID: "post/opaque", CorrelationID: "corr/opaque", Format: FormatMattermostPlain, Text: "history"}
-	response := MessageItem{ID: "post/opaque", CorrelationID: "corr/opaque", Format: FormatMattermostPlain, Text: "post response"}
+	local := MessageItem{ID: "local:opaque", CorrelationID: "corr/opaque", DeliveryState: DeliveryPending, Text: "pending"}
+	history := MessageItem{ID: "post/opaque", CorrelationID: "corr/opaque", Text: "history"}
+	response := MessageItem{ID: "post/opaque", CorrelationID: "corr/opaque", Text: "post response"}
 
 	t.Run("history then post response", func(t *testing.T) {
 		m := New([]MessageItem{local}, "general")
@@ -81,8 +81,8 @@ func TestMattermostCorrelationReconciliationHandlesBothAuthoritativeEventOrders(
 }
 
 func TestMattermostPriorSessionAuthoritativeCorrelationDoesNotCollapseNewPendingRow(t *testing.T) {
-	old := MessageItem{ID: "old/post", CorrelationID: "mmk-prior-session", Format: FormatMattermostPlain, Text: "old authoritative"}
-	pending := MessageItem{ID: "mmk-new-session", CorrelationID: "mmk-new-session", DeliveryState: DeliveryPending, Format: FormatMattermostPlain, Text: "new pending"}
+	old := MessageItem{ID: "old/post", CorrelationID: "mmk-prior-session", Text: "old authoritative"}
+	pending := MessageItem{ID: "mmk-new-session", CorrelationID: "mmk-new-session", DeliveryState: DeliveryPending, Text: "new pending"}
 	m := New([]MessageItem{pending}, "general")
 
 	m.ReconcileRecentPage(nil, []string{"old/post"}, nil, []MessageItem{old}, false)
@@ -94,10 +94,10 @@ func TestMattermostPriorSessionAuthoritativeCorrelationDoesNotCollapseNewPending
 
 func TestMattermostAuthoritativePostWithoutCorrelationStillDedupesByPostID(t *testing.T) {
 	m := New([]MessageItem{
-		{ID: "local:opaque", CorrelationID: "corr/opaque", DeliveryState: DeliveryPending, Format: FormatMattermostPlain},
-		{ID: "post/opaque", Format: FormatMattermostPlain, Text: "history without pending id"},
+		{ID: "local:opaque", CorrelationID: "corr/opaque", DeliveryState: DeliveryPending},
+		{ID: "post/opaque", Text: "history without pending id"},
 	}, "general")
-	response := MessageItem{ID: "post/opaque", Format: FormatMattermostPlain, Text: "response without pending id"}
+	response := MessageItem{ID: "post/opaque", Text: "response without pending id"}
 	if !m.ReplaceLocalMessage("corr/opaque", response) {
 		t.Fatal("POST response did not find local correlation")
 	}
@@ -107,10 +107,10 @@ func TestMattermostAuthoritativePostWithoutCorrelationStillDedupesByPostID(t *te
 }
 
 func TestMattermostOlderReconciliationCollapsesTransientByCorrelation(t *testing.T) {
-	local := MessageItem{ID: "local:older", CorrelationID: "corr/older", DeliveryState: DeliveryFailed, Format: FormatMattermostPlain, Text: "failed"}
-	anchor := MessageItem{ID: "anchor/opaque", Format: FormatMattermostPlain}
+	local := MessageItem{ID: "local:older", CorrelationID: "corr/older", DeliveryState: DeliveryFailed, Text: "failed"}
+	anchor := MessageItem{ID: "anchor/opaque"}
 	m := New([]MessageItem{local, anchor}, "general")
-	authoritative := MessageItem{ID: "post/older:opaque", CorrelationID: "corr/older", Format: FormatMattermostPlain, Text: "authoritative older"}
+	authoritative := MessageItem{ID: "post/older:opaque", CorrelationID: "corr/older", Text: "authoritative older"}
 
 	m.ReconcileOlderPage("anchor/opaque", nil, []string{"post/older:opaque"}, nil, []MessageItem{authoritative}, true)
 
@@ -149,7 +149,6 @@ func TestMarkMessageFailedDoesNotDowngradeAuthoritativeSentRow(t *testing.T) {
 		ID:            "opaque/post:id",
 		CorrelationID: "corr/opaque",
 		DeliveryState: DeliverySent,
-		Format:        FormatMattermostPlain,
 		Text:          "authoritative history",
 	}
 	m := New([]MessageItem{authoritative}, "general")
@@ -204,9 +203,8 @@ func TestFindAndUpdateMessageByCorrelationID(t *testing.T) {
 func TestMattermostRowsRenderTransientDeliveryIndicatorsWithoutFailureDetails(t *testing.T) {
 	const secret = "token=super-secret-value"
 	m := New([]MessageItem{
-		{ID: "pending", Format: FormatMattermostPlain, Text: "sending", DeliveryState: DeliveryPending},
-		{ID: "failed", Format: FormatMattermostPlain, Text: "retry me", DeliveryState: DeliveryFailed, FailureReason: secret},
-		{TS: "slack", Format: FormatSlack, Text: "slack pending", DeliveryState: DeliveryPending},
+		{ID: "pending", Text: "sending", DeliveryState: DeliveryPending},
+		{ID: "failed", Text: "retry me", DeliveryState: DeliveryFailed, FailureReason: secret},
 	}, "general")
 
 	out := ansi.Strip(m.View(30, 80))

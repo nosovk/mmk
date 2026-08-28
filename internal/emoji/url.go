@@ -59,11 +59,7 @@ func BuildStandardEmojiURL(codepoints []rune) string {
 // VS16 and ZWJ are returned verbatim and preserved through URL
 // construction (see BuildStandardEmojiURL).
 func CodepointsForShortcode(name string) ([]rune, bool) {
-	u, ok := slackCodeMap[":"+name+":"]
-	if !ok {
-		return nil, false
-	}
-	return []rune(strings.TrimRight(u, " ")), true
+	return nil, false
 }
 
 // customEmojiAliasPrefix marks a Slack custom-emoji alias entry

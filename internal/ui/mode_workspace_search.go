@@ -5,7 +5,7 @@
 // Forwards normalized keys to the searchresults overlay and
 // translates its actions: Submit dispatches the server-side
 // search.messages query via the SearchService, Select closes the
-// modal and navigates to the chosen message via the pendingLinkNav
+// modal and navigates to the chosen message via pendingMessageNav
 // mechanism (FetchAround completes off-buffer targets). Hits in
 // channels the user isn't a member of toast instead of navigating.
 package ui
@@ -38,12 +38,12 @@ func handleWorkspaceSearchMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		if item.ChannelID == a.activeChannelID {
-			a.pendingLinkNav = &pendingLinkNav{
+			a.pendingMessageNav = &pendingMessageNav{
 				channelID: item.ChannelID,
 				messageTS: item.TS,
 				threadTS:  item.ThreadTS,
 			}
-			return a.completePendingLinkNav(a.activeChannelID, true)
+			return a.completePendingMessageNav(a.activeChannelID, true)
 		}
 		// Slack search also returns hits in public channels the user
 		// hasn't joined. A Lookup miss is the not-a-member signal at
@@ -57,7 +57,7 @@ func handleWorkspaceSearchMode(a *App, msg tea.KeyMsg) tea.Cmd {
 				return ToastMsg{Text: "Not a member of #" + chName + " — join via ctrl+t to view"}
 			}
 		}
-		a.pendingLinkNav = &pendingLinkNav{
+		a.pendingMessageNav = &pendingMessageNav{
 			channelID: item.ChannelID,
 			messageTS: item.TS,
 			threadTS:  item.ThreadTS,

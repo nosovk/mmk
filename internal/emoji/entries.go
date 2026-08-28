@@ -19,38 +19,25 @@ const maxAliasHops = 4
 //
 // Name is the shortcode without surrounding colons (e.g. "rocket").
 // Display is a single-grapheme preview cell rendered next to the name.
-// For built-in and alias-resolved emojis this is the Unicode glyph; for
-// image-backed custom emojis it is placeholderGlyph.
+// Provider custom emoji use placeholderGlyph unless they alias a canonical
+// standard emoji with a Unicode preview.
 type EmojiEntry struct {
 	Name    string
 	Display string
 }
 
-// BuildEntries assembles the searchable emoji list from the bundled
-// standard-emoji codemap (iamcal-derived) plus the workspace's custom
-// emoji map (as returned by Slack's emoji.list, name -> URL-or-
-// "alias:target"). The result is deduped (custom shadows built-in) and
-// sorted alphabetically by name.
+// BuildEntries assembles the searchable emoji list from canonical standard
+// emoji and provider-supplied customs. The result is sorted alphabetically by
+// name, with a custom emoji replacing a standard entry of the same name.
 //
-// Pass nil customs for built-ins only.
+// Pass nil customs for the standard list only.
 func BuildEntries(customs map[string]string) []EmojiEntry {
-	codemap := CodeMap()
-	byName := make(map[string]EmojiEntry, len(codemap)+len(customs))
-
-	// Built-ins. CodeMap keys are like ":rocket:"; values are bare
-	// glyphs. TrimSpace is defensive (no trailing space today).
-	for code, glyph := range codemap {
-		name := strings.Trim(code, ":")
-		if name == "" {
-			continue
-		}
-		byName[name] = EmojiEntry{
-			Name:    name,
-			Display: strings.TrimSpace(glyph),
-		}
+	byName := make(map[string]EmojiEntry, len(standardShortcodes)+len(customs))
+	for name, display := range standardShortcodes {
+		byName[name] = EmojiEntry{Name: name, Display: display}
 	}
+	codemap := standardCodeMap()
 
-	// Customs override built-ins of the same name.
 	for name, value := range customs {
 		if name == "" {
 			continue

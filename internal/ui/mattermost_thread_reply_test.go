@@ -31,19 +31,16 @@ func (s *recordingMattermostThreadService) CacheReadScoped(HistoryRequest, ids.T
 	return s.cached
 }
 func (*recordingMattermostThreadService) Mark(ids.ChannelID, ids.ThreadTS, ids.MessageTS) {}
-func (*recordingMattermostThreadService) SendReply(ids.ChannelID, ids.ThreadTS, string) tea.Msg {
-	return nil
-}
-func (*recordingMattermostThreadService) ListFetch(ids.TeamID) tea.Msg         { return nil }
-func (*recordingMattermostThreadService) EnsureSubscriptions(ids.TeamID)       {}
-func (*recordingMattermostThreadService) ChannelLastRead(ids.ChannelID) string { return "" }
+func (*recordingMattermostThreadService) ListFetch(ids.TeamID) tea.Msg                    { return nil }
+func (*recordingMattermostThreadService) EnsureSubscriptions(ids.TeamID)                  {}
+func (*recordingMattermostThreadService) ChannelLastRead(ids.ChannelID) string            { return "" }
 
 func TestMattermostThreadOpenShowsCacheThenAuthoritativeLiveReplies(t *testing.T) {
 	a := newMattermostSendApp(t, &recordingMattermostSendService{})
 	active := a.activeHistoryRequest
-	root := messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain, Text: "root"}
-	cached := messages.MessageItem{ID: "cached-reply", RootID: "root-1", Format: messages.FormatMattermostPlain, Text: "cached"}
-	live := messages.MessageItem{ID: "live-reply", RootID: "root-1", Format: messages.FormatMattermostPlain, Text: "live"}
+	root := messages.MessageItem{ID: "root-1", Text: "root"}
+	cached := messages.MessageItem{ID: "cached-reply", RootID: "root-1", Text: "cached"}
+	live := messages.MessageItem{ID: "live-reply", RootID: "root-1", Text: "live"}
 	service := &recordingMattermostThreadService{cached: []messages.MessageItem{root, cached}, result: ThreadRepliesLoadedMsg{Request: active, ThreadTS: "root-1", Replies: []messages.MessageItem{live}}}
 	a.SetThreadService(service)
 
@@ -76,8 +73,8 @@ func TestMattermostThreadRootOnlySuccessClearsCacheAndFailurePreservesIt(t *test
 		t.Run(tc.name, func(t *testing.T) {
 			a := newMattermostSendApp(t, &recordingMattermostSendService{})
 			active := a.activeHistoryRequest
-			root := messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain}
-			cached := messages.MessageItem{ID: "cached-reply", RootID: "root-1", Format: messages.FormatMattermostPlain}
+			root := messages.MessageItem{ID: "root-1"}
+			cached := messages.MessageItem{ID: "cached-reply", RootID: "root-1"}
 			service := &recordingMattermostThreadService{cached: []messages.MessageItem{root, cached}, result: ThreadRepliesLoadedMsg{Request: active, ThreadTS: "root-1", Replies: tc.replies}}
 			a.SetThreadService(service)
 			msgs := drainBatch(a.openThreadPanel(root, active.ChannelID, "root-1"))
@@ -97,8 +94,8 @@ func TestMattermostThreadRootOnlySuccessClearsCacheAndFailurePreservesIt(t *test
 func TestMattermostScopedLiveFetchHydratesReplyOpenedRootStub(t *testing.T) {
 	a := newMattermostSendApp(t, &recordingMattermostSendService{})
 	active := a.activeHistoryRequest
-	reply := messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain, Text: "reply"}
-	root := messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain, UserID: "u1", UserName: "alice", CreatedAt: 123, Text: "authoritative root"}
+	reply := messages.MessageItem{ID: "reply-1", RootID: "root-1", Text: "reply"}
+	root := messages.MessageItem{ID: "root-1", UserID: "u1", UserName: "alice", CreatedAt: 123, Text: "authoritative root"}
 	service := &recordingMattermostThreadService{
 		cached: []messages.MessageItem{root, reply},
 		result: ThreadRepliesLoadedMsg{Request: active, ThreadTS: "root-1", Replies: []messages.MessageItem{reply}},
@@ -125,7 +122,7 @@ func openMattermostThreadForSend(t *testing.T, service *recordingMattermostSendS
 	a := newMattermostSendApp(t, service)
 	a.SetNowTimestampFormatter(func() string { return "9:41 AM" })
 	a.threadVisible = true
-	a.threadPanel.SetThread(messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain, ReplyCount: 0}, nil, a.activeChannelID, "root-1")
+	a.threadPanel.SetThread(messages.MessageItem{ID: "root-1", ReplyCount: 0}, nil, a.activeChannelID, "root-1")
 	return a
 }
 
@@ -244,7 +241,7 @@ func TestMattermostThreadReplyOptimisticAndExactRequest(t *testing.T) {
 		t.Fatalf("replies=%#v want optimistic reply", replies)
 	}
 	row := replies[0]
-	if row.ID == "" || row.ID != row.CorrelationID || row.TS != "" || row.RootID != "root-1" || row.Text != "**exact Mattermost**" || row.Format != messages.FormatMattermostPlain || row.DeliveryState != messages.DeliveryPending {
+	if row.ID == "" || row.ID != row.CorrelationID || row.TS != "" || row.RootID != "root-1" || row.Text != "**exact Mattermost**" || row.DeliveryState != messages.DeliveryPending {
 		t.Fatalf("optimistic reply=%#v", row)
 	}
 	if row.DeliveryServerID != string(active.ServerID) || row.DeliveryChannelID != active.ChannelID || row.DeliveryGeneration != active.Generation {
@@ -261,13 +258,13 @@ func TestMattermostThreadReplyOptimisticAndExactRequest(t *testing.T) {
 func TestMattermostThreadReplySuccessReplacesOptimisticAndIncrementsRoot(t *testing.T) {
 	service := &recordingMattermostSendService{}
 	a := openMattermostThreadForSend(t, service)
-	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 	active := a.activeHistoryRequest
 	_, cmd := a.Update(mattermostThreadReplyMsg(a, "reply"))
 	correlationID := a.threadPanel.Replies()[0].CorrelationID
 	service.result = MattermostMessageSentMsg{
 		Request: MattermostSendRequest{ServerID: active.ServerID, ChannelID: active.ChannelID, Generation: active.Generation, RootID: "root-1", Text: "reply", CorrelationID: correlationID},
-		Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "authoritative"},
+		Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Text: "authoritative"},
 	}
 
 	_, _ = a.Update(cmd())
@@ -305,8 +302,8 @@ func TestMattermostThreadReplyFailureRemovesMatchingOptimisticAndReportsError(t 
 func TestMattermostThreadFetchPreservesPendingReplyUntilPOSTSuccess(t *testing.T) {
 	service := &recordingMattermostSendService{}
 	a := openMattermostThreadForSend(t, service)
-	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
-	a.threadPanel.AddReply(messages.MessageItem{ID: "stale-authoritative", RootID: "root-1", Format: messages.FormatMattermostPlain})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
+	a.threadPanel.AddReply(messages.MessageItem{ID: "stale-authoritative", RootID: "root-1"})
 	request := a.activeHistoryRequest
 
 	_, sendCmd := a.Update(mattermostThreadReplyMsg(a, "racing reply"))
@@ -317,7 +314,7 @@ func TestMattermostThreadFetchPreservesPendingReplyUntilPOSTSuccess(t *testing.T
 		t.Fatalf("fetch replies=%#v want only preserved pending reply", replies)
 	}
 
-	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "authoritative"}
+	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Text: "authoritative"}
 	service.result = MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", Text: "racing reply", CorrelationID: correlationID}, Message: authoritative}
 	result := sendCmd()
 	_, _ = a.Update(result)
@@ -337,7 +334,7 @@ func TestMattermostThreadFetchDoesNotPreservePendingAlreadyRepresentedAuthoritat
 	request := a.activeHistoryRequest
 	_, _ = a.Update(mattermostThreadReplyMsg(a, "racing reply"))
 	correlationID := a.threadPanel.Replies()[0].CorrelationID
-	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "fetched"}
+	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Text: "fetched"}
 
 	_, _ = a.Update(ThreadRepliesLoadedMsg{Request: request, ThreadTS: "root-1", Replies: []messages.MessageItem{authoritative}})
 	if got := a.threadPanel.Replies(); len(got) != 1 || !reflect.DeepEqual(got[0], authoritative) {
@@ -347,12 +344,12 @@ func TestMattermostThreadFetchDoesNotPreservePendingAlreadyRepresentedAuthoritat
 
 func TestMattermostThreadPOSTSuccessUpsertsWhenFetchRemovedPlaceholder(t *testing.T) {
 	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 	request := a.activeHistoryRequest
 	_, _ = a.Update(mattermostThreadReplyMsg(a, "reply"))
 	correlationID := a.threadPanel.Replies()[0].CorrelationID
 	a.threadPanel.SetThread(a.threadPanel.ParentMsg(), nil, request.ChannelID, "root-1")
-	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain}
+	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID}
 	result := MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", CorrelationID: correlationID}, Message: authoritative}
 
 	_, _ = a.Update(result)
@@ -404,14 +401,14 @@ func TestMattermostThreadResultsAcceptRetainedOriginScopeWithoutMutatingCurrentP
 	for _, failure := range []bool{false, true} {
 		t.Run(map[bool]string{false: "success", true: "failure"}[failure], func(t *testing.T) {
 			a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 			origin := a.activeHistoryRequest
 			_, _ = a.Update(mattermostThreadReplyMsg(a, "retained"))
 			correlationID := a.threadPanel.Replies()[0].CorrelationID
 			w1 := a.focusedWin
 			_ = a.splitWindow(wintree.SplitSideBySide)
 			_, _ = a.Update(ChannelSelectedMsg{ID: "c2", Name: "Two"})
-			a.threadPanel.SetThread(messages.MessageItem{ID: "root-2", Format: messages.FormatMattermostPlain}, []messages.MessageItem{{ID: "current-reply", RootID: "root-2"}}, "c2", "root-2")
+			a.threadPanel.SetThread(messages.MessageItem{ID: "root-2"}, []messages.MessageItem{{ID: "current-reply", RootID: "root-2"}}, "c2", "root-2")
 			before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
 
 			var toast tea.Cmd
@@ -444,7 +441,7 @@ func TestMattermostRetainedThreadResultDoesNotMutateSameChannelRootPanelWithDiff
 			for _, failure := range []bool{false, true} {
 				t.Run(map[bool]string{false: "success", true: "failure"}[failure], func(t *testing.T) {
 					a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-					a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+					a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 					origin := a.activeHistoryRequest
 					_, _ = a.Update(mattermostThreadReplyMsg(a, "origin"))
 					correlationID := a.threadPanel.Replies()[0].CorrelationID
@@ -460,8 +457,8 @@ func TestMattermostRetainedThreadResultDoesNotMutateSameChannelRootPanelWithDiff
 					active := a.newMattermostHistoryScope(serverID, origin.ChannelID)
 					a.mattermostWindowScopes[w2] = active
 					a.setFocusedMattermostScope(active)
-					a.threadPanel.SetThread(messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain}, []messages.MessageItem{{
-						ID: correlationID, CorrelationID: correlationID, RootID: "root-1", Format: messages.FormatMattermostPlain,
+					a.threadPanel.SetThread(messages.MessageItem{ID: "root-1"}, []messages.MessageItem{{
+						ID: correlationID, CorrelationID: correlationID, RootID: "root-1",
 						DeliveryState: messages.DeliveryPending, DeliveryServerID: string(active.request.ServerID), DeliveryChannelID: active.request.ChannelID, DeliveryGeneration: active.request.Generation,
 					}}, origin.ChannelID, "root-1")
 					before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
@@ -551,10 +548,10 @@ func TestMattermostThreadResultIgnoresRetainedUnfocusedScope(t *testing.T) {
 
 func TestMattermostRealtimeReplyRoutesMatchingOpenThreadAndCountsOnce(t *testing.T) {
 	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 	request := a.activeHistoryRequest
 	post := MattermostRealtimePostMsg{Request: request, Message: messages.MessageItem{
-		ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain, Text: "realtime",
+		ID: "reply-1", RootID: "root-1", Text: "realtime",
 	}}
 
 	_, _ = a.Update(post)
@@ -572,11 +569,11 @@ func TestMattermostRealtimeReplySharedScopeUpdatesBothWindowsOnce(t *testing.T) 
 	a := newMattermostSendApp(t, &recordingMattermostSendService{})
 	request := a.activeHistoryRequest
 	w1 := a.focusedWin
-	a.winModels[w1].SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.winModels[w1].SetMessages([]messages.MessageItem{{ID: "root-1"}})
 	_ = a.splitWindow(wintree.SplitSideBySide)
 	w2 := a.focusedWin
 	post := MattermostRealtimePostMsg{Request: request, Message: messages.MessageItem{
-		ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain, Text: "realtime",
+		ID: "reply-1", RootID: "root-1", Text: "realtime",
 	}}
 
 	_, _ = a.Update(post)
@@ -592,10 +589,10 @@ func TestMattermostRealtimeReplySharedScopeUpdatesBothWindowsOnce(t *testing.T) 
 
 func TestMattermostRealtimeRootPostExcludedFromThreadReplyPath(t *testing.T) {
 	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 	before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
 
-	_, _ = a.Update(MattermostRealtimePostMsg{Request: a.activeHistoryRequest, Message: messages.MessageItem{ID: "post-1", Format: messages.FormatMattermostPlain}})
+	_, _ = a.Update(MattermostRealtimePostMsg{Request: a.activeHistoryRequest, Message: messages.MessageItem{ID: "post-1"}})
 
 	if got := a.threadPanel.Replies(); !reflect.DeepEqual(got, before) {
 		t.Fatalf("root post changed thread replies from %#v to %#v", before, got)
@@ -609,9 +606,9 @@ func TestMattermostRealtimeReplyDoesNotRouteDifferentPanelScope(t *testing.T) {
 	for _, difference := range []string{"root", "server", "channel", "generation"} {
 		t.Run(difference, func(t *testing.T) {
 			a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 			request := a.activeHistoryRequest
-			message := messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}
+			message := messages.MessageItem{ID: "reply-1", RootID: "root-1"}
 			switch difference {
 			case "root":
 				message.RootID = "root-2"
@@ -640,11 +637,11 @@ func TestMattermostRealtimeReplyCollapsesOptimisticRegardlessOfArrivalOrder(t *t
 	for _, websocketFirst := range []bool{true, false} {
 		t.Run(map[bool]string{true: "websocket before HTTP", false: "HTTP before websocket"}[websocketFirst], func(t *testing.T) {
 			a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 			request := a.activeHistoryRequest
 			_, _ = a.Update(mattermostThreadReplyMsg(a, "reply"))
 			correlationID := a.threadPanel.Replies()[0].CorrelationID
-			authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "authoritative"}
+			authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Text: "authoritative"}
 			realtime := MattermostRealtimePostMsg{Request: request, Message: authoritative}
 			http := MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, RootID: "root-1", CorrelationID: correlationID}, Message: authoritative}
 			if websocketFirst {
@@ -667,7 +664,7 @@ func TestMattermostRealtimeReplyCollapsesOptimisticRegardlessOfArrivalOrder(t *t
 
 func TestMattermostRealtimeReplyRetainedOriginScopeIsolationSameChannelRoot(t *testing.T) {
 	a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 	origin := a.activeHistoryRequest
 	w1 := a.focusedWin
 	_ = a.splitWindow(wintree.SplitSideBySide)
@@ -676,11 +673,11 @@ func TestMattermostRealtimeReplyRetainedOriginScopeIsolationSameChannelRoot(t *t
 	current := a.newMattermostHistoryScope(origin.ServerID, origin.ChannelID)
 	a.mattermostWindowScopes[w2] = current
 	a.setFocusedMattermostScope(current)
-	a.winModels[w2].SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
-	a.threadPanel.SetThread(messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain}, []messages.MessageItem{{ID: "current"}}, origin.ChannelID, "root-1")
+	a.winModels[w2].SetMessages([]messages.MessageItem{{ID: "root-1"}})
+	a.threadPanel.SetThread(messages.MessageItem{ID: "root-1"}, []messages.MessageItem{{ID: "current"}}, origin.ChannelID, "root-1")
 	before := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
 
-	_, _ = a.Update(MattermostRealtimePostMsg{Request: origin, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}})
+	_, _ = a.Update(MattermostRealtimePostMsg{Request: origin, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1"}})
 
 	if got := a.threadPanel.Replies(); !reflect.DeepEqual(got, before) {
 		t.Fatalf("retained event changed current same-channel/root panel from %#v to %#v", before, got)
@@ -697,7 +694,7 @@ func TestMattermostRealtimeReplyRejectsCanceledOrReleasedScope(t *testing.T) {
 	for _, released := range []bool{false, true} {
 		t.Run(map[bool]string{false: "canceled", true: "released"}[released], func(t *testing.T) {
 			a := openMattermostThreadForSend(t, &recordingMattermostSendService{})
-			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+			a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-1"}})
 			request := a.activeHistoryRequest
 			if released {
 				a.releaseMattermostWindowScope(a.focusedWin)
@@ -707,7 +704,7 @@ func TestMattermostRealtimeReplyRejectsCanceledOrReleasedScope(t *testing.T) {
 			beforePanel := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
 			beforeModel := append([]messages.MessageItem(nil), a.messagepane.Messages()...)
 
-			_, _ = a.Update(MattermostRealtimePostMsg{Request: request, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}})
+			_, _ = a.Update(MattermostRealtimePostMsg{Request: request, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1"}})
 
 			if !reflect.DeepEqual(a.threadPanel.Replies(), beforePanel) || !reflect.DeepEqual(a.messagepane.Messages(), beforeModel) {
 				t.Fatalf("dead scope mutated panel=%#v model=%#v", a.threadPanel.Replies(), a.messagepane.Messages())
@@ -719,13 +716,13 @@ func TestMattermostRealtimeReplyRejectsCanceledOrReleasedScope(t *testing.T) {
 func TestMattermostRealtimeReplyUpdatesRetainedC1AfterFocusMovesToC2(t *testing.T) {
 	a, w1, w2 := crossChannelMattermostApp(t, &recordingMattermostSendService{}, nil)
 	c1 := a.mattermostWindowScopes[w1].request
-	a.winModels[w1].SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
-	a.winModels[w2].SetMessages([]messages.MessageItem{{ID: "root-1", Format: messages.FormatMattermostPlain}})
+	a.winModels[w1].SetMessages([]messages.MessageItem{{ID: "root-1"}})
+	a.winModels[w2].SetMessages([]messages.MessageItem{{ID: "root-1"}})
 	a.threadVisible = true
-	a.threadPanel.SetThread(messages.MessageItem{ID: "root-1", Format: messages.FormatMattermostPlain}, []messages.MessageItem{{ID: "c2-current"}}, "c2", "root-1")
+	a.threadPanel.SetThread(messages.MessageItem{ID: "root-1"}, []messages.MessageItem{{ID: "c2-current"}}, "c2", "root-1")
 	beforePanel := append([]messages.MessageItem(nil), a.threadPanel.Replies()...)
 
-	_, _ = a.Update(MattermostRealtimePostMsg{Request: c1, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}})
+	_, _ = a.Update(MattermostRealtimePostMsg{Request: c1, Message: messages.MessageItem{ID: "reply-1", RootID: "root-1"}})
 
 	if got := a.winModels[w1].Messages()[0].ReplyCount; got != 1 {
 		t.Fatalf("retained c1 root count=%d want 1", got)
@@ -743,7 +740,7 @@ func TestMattermostRealtimeSuccessThenHTTPFailureKeepsAuthoritativeReplyWithoutT
 	request := a.activeHistoryRequest
 	_, _ = a.Update(mattermostThreadReplyMsg(a, "reply"))
 	correlationID := a.threadPanel.Replies()[0].CorrelationID
-	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "accepted"}
+	authoritative := messages.MessageItem{ID: "reply-1", RootID: "root-1", CorrelationID: correlationID, Text: "accepted"}
 
 	_, _ = a.Update(MattermostRealtimePostMsg{Request: request, Message: authoritative})
 	_, toast := a.Update(MattermostMessageSendFailedMsg{Request: MattermostSendRequest{

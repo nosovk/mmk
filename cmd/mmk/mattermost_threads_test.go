@@ -35,8 +35,8 @@ func TestMattermostUIThreadsCacheReadConvertsRootAndReplies(t *testing.T) {
 
 	got := adapter.CacheRead("c1", "root-1")
 	want := []messages.MessageItem{
-		{ID: "root-1", CorrelationID: "root-corr", CreatedAt: 10, Format: messages.FormatMattermostPlain, UserID: "u1", UserName: "alice", Text: "root", ReplyCount: 2, IsEdited: true},
-		{ID: "reply-1", CorrelationID: "reply-corr", CreatedAt: 20, RootID: "root-1", Format: messages.FormatMattermostPlain, UserID: "u2", UserName: "bob", Text: "reply"},
+		{ID: "root-1", CorrelationID: "root-corr", CreatedAt: 10, UserID: "u1", UserName: "alice", Text: "root", ReplyCount: 2, IsEdited: true},
+		{ID: "reply-1", CorrelationID: "reply-corr", CreatedAt: 20, RootID: "root-1", UserID: "u2", UserName: "bob", Text: "reply"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("cached items=%#v want %#v", got, want)
@@ -50,9 +50,9 @@ func TestMattermostUIThreadsFetchPreservesSuccessAndFailureSemantics(t *testing.
 		service stubMattermostThreadService
 		want    []messages.MessageItem
 	}{
-		{name: "reply success", service: stubMattermostThreadService{live: []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "root-1"}}, {Message: mattermost.Message{ID: "reply-1", RootID: "root-1"}}}}, want: []messages.MessageItem{{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}}},
+		{name: "reply success", service: stubMattermostThreadService{live: []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "root-1"}}, {Message: mattermost.Message{ID: "reply-1", RootID: "root-1"}}}}, want: []messages.MessageItem{{ID: "reply-1", RootID: "root-1"}}},
 		{name: "root only", service: stubMattermostThreadService{live: []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "root-1"}}}}, want: []messages.MessageItem{}},
-		{name: "deleted root", service: stubMattermostThreadService{live: []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "reply-1", RootID: "root-1"}}, {Message: mattermost.Message{ID: "reply-2", RootID: "root-1"}}}}, want: []messages.MessageItem{{ID: "reply-1", RootID: "root-1", Format: messages.FormatMattermostPlain}, {ID: "reply-2", RootID: "root-1", Format: messages.FormatMattermostPlain}}},
+		{name: "deleted root", service: stubMattermostThreadService{live: []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "reply-1", RootID: "root-1"}}, {Message: mattermost.Message{ID: "reply-2", RootID: "root-1"}}}}, want: []messages.MessageItem{{ID: "reply-1", RootID: "root-1"}, {ID: "reply-2", RootID: "root-1"}}},
 		{name: "failure", service: stubMattermostThreadService{err: errors.New("offline")}, want: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

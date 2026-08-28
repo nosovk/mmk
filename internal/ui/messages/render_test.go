@@ -213,18 +213,6 @@ func TestBareChannelMentionUnresolvedFallsBack(t *testing.T) {
 	}
 }
 
-// TestUnlabeledNonHTTPLinkSurvives confirms that <url|text> patterns where the
-// URL is NOT http(s) don't get gobbled by linkWithLabelRe. (Slack uses
-// <!subteam^S123|@team> for groups, etc.)
-func TestNonHTTPBracketedSurvives(t *testing.T) {
-	// Should not panic, should not render as a link. We only assert it doesn't
-	// crash and the output is non-empty.
-	out := RenderSlackMarkdown("ping <!subteam^S123|@team> please", nil, nil)
-	if out == "" {
-		t.Error("expected non-empty output")
-	}
-}
-
 // TestDateTokenRendersFallback covers Slack's <!date^TS^FORMAT|FALLBACK>
 // token (emitted by Linear/Jira/etc. unfurls). We render the precomputed
 // fallback text and never leak the raw token or its format string.
@@ -565,11 +553,11 @@ func TestCommonMark_EmojiInCodeBlockPreserved(t *testing.T) {
 	}
 }
 
-func TestCommonMark_EmojiNoTrailingSpace(t *testing.T) {
+func TestCommonMark_UnknownEmojiShortcodePreserved(t *testing.T) {
 	got := SlackMrkdwnToCommonMark(":smile:end", nil, nil)
-	want := "😄end"
+	want := ":smile:end"
 	if got != want {
-		t.Errorf("got %q, want %q (no trailing space between emoji and adjacent text)", got, want)
+		t.Errorf("got %q, want literal provider shortcode %q", got, want)
 	}
 }
 

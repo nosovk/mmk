@@ -172,7 +172,8 @@ func TestDropdown_View_ImageMode_UsesPlacement(t *testing.T) {
 	emoji.SetImageMode(true, 2)
 	t.Cleanup(func() { emoji.SetImageMode(false, 2) })
 
-	thumbURL := emoji.CDNBaseURL + "1f44d.png"
+	thumbURL := "https://emoji.example.com/thumbsup.png"
+	customs := map[string]string{"thumbsup": thumbURL}
 	ff := &fakeDropdownFetcher{
 		prerender: map[string]imgpkg.Render{
 			emoji.EmojiCacheKey(thumbURL): {
@@ -190,6 +191,7 @@ func TestDropdown_View_ImageMode_UsesPlacement(t *testing.T) {
 	m.SetEmojiContext(EmojiContext{
 		PlaceCtx: emoji.PlaceContext{Fetcher: ff},
 		Cells:    2,
+		Customs:  customs,
 	})
 	m.Open("thumbs")
 
