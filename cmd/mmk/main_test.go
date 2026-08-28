@@ -170,7 +170,7 @@ func walkGoSources(root string, visit func(path string)) error {
 			return err
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" {
+			if entry.Name() == ".git" || entry.Name() == ".worktrees" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -224,6 +224,28 @@ func TestWalkGoSourcesIncludesPackagesOutsideCmdAndInternal(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, []string{path}) {
 		t.Fatalf("walkGoSources() = %v, want %v", got, []string{path})
+	}
+}
+
+func TestWalkGoSourcesSkipsProjectWorktrees(t *testing.T) {
+	root := t.TempDir()
+	regular := filepath.Join(root, "tools", "guard_fixture.go")
+	worktree := filepath.Join(root, ".worktrees", "other-branch", "guard_fixture.go")
+	for _, path := range []string{regular, worktree} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("package tools\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var got []string
+	if err := walkGoSources(root, func(path string) { got = append(got, path) }); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{regular}) {
+		t.Fatalf("walkGoSources() = %v, want %v", got, []string{regular})
 	}
 }
 
