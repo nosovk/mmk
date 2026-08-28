@@ -16,18 +16,32 @@ import (
 type topLevelCommand string
 
 const (
-	commandNone      topLevelCommand = ""
+	commandRun       topLevelCommand = "run"
 	commandAddServer topLevelCommand = "add-server"
+	commandVersion   topLevelCommand = "version"
+	commandHelp      topLevelCommand = "help"
 )
 
 func parseTopLevelCommand(args []string) (topLevelCommand, error) {
-	if len(args) < 2 || args[1] != "--add-server" {
-		return commandNone, nil
+	if len(args) < 2 {
+		return commandRun, nil
 	}
 	if len(args) != 2 {
-		return commandNone, errors.New("--add-server does not accept arguments; enter the PAT in the masked prompt")
+		if args[1] == "--add-server" {
+			return commandRun, errors.New("--add-server does not accept arguments; enter the PAT in the masked prompt")
+		}
+		return commandRun, fmt.Errorf("unexpected arguments; run %s --help", args[0])
 	}
-	return commandAddServer, nil
+	switch args[1] {
+	case "--add-server":
+		return commandAddServer, nil
+	case "--version":
+		return commandVersion, nil
+	case "--help":
+		return commandHelp, nil
+	default:
+		return commandRun, fmt.Errorf("unknown command %q; run %s --help", args[1], args[0])
+	}
 }
 
 type addServerFormValues struct {

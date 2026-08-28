@@ -28,11 +28,8 @@ type Model struct {
 
 // EmojiContext bundles the emoji-image rendering dependencies for
 // the compose autocomplete dropdown. Mirrors the picker's version
-// in shape and purpose. The Customs field is unused here because the
-// entries the dropdown searches already include workspace customs
-// (see emoji.BuildEntries); it's kept for shape parity with the
-// other emoji-context types so all callers use the same setter
-// signature.
+// in shape and purpose. Entries provide searchable names while Customs
+// provides the provider URLs used for image placement.
 type EmojiContext struct {
 	PlaceCtx emoji.PlaceContext
 	Cells    int
@@ -50,7 +47,7 @@ func (m *Model) SetEmojiContext(ctx EmojiContext) {
 
 // SetEmojiCustoms updates the customs map without changing PlaceCtx
 // or Cells. Called from compose.SetEmojiCustoms when the workspace's
-// custom emoji list arrives via CustomEmojisLoadedMsg.
+// custom emoji list arrives.
 //
 // Mirrors reactionpicker.Model.SetEmojiCustoms — the picker reads
 // m.emojiCtx.Customs at View() time when resolving each row's URL

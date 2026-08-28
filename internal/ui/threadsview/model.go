@@ -17,7 +17,6 @@ import (
 	"github.com/nosovk/mmk/internal/cache"
 	"github.com/nosovk/mmk/internal/ui/messages"
 	"github.com/nosovk/mmk/internal/ui/styles"
-	"github.com/nosovk/mmk/internal/usergroups"
 )
 
 // cardStride is the number of lines a single rendered thread card occupies
@@ -86,7 +85,6 @@ type Model struct {
 	summaries    []cache.ThreadSummary
 	userNames    map[string]string
 	channelNames map[string]string
-	userGroups   map[string]string
 	selfUserID   string
 
 	selected int
@@ -177,21 +175,6 @@ func (m *Model) SetChannelNames(names map[string]string) {
 		return
 	}
 	m.channelNames = names
-	m.dirty()
-}
-
-// SetUserGroups sets the workspace-scoped usergroup ID -> handle map used
-// to resolve bare <!subteam^SID> mentions in thread previews. No-op when
-// the new map matches the current one.
-func (m *Model) SetUserGroups(groups map[string]string) {
-	if usergroups.Equal(m.userGroups, groups) {
-		return
-	}
-	copied := usergroups.Copy(groups)
-	if copied == nil {
-		copied = map[string]string{}
-	}
-	m.userGroups = copied
 	m.dirty()
 }
 
@@ -660,7 +643,6 @@ func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []st
 		preview := messages.RenderSlackMarkdownWith(s.ParentText, messages.RenderSlackMarkdownOpts{
 			UserNames:    m.userNames,
 			ChannelNames: m.channelNames,
-			UserGroups:   m.userGroups,
 		})
 		preview = strings.ReplaceAll(preview, "\n", " ")
 		previewMax := contentWidth - 4

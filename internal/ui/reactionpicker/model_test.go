@@ -35,6 +35,7 @@ func TestOpenClose(t *testing.T) {
 
 func TestFilterByQuery(t *testing.T) {
 	m := New()
+	m.SetCustomEmoji(map[string]string{"rocket": "https://emoji.example.com/rocket.png"})
 	m.Open("C123", "1234.5678", nil)
 
 	m.HandleKey("r")
@@ -57,16 +58,16 @@ func TestFilterByQuery(t *testing.T) {
 
 func TestNavigationUpDown(t *testing.T) {
 	m := New()
+	m.SetCustomEmoji(map[string]string{
+		"heart":     "https://emoji.example.com/heart.png",
+		"heartbeat": "https://emoji.example.com/heartbeat.png",
+	})
 	m.Open("C123", "1234.5678", nil)
 	m.HandleKey("h")
 	m.HandleKey("e")
 	m.HandleKey("a")
 	m.HandleKey("r")
 	m.HandleKey("t")
-
-	if len(m.filtered) < 2 {
-		t.Skip("not enough filtered results for navigation test")
-	}
 
 	if m.selected != 0 {
 		t.Errorf("expected selected 0, got %d", m.selected)
@@ -85,6 +86,7 @@ func TestNavigationUpDown(t *testing.T) {
 
 func TestSelectEmoji(t *testing.T) {
 	m := New()
+	m.SetCustomEmoji(map[string]string{"rocket": "https://emoji.example.com/rocket.png"})
 	m.Open("C123", "1234.5678", nil)
 	m.HandleKey("r")
 	m.HandleKey("o")
@@ -107,6 +109,7 @@ func TestSelectEmoji(t *testing.T) {
 
 func TestSelectExistingReactionTogglesRemove(t *testing.T) {
 	m := New()
+	m.SetCustomEmoji(map[string]string{"rocket": "https://emoji.example.com/rocket.png"})
 	m.Open("C123", "1234.5678", []string{"rocket"})
 	m.HandleKey("r")
 	m.HandleKey("o")
@@ -121,6 +124,20 @@ func TestSelectExistingReactionTogglesRemove(t *testing.T) {
 	}
 	if !result.Remove {
 		t.Error("expected Remove=true for existing reaction")
+	}
+}
+
+func TestSelectEmojiPreservesProviderShortcode(t *testing.T) {
+	m := New()
+	m.SetFrecentEmoji([]EmojiEntry{{Name: "thumbsup", Unicode: "👍"}})
+	m.Open("channel", "post", nil)
+
+	result := m.HandleKey("enter")
+	if result == nil {
+		t.Fatal("expected a result on enter")
+	}
+	if result.Emoji != "thumbsup" {
+		t.Fatalf("Emoji = %q, want provider shortcode %q", result.Emoji, "thumbsup")
 	}
 }
 
@@ -253,7 +270,8 @@ func TestPicker_View_ImageMode_UsesPlacement(t *testing.T) {
 	slkemoji.SetImageMode(true, 2)
 	t.Cleanup(func() { slkemoji.SetImageMode(false, 2) })
 
-	thumbURL := slkemoji.CDNBaseURL + "1f44d.png"
+	thumbURL := "https://emoji.example.com/thumbsup.png"
+	customs := map[string]string{"thumbsup": thumbURL}
 	ff := newFakePickerFetcher()
 	ff.setPrerendered(slkemoji.EmojiCacheKey(thumbURL), goimage.Pt(2, 1), imgpkg.Render{
 		Cells: goimage.Pt(2, 1),
@@ -261,11 +279,12 @@ func TestPicker_View_ImageMode_UsesPlacement(t *testing.T) {
 	})
 
 	m := New()
+	m.SetCustomEmoji(customs)
 	m.Open("C123", "1234.5678", nil)
 	m.SetEmojiContext(EmojiContext{
 		PlaceCtx: slkemoji.PlaceContext{Fetcher: ff},
 		Cells:    2,
-		Customs:  nil,
+		Customs:  customs,
 	})
 
 	// Filter to a small set so the assert is unambiguous.

@@ -29,9 +29,8 @@ var (
 	// linkWithLabelRe matches both http(s) URLs and mailto: addresses
 	// (Slack auto-linkifies typed emails into <mailto:X|X> form). The
 	// scheme restriction means we do NOT match channel mentions
-	// <#CHANNEL_ID|name>, group mentions <!subteam^...|@team>, or
-	// other Slack-internal angle-bracket forms — those are handled by
-	// dedicated regexes below.
+	// <#CHANNEL_ID|name> or other provider-internal angle-bracket
+	// forms; those are handled by dedicated regexes below.
 	linkWithLabelRe = regexp.MustCompile(`<((?:https?://|mailto:)[^|>]+)\|([^>]+)>`)
 	linkBareRe      = regexp.MustCompile(`<((?:https?://|mailto:)[^>]+)>`)
 
@@ -639,7 +638,6 @@ func SidebarMutedFgANSI() string {
 type RenderSlackMarkdownOpts struct {
 	UserNames    map[string]string
 	ChannelNames map[string]string
-	UserGroups   map[string]string
 
 	// Emoji-image opts (zero values disable the image path).
 	PlaceCtx     emojiutil.PlaceContext
@@ -765,20 +763,11 @@ func renderInlineFormattingWith(text string, opts RenderSlackMarkdownOpts) strin
 		return dateTokenRe.FindStringSubmatch(match)[1]
 	})
 
-	// Usergroup mentions: <!subteam^SID|@label> -> @label, or bare
-	// <!subteam^SID> -> @handle via the workspace-scoped usergroup map
-	// (fallback "@group"). Shares usergroupMentionRe / usergroupDisplay
-	// with FlattenMrkdwn (flatten.go).
-	text = usergroupMentionRe.ReplaceAllStringFunc(text, func(match string) string {
-		groups := usergroupMentionRe.FindStringSubmatch(match)
-		return mentionStyle().Render(usergroupDisplay(opts.UserGroups, groups[1], groups[2]))
-	})
-
 	// Broadcast mentions: <!here> / <!channel> / <!everyone> (labels,
 	// when present, duplicate the keyword and are dropped) -> styled
 	// @here / @channel / @everyone. Shares specialMentionRe with
-	// FlattenMrkdwn (flatten.go). Runs after the date and subteam
-	// passes so their `<!...>` forms are already consumed.
+	// FlattenMrkdwn (flatten.go). Runs after the date pass so its
+	// `<!...>` forms are already consumed.
 	text = specialMentionRe.ReplaceAllStringFunc(text, func(match string) string {
 		return mentionStyle().Render("@" + specialMentionRe.FindStringSubmatch(match)[1])
 	})
@@ -896,12 +885,6 @@ func renderEmojiTokensInline(
 // markdown. It is the plain-text sibling of RenderSlackMarkdown: same input
 // format, but the output is CommonMark rather than lipgloss-styled ANSI.
 func SlackMrkdwnToCommonMark(text string, userNames map[string]string, channelNames map[string]string) string {
-	return SlackMrkdwnToCommonMarkWithUserGroups(text, userNames, channelNames, nil)
-}
-
-// SlackMrkdwnToCommonMarkWithUserGroups is SlackMrkdwnToCommonMark with
-// a workspace-scoped Slack usergroup map for resolving bare subteam IDs.
-func SlackMrkdwnToCommonMarkWithUserGroups(text string, userNames map[string]string, channelNames map[string]string, userGroups map[string]string) string {
 	// Protect code blocks: extract, convert, and replace with placeholders.
 	var codeBlocks []string
 	text = codeBlockRe.ReplaceAllStringFunc(text, func(match string) string {
@@ -930,7 +913,7 @@ func SlackMrkdwnToCommonMarkWithUserGroups(text string, userNames map[string]str
 			quoted = slackEntityDecoder.Replace(quoted)
 			line = "> " + quoted
 		} else {
-			line = slackMrkdwnToCommonMarkInline(line, userNames, channelNames, userGroups)
+			line = slackMrkdwnToCommonMarkInline(line, userNames, channelNames)
 			line = slackEntityDecoder.Replace(line)
 		}
 		result = append(result, line)
@@ -952,7 +935,7 @@ func SlackMrkdwnToCommonMarkWithUserGroups(text string, userNames map[string]str
 
 // slackMrkdwnToCommonMarkInline converts inline Slack formatting tokens
 // to their CommonMark equivalents without any ANSI styling.
-func slackMrkdwnToCommonMarkInline(text string, userNames map[string]string, channelNames map[string]string, userGroups map[string]string) string {
+func slackMrkdwnToCommonMarkInline(text string, userNames map[string]string, channelNames map[string]string) string {
 	text = boldRe.ReplaceAllString(text, "**$1**")
 
 	text = strikethroughRe.ReplaceAllString(text, "~~$1~~")
@@ -995,11 +978,6 @@ func slackMrkdwnToCommonMarkInline(text string, userNames map[string]string, cha
 			}
 		}
 		return "@" + name
-	})
-
-	text = usergroupMentionRe.ReplaceAllStringFunc(text, func(match string) string {
-		groups := usergroupMentionRe.FindStringSubmatch(match)
-		return usergroupDisplay(userGroups, groups[1], groups[2])
 	})
 
 	text = specialMentionRe.ReplaceAllStringFunc(text, func(match string) string {

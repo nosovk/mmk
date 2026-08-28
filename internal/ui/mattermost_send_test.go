@@ -51,6 +51,71 @@ func newMattermostSendApp(t *testing.T, service MattermostSendService) *App {
 	return a
 }
 
+func typeInMattermostCompose(t *testing.T, a *App, text string) {
+	t.Helper()
+	for _, r := range text {
+		_ = a.handleInsertMode(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+}
+
+func TestMattermostMentionSelectionSendsOrdinaryUserIDAtWordBoundary(t *testing.T) {
+	service := &recordingMattermostSendService{}
+	a := NewApp()
+	a.width = 200
+	a.height = 50
+	a.SetMattermostSendService(service)
+	_, activate := a.Update(ServerReadyMsg{Server: ServerViewState{
+		ServerID:      ids.ServerID("server-1"),
+		InitialActive: true,
+		UserID:        "user-1",
+		UserNames: map[string]string{
+			"user-1": "you",
+			"user-2": "Alice",
+		},
+		Channels: testMattermostChannels(),
+	}})
+	if activate == nil {
+		t.Fatal("server activation did not select the initial channel")
+	}
+	_, _ = a.Update(activate())
+
+	a.SetMode(ModeInsert)
+	a.focusedPanel = PanelMessages
+	_ = a.compose.Focus()
+	typeInMattermostCompose(t, a, "hello @Ali")
+	if !a.compose.IsMentionActive() {
+		t.Fatal("ordinary user mention picker did not open")
+	}
+	if cmd := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatal("selecting an ordinary user should only update compose")
+	}
+	if got := a.compose.Value(); got != "hello @Alice " {
+		t.Fatalf("selected mention inserted %q, want display mention", got)
+	}
+
+	submit := a.handleInsertMode(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if submit == nil {
+		t.Fatal("submitting selected ordinary user mention returned nil command")
+	}
+	submitted := submit()
+	msg, ok := submitted.(SendMessageMsg)
+	if !ok {
+		t.Fatalf("compose submission returned %T, want SendMessageMsg", submitted)
+	}
+	_, send := a.Update(msg)
+	if send == nil {
+		t.Fatal("Mattermost reducer returned nil send command")
+	}
+	_ = send()
+
+	if len(service.requests) != 1 {
+		t.Fatalf("Mattermost requests = %#v, want one", service.requests)
+	}
+	if got, want := service.requests[0].Text, "hello <@user-2> "; got != want {
+		t.Fatalf("MattermostSendRequest.Text = %q, want %q", got, want)
+	}
+}
+
 func mattermostRowByCorrelation(t *testing.T, model *messages.Model, correlationID string) messages.MessageItem {
 	t.Helper()
 	row, ok := model.FindMessageByCorrelationID(correlationID)
@@ -58,6 +123,52 @@ func mattermostRowByCorrelation(t *testing.T, model *messages.Model, correlation
 		t.Fatalf("model missing correlation %q: %#v", correlationID, model.Messages())
 	}
 	return row
+}
+
+func TestMattermostComposeMentionSelectionSubmitsUserID(t *testing.T) {
+	service := &recordingMattermostSendService{}
+	a := newMattermostSendApp(t, service)
+	a.SetUserNames(map[string]string{"mattermost-user-id": "Alice"})
+	a.focusedPanel = PanelMessages
+	a.SetMode(ModeInsert)
+	a.compose.Focus()
+
+	for _, r := range "@Ali" {
+		_ = handleInsertMode(a, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if !a.compose.IsMentionActive() {
+		t.Fatal("mention picker did not open")
+	}
+	_ = handleInsertMode(a, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := a.compose.Value(); got != "@Alice " {
+		t.Fatalf("selected mention=%q want %q", got, "@Alice ")
+	}
+	_ = handleInsertMode(a, tea.KeyPressMsg{Code: tea.KeyBackspace})
+
+	sendCmd := handleInsertMode(a, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if sendCmd == nil {
+		t.Fatal("mention submission returned nil command")
+	}
+	msg := sendCmd()
+	sendMsg, ok := msg.(SendMessageMsg)
+	if !ok {
+		t.Fatalf("submission command returned %T, want SendMessageMsg", msg)
+	}
+	_, serviceCmd := a.Update(sendMsg)
+	if serviceCmd == nil {
+		t.Fatal("Mattermost send reducer returned nil service command")
+	}
+	_ = serviceCmd()
+
+	if len(service.requests) != 1 {
+		t.Fatalf("requests=%#v want one Mattermost send", service.requests)
+	}
+	if got := service.requests[0].Text; got != "<@mattermost-user-id>" {
+		t.Fatalf("request text=%q want %q", got, "<@mattermost-user-id>")
+	}
+	if strings.Contains(service.requests[0].Text, "subteam") {
+		t.Fatalf("request text contains Slack usergroup token: %q", service.requests[0].Text)
+	}
 }
 
 func TestMattermostSendFansOutOptimisticSuccessAndFailureToSameChannelWindows(t *testing.T) {
@@ -81,7 +192,7 @@ func TestMattermostSendFansOutOptimisticSuccessAndFailureToSameChannelWindows(t 
 			if failure {
 				service.result = MattermostMessageSendFailedMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, Text: "fanout", CorrelationID: correlationID}, Reason: "safe"}
 			} else {
-				service.result = MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, Text: "fanout", CorrelationID: correlationID}, Message: messages.MessageItem{ID: "opaque/post:id", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "authoritative"}}
+				service.result = MattermostMessageSentMsg{Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, Text: "fanout", CorrelationID: correlationID}, Message: messages.MessageItem{ID: "opaque/post:id", CorrelationID: correlationID, Text: "authoritative"}}
 			}
 			_, _ = a.Update(sendCmd())
 			for _, win := range []wintree.LeafID{w1, w2} {
@@ -142,7 +253,7 @@ func TestMattermostSendCompletesAcrossFocusSwitchAndSplitAfterInsertion(t *testi
 			if failure {
 				service.result = MattermostMessageSendFailedMsg{Request: resultRequest}
 			} else {
-				service.result = MattermostMessageSentMsg{Request: resultRequest, Message: messages.MessageItem{ID: "post/after:split", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "done"}}
+				service.result = MattermostMessageSentMsg{Request: resultRequest, Message: messages.MessageItem{ID: "post/after:split", CorrelationID: correlationID, Text: "done"}}
 			}
 			_, _ = a.Update(sendCmd())
 			for _, win := range []wintree.LeafID{w1, w2} {
@@ -180,7 +291,7 @@ func TestMattermostSendOptimisticallyInsertsPlainRowAndDispatchesExactScope(t *t
 	if row.DeliveryServerID != string(request.ServerID) || row.DeliveryChannelID != request.ChannelID || row.DeliveryGeneration != request.Generation {
 		t.Fatalf("optimistic scope=%q/%q/%d want %q/%q/%d", row.DeliveryServerID, row.DeliveryChannelID, row.DeliveryGeneration, request.ServerID, request.ChannelID, request.Generation)
 	}
-	if row.Format != messages.FormatMattermostPlain || row.DeliveryState != messages.DeliveryPending {
+	if row.DeliveryState != messages.DeliveryPending {
 		t.Fatalf("optimistic delivery row=%#v", row)
 	}
 	if row.UserID != "user-1" || row.UserName != "you" || row.Text != "hello mattermost" || row.Timestamp != "9:41 AM" || row.CreatedAt == 0 {
@@ -266,7 +377,7 @@ func TestMattermostSendExactSuccessReplacesPendingRow(t *testing.T) {
 	correlationID := a.messagepane.Messages()[0].CorrelationID
 	service.result = MattermostMessageSentMsg{
 		Request: MattermostSendRequest{ServerID: request.ServerID, ChannelID: request.ChannelID, Generation: request.Generation, Text: "hello", CorrelationID: correlationID},
-		Message: messages.MessageItem{ID: "post-1", Format: messages.FormatMattermostPlain, Text: "authoritative"},
+		Message: messages.MessageItem{ID: "post-1", Text: "authoritative"},
 	}
 
 	_, _ = a.Update(cmd())
@@ -377,7 +488,6 @@ func TestMattermostDelayedFailureAfterAuthoritativeHistoryDoesNotDowngradeSplitR
 		ID:            "opaque/post:id",
 		CorrelationID: correlationID,
 		DeliveryState: messages.DeliverySent,
-		Format:        messages.FormatMattermostPlain,
 		Text:          "authoritative history",
 	}
 	_, _ = a.Update(MattermostMessagesLoadedMsg{
@@ -448,31 +558,11 @@ func TestMattermostSendContextIsCanceledByServerNavigation(t *testing.T) {
 	}
 }
 
-func TestMattermostTask10EnablesOnlySendAndSlackSendPathIsUnchanged(t *testing.T) {
+func TestMattermostTask10EnablesOnlySend(t *testing.T) {
 	mm := MattermostTask10Features()
 	for feature := FeatureThreads; feature <= FeatureSend; feature++ {
 		if got, want := mm.Allows(feature), feature == FeatureSend; got != want {
 			t.Fatalf("Mattermost feature %v allows=%v want %v", feature, got, want)
 		}
-	}
-
-	var slackChannel ids.ChannelID
-	var slackText string
-	slack := NewApp()
-	slack.activeChannelID = "C1"
-	slack.SetMessageService(NewMessageService(MessageServiceFuncs{Send: func(channelID ids.ChannelID, text string) tea.Msg {
-		slackChannel, slackText = channelID, text
-		return MessageSentMsg{ChannelID: string(channelID), Message: messages.MessageItem{TS: "1", Text: text}}
-	}}))
-	_, cmd := slack.Update(SendMessageMsg{ChannelID: "C1", Text: "slack text"})
-	if cmd == nil {
-		t.Fatal("Slack send returned nil command")
-	}
-	result := cmd()
-	if _, ok := result.(MessageSentMsg); !ok || slackChannel != "C1" || slackText != "slack text" {
-		t.Fatalf("Slack send result=%T channel=%q text=%q", result, slackChannel, slackText)
-	}
-	if rows := slack.messagepane.Messages(); len(rows) != 1 || !strings.HasPrefix(rows[0].TS, "local:") || rows[0].ID != "" || rows[0].Format != messages.FormatSlack {
-		t.Fatalf("Slack optimistic row changed: %#v", rows)
 	}
 }

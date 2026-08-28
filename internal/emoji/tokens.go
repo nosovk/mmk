@@ -2,7 +2,6 @@ package emoji
 
 import (
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/rivo/uniseg"
@@ -15,7 +14,7 @@ type TokenKind int
 const (
 	// TokenText is a literal run of non-emoji text.
 	TokenText TokenKind = iota
-	// TokenEmoji is one emoji — either a resolved :shortcode: match
+	// TokenEmoji is one emoji — either a provider-resolved :shortcode: match
 	// or a Unicode grapheme cluster carrying emoji presentation.
 	TokenEmoji
 )
@@ -27,7 +26,7 @@ const (
 // yank, clipboard copy, in-buffer search, and cold-cache fallback
 // (":name:" form for shortcodes/customs, the Unicode glyph for
 // emoji that appeared as raw codepoints in the source). URL holds
-// the Slack CDN URL for the image.
+// the image URL.
 type Token struct {
 	Kind TokenKind
 	Text string
@@ -35,21 +34,19 @@ type Token struct {
 }
 
 // ResolveEmojiToTokens scans text and emits a token stream. Every
-// emoji that can be resolved to a Slack CDN URL becomes a
+// emoji that can be resolved to an image URL becomes a
 // TokenEmoji; everything else is folded into TokenText runs.
 //
 // Two detection paths run in a single linear pass:
 //
 //  1. ":shortcode:" matches (e.g., ":thumbsup:", ":party_parrot:").
-//     Resolved via URLForShortcode, which consults the workspace
-//     customs map first (with alias chains) and falls through to
-//     the kyokomi builtin codemap.
+//     Resolved via URLForShortcode, which consults the provider's
+//     custom emoji map, including custom-to-custom alias chains.
 //
 //  2. Unicode emoji grapheme clusters embedded in the source text
-//     (e.g., a literal "👍" in a Slack message body). Detected by
-//     matching the cluster against the set of all kyokomi-known
-//     emoji clusters; URL is built directly from the cluster's
-//     codepoints.
+//     (e.g., a literal "👍" in a message body). Detected from Unicode
+//     emoji presentation codepoints; URL is built directly from the
+//     cluster's codepoints.
 //
 // Unresolvable shortcodes (unknown name, alias cycle, etc.) pass
 // through verbatim as TokenText so the user still sees the
@@ -59,8 +56,7 @@ type Token struct {
 // Adjacent emoji produce adjacent TokenEmoji values with no
 // intervening TokenText.
 //
-// customs may be nil; nil is treated as an empty workspace
-// (kyokomi-only resolution).
+// customs may be nil; nil is treated as no provider custom emoji.
 func ResolveEmojiToTokens(text string, customs map[string]string) []Token {
 	if text == "" {
 		return nil
@@ -99,7 +95,7 @@ func ResolveEmojiToTokens(text string, customs map[string]string) []Token {
 			}
 		}
 		// (b) Emoji-cluster pass.
-		if r, _ := utf8.DecodeRuneInString(text[i:]); r >= 0x80 {
+		if r, _ := utf8.DecodeRuneInString(text[i:]); r >= 0x80 || isKeycapBase(r) {
 			// Only attempt grapheme segmentation when the byte at i is
 			// the start of a non-ASCII rune. Pure-ASCII fast path
 			// avoids the uniseg.NewGraphemes call cost per byte.
@@ -168,40 +164,18 @@ func isShortcodeChar(c byte) bool {
 		c == '_' || c == '+' || c == '-'
 }
 
-// emojiClusterSet is the set of all grapheme clusters known to
-// resolve to standard emoji. Populated from the kyokomi codemap
-// values on first lookup. Both the canonical form and a
-// VS16-stripped form are inserted so source text using either
-// presentation triggers a match.
-var (
-	emojiClusterSetOnce sync.Once
-	emojiClusterSet     map[string]struct{}
-)
-
-func initEmojiClusterSet() {
-	set := make(map[string]struct{}, 4096)
-	for _, u := range emojilibCodeMap() {
-		// kyokomi appends a trailing space for Sprint-style use; strip it.
-		canonical := strings.TrimRight(u, " ")
-		if canonical == "" {
-			continue
-		}
-		set[canonical] = struct{}{}
-
-		// Also insert the VS16-stripped form for source text that
-		// uses bare codepoints without the variation selector.
-		stripped := stripVS16(canonical)
-		if stripped != canonical && stripped != "" {
-			set[stripped] = struct{}{}
-		}
-	}
-	emojiClusterSet = set
+func isKeycapBase(r rune) bool {
+	return r == '#' || r == '*' || r >= '0' && r <= '9'
 }
 
 func isKnownEmojiCluster(cluster string) bool {
-	emojiClusterSetOnce.Do(initEmojiClusterSet)
-	_, ok := emojiClusterSet[cluster]
-	return ok
+	for _, r := range cluster {
+		if r == vs16 || r == 0x200D || r == 0x20E3 || r >= 0x1F1E6 && r <= 0x1F1FF ||
+			r >= 0x1F300 && r <= 0x1FAFF || r >= 0x2600 && r <= 0x27BF {
+			return true
+		}
+	}
+	return false
 }
 
 func stripVS16(s string) string {
@@ -217,13 +191,6 @@ func stripVS16(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
-}
-
-// emojilibCodeMap returns the standard-emoji shortcode→glyph table
-// (iamcal-derived). Kept as a thin indirection for the cluster-set
-// initializer above.
-func emojilibCodeMap() map[string]string {
-	return slackCodeMap
 }
 
 // nextGraphemeCluster returns the first grapheme cluster of s, its

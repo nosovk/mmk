@@ -33,13 +33,9 @@ func TestResolveEmojiToTokens_Trivial(t *testing.T) {
 }
 
 func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
-	thumbURL := CDNBaseURL + "1f44d.png"     // :thumbsup:
-	heartURL := CDNBaseURL + "2764-fe0f.png" // :heart: (VS16 preserved)
-	rocketURL := CDNBaseURL + "1f680.png"    // :rocket:
-	customParrot := "https://emoji.slack-edge.com/T01/party_parrot/abc.gif"
+	customParrot := "https://emoji.example.com/party_parrot.gif"
 	customs := map[string]string{
 		"party_parrot": customParrot,
-		"alias_for_rocket": "alias:rocket",
 	}
 
 	cases := []struct {
@@ -47,31 +43,7 @@ func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
 		in   string
 		want []Token
 	}{
-		{
-			"shortcode at start",
-			":thumbsup: nice",
-			[]Token{emoji(":thumbsup:", thumbURL), text(" nice")},
-		},
-		{
-			"shortcode at end",
-			"nice :thumbsup:",
-			[]Token{text("nice "), emoji(":thumbsup:", thumbURL)},
-		},
-		{
-			"shortcode in middle",
-			"a :heart: b",
-			[]Token{text("a "), emoji(":heart:", heartURL), text(" b")},
-		},
-		{
-			"two shortcodes with text between",
-			":heart: and :rocket:",
-			[]Token{emoji(":heart:", heartURL), text(" and "), emoji(":rocket:", rocketURL)},
-		},
-		{
-			"adjacent shortcodes (no separator)",
-			":heart::rocket:",
-			[]Token{emoji(":heart:", heartURL), emoji(":rocket:", rocketURL)},
-		},
+		{"provider shortcode stays text", ":thumbsup: nice", []Token{text(":thumbsup: nice")}},
 		{
 			"unknown shortcode passes through as text",
 			":not_an_emoji_xyz: hello",
@@ -87,11 +59,6 @@ func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
 			"hello :party_parrot:",
 			[]Token{text("hello "), emoji(":party_parrot:", customParrot)},
 		},
-		{
-			"alias resolves to builtin",
-			"go :alias_for_rocket: go",
-			[]Token{text("go "), emoji(":alias_for_rocket:", rocketURL), text(" go")},
-		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -104,11 +71,12 @@ func TestResolveEmojiToTokens_Shortcodes(t *testing.T) {
 }
 
 func TestResolveEmojiToTokens_UnicodeClusters(t *testing.T) {
-	thumbURL := CDNBaseURL + "1f44d.png"                  // 👍
-	astronautURL := CDNBaseURL + "1f468-200d-1f680.png"   // 👨‍🚀 (ZWJ kept)
-	heartURL := CDNBaseURL + "2764-fe0f.png"              // ❤️ (VS16 preserved)
-	flagUSURL := CDNBaseURL + "1f1fa-1f1f8.png"           // 🇺🇸 (regional indicators)
+	thumbURL := CDNBaseURL + "1f44d.png"                   // 👍
+	astronautURL := CDNBaseURL + "1f468-200d-1f680.png"    // 👨‍🚀 (ZWJ kept)
+	heartURL := CDNBaseURL + "2764-fe0f.png"               // ❤️ (VS16 preserved)
+	flagUSURL := CDNBaseURL + "1f1fa-1f1f8.png"            // 🇺🇸 (regional indicators)
 	rainbowURL := CDNBaseURL + "1f3f3-fe0f-200d-1f308.png" // 🏳️‍🌈 (VS16 preserved mid-sequence)
+	keycapURL := CDNBaseURL + "31-fe0f-20e3.png"           // 1️⃣ (ASCII base preserved)
 
 	cases := []struct {
 		name string
@@ -146,6 +114,11 @@ func TestResolveEmojiToTokens_UnicodeClusters(t *testing.T) {
 			[]Token{emoji("\U0001F3F3\uFE0F\u200D\U0001F308", rainbowURL)},
 		},
 		{
+			"ASCII-leading keycap sequence",
+			"1\uFE0F\u20E3",
+			[]Token{emoji("1\uFE0F\u20E3", keycapURL)},
+		},
+		{
 			"two emoji adjacent",
 			"\U0001F44D\u2764\uFE0F",
 			[]Token{emoji("\U0001F44D", thumbURL), emoji("\u2764\uFE0F", heartURL)},
@@ -171,24 +144,8 @@ func TestResolveEmojiToTokens_Mixed(t *testing.T) {
 		in   string
 		want []Token
 	}{
-		{
-			"shortcode then unicode emoji",
-			":thumbsup: yes \u2764\uFE0F",
-			[]Token{
-				emoji(":thumbsup:", thumbURL),
-				text(" yes "),
-				emoji("\u2764\uFE0F", heartURL),
-			},
-		},
-		{
-			"unicode emoji then shortcode",
-			"\U0001F44D :heart:",
-			[]Token{
-				emoji("\U0001F44D", thumbURL),
-				text(" "),
-				emoji(":heart:", heartURL),
-			},
-		},
+		{"shortcode then unicode emoji", ":thumbsup: yes \u2764\uFE0F", []Token{text(":thumbsup: yes "), emoji("\u2764\uFE0F", heartURL)}},
+		{"unicode emoji then shortcode", "\U0001F44D :heart:", []Token{emoji("\U0001F44D", thumbURL), text(" :heart:")}},
 		{
 			"colon inside non-emoji text (URL-like)",
 			"see https://example.com path",
@@ -209,17 +166,7 @@ func TestResolveEmojiToTokens_Mixed(t *testing.T) {
 			"caf\u00e9",
 			[]Token{text("caf\u00e9")},
 		},
-		{
-			"three emoji + text + shortcode at boundaries",
-			"\U0001F44D\u2764\uFE0F\U0001F680 mid :thumbsup:",
-			[]Token{
-				emoji("\U0001F44D", thumbURL),
-				emoji("\u2764\uFE0F", heartURL),
-				emoji("\U0001F680", rocketURL),
-				text(" mid "),
-				emoji(":thumbsup:", thumbURL),
-			},
-		},
+		{"three emoji + text + shortcode at boundaries", "\U0001F44D\u2764\uFE0F\U0001F680 mid :thumbsup:", []Token{emoji("\U0001F44D", thumbURL), emoji("\u2764\uFE0F", heartURL), emoji("\U0001F680", rocketURL), text(" mid :thumbsup:")}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -145,15 +145,10 @@ type ThreadService interface {
 	CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS) []messages.MessageItem
 	CacheReadScoped(HistoryRequest, ids.ThreadTS) []messages.MessageItem
 
-	// Mark marks the thread as read on Slack's servers
-	// (subscriptions.thread.mark). channelID is the parent channel,
+	// Mark marks the thread as read on the provider. channelID is the parent channel,
 	// threadTS is the parent message ts, ts is the latest reply ts
 	// the user has now seen. Best-effort and non-blocking.
 	Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS)
-
-	// SendReply posts a reply to threadTS in channelID. Returns a
-	// tea.Msg (typically ThreadReplySentMsg or ThreadReplySendFailedMsg).
-	SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg
 
 	// ListFetch loads the involved-threads list for the workspace
 	// (Slack subscriptions.list). Returns a tea.Msg (typically
@@ -186,7 +181,6 @@ type ThreadServiceFuncs struct {
 	CacheRead           ThreadCacheReadFunc
 	CacheReadScoped     func(HistoryRequest, ids.ThreadTS) []messages.MessageItem
 	Mark                ThreadMarkFunc
-	SendReply           ThreadReplySendFunc
 	ListFetch           ThreadsListFetchFunc
 	EnsureSubscriptions func(teamID ids.TeamID)
 	ChannelLastRead     func(channelID ids.ChannelID) string
@@ -243,13 +237,6 @@ func (t threadAdapter) Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts i
 	t.fns.Mark(channelID, threadTS, ts)
 }
 
-func (t threadAdapter) SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string) tea.Msg {
-	if t.fns.SendReply == nil {
-		return nil
-	}
-	return t.fns.SendReply(channelID, threadTS, text)
-}
-
 func (t threadAdapter) ListFetch(teamID ids.TeamID) tea.Msg {
 	if t.fns.ListFetch == nil {
 		return nil
@@ -271,20 +258,13 @@ func (t threadAdapter) ChannelLastRead(channelID ids.ChannelID) string {
 	return t.fns.ChannelLastRead(channelID)
 }
 
-// MessageService is the App's interface to Slack's per-message
-// operations: send, edit, delete, mark-unread, and permalink lookup.
+// MessageService is the App's interface to per-message operations.
 // Implementations are wired by cmd/mmk/main.go.
 //
 // All methods are best-effort and nil-safe at the adapter level: an
 // implementation built via NewMessageService with a nil component
-// silently no-ops that operation (returning nil tea.Msg or
-// ("", nil) for Permalink).
+// silently no-ops that operation.
 type MessageService interface {
-	// Send dispatches chat.postMessage for channelID with text.
-	// Returns a tea.Msg (typically MessageSentMsg or
-	// MessageSendFailedMsg).
-	Send(channelID ids.ChannelID, text string) tea.Msg
-
 	// Edit dispatches chat.update for the message identified by
 	// (channelID, ts), replacing its text with newText.
 	// Returns a tea.Msg (typically MessageEditedMsg).
@@ -300,17 +280,10 @@ type MessageService interface {
 	// for the sidebar's badge update. Returns a tea.Msg (typically
 	// MessageMarkedUnreadMsg).
 	MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) tea.Msg
-
-	// Permalink resolves the Slack permalink URL for the message
-	// identified by (channelID, ts). Used by the copy-permalink
-	// keybind. Synchronous (HTTP); callers wrap in a goroutine to
-	// avoid blocking the Update loop.
-	Permalink(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error)
 }
 
 // MattermostSendService is the scoped UI boundary for creating a
-// Mattermost channel post. It is separate from MessageService so the
-// Slack-shaped send contract remains unchanged.
+// Mattermost channel post.
 type MattermostSendService interface {
 	Send(context.Context, MattermostSendRequest) tea.Msg
 }
@@ -371,11 +344,9 @@ func (m mattermostReadAdapter) View(request MattermostReadRequest) (ServerViewSt
 // NewMessageService. Any field may be nil; the resulting service
 // no-ops that operation.
 type MessageServiceFuncs struct {
-	Send       MessageSendFunc
 	Edit       MessageEditFunc
 	Delete     MessageDeleteFunc
 	MarkUnread MarkUnreadFunc
-	Permalink  PermalinkFetchFunc
 }
 
 // NewMessageService builds a MessageService from a MessageServiceFuncs
@@ -391,13 +362,6 @@ var noopMessageService MessageService = messageAdapter{}
 
 type messageAdapter struct {
 	fns MessageServiceFuncs
-}
-
-func (m messageAdapter) Send(channelID ids.ChannelID, text string) tea.Msg {
-	if m.fns.Send == nil {
-		return nil
-	}
-	return m.fns.Send(channelID, text)
 }
 
 func (m messageAdapter) Edit(channelID ids.ChannelID, ts ids.MessageTS, newText string) tea.Msg {
@@ -419,13 +383,6 @@ func (m messageAdapter) MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadT
 		return nil
 	}
 	return m.fns.MarkUnread(channelID, threadTS, boundaryTS, unreadCount)
-}
-
-func (m messageAdapter) Permalink(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
-	if m.fns.Permalink == nil {
-		return "", nil
-	}
-	return m.fns.Permalink(ctx, channelID, ts)
 }
 
 // ChannelService is the App's interface to the Slack channels API,

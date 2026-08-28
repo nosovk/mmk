@@ -169,65 +169,6 @@ func TestShouldNotify_SuppressedByMute(t *testing.T) {
 	}
 }
 
-func TestStripSlackMarkup(t *testing.T) {
-	userNames := map[string]string{
-		"U123": "Alice",
-		"U456": "Bob",
-	}
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"plain text", "hello world", "hello world"},
-		{"known user mention", "hey <@U123>", "hey @Alice"},
-		{"unknown user mention falls back to ID", "hey <@U999>", "hey @U999"},
-		{"multiple user mentions", "<@U123> and <@U456>", "@Alice and @Bob"},
-		{"channel mention", "see <#C123|general>", "see #general"},
-		{"link with label", "visit <https://example.com|Example>", "visit Example"},
-		{"bare link", "visit <https://example.com>", "visit https://example.com"},
-		{"labeled mailto link", "ping <mailto:foo@bar.com|foo@bar.com>", "ping foo@bar.com"},
-		{"bare mailto link", "email <mailto:foo@bar.com>", "email foo@bar.com"},
-		{"broadcast here", "<!here> heads up", "@here heads up"},
-		{"broadcast channel", "<!channel> heads up", "@channel heads up"},
-		{"broadcast everyone", "<!everyone> heads up", "@everyone heads up"},
-		{"subteam mention", "ping <!subteam^S123|@platform> please", "ping @platform please"},
-		{"markup chars stripped", "*bold* and _italic_ and ~strike~", "bold and italic and strike"},
-		{"code", "`code`", "code"},
-		{"empty", "", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := StripSlackMarkup(tt.input, userNames)
-			if result != tt.expected {
-				t.Errorf("StripSlackMarkup(%q) = %q, want %q", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestStripSlackMarkup_NilUserNames(t *testing.T) {
-	// Nil map should not panic; mentions fall back to user ID.
-	result := StripSlackMarkup("hi <@U123>", nil)
-	if result != "hi @U123" {
-		t.Errorf("got %q, want %q", result, "hi @U123")
-	}
-}
-
-func TestStripSlackMarkup_Truncation(t *testing.T) {
-	long := ""
-	for i := 0; i < 120; i++ {
-		long += "a"
-	}
-	result := StripSlackMarkup(long, nil)
-	if len(result) > 103 {
-		t.Errorf("expected truncation, got length %d", len(result))
-	}
-	if result[len(result)-3:] != "..." {
-		t.Error("expected ... suffix")
-	}
-}
-
 func TestNotify_RunsNotifyCommand(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	n := New(true, "printf '%s\\n%s' \"$MMK_TITLE\" \"$MMK_BODY\" >"+out)

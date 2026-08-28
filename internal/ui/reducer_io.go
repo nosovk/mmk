@@ -27,8 +27,6 @@
 //
 //	statusbar.CopiedMsg               - "N chars copied"
 //	statusbar.CopiedClearMsg          - 2/3s expiry tick
-//	statusbar.PermalinkCopiedMsg      - "Copied permalink"
-//	statusbar.PermalinkCopyFailedMsg  - "Failed to copy link"
 //	statusbar.MarkedUnreadMsg         - "Marked unread"
 //	statusbar.MarkUnreadFailedMsg     - "Mark unread failed: ..."
 //	statusbar.EditFailedMsg           - "Edit failed: ..."
@@ -104,14 +102,6 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		a.statusbar.ClearCopied()
 		return nil, true
 
-	case statusbar.PermalinkCopiedMsg:
-		_ = m
-		return toastWithClear(a, "Copied permalink", 2*time.Second), true
-
-	case statusbar.PermalinkCopyFailedMsg:
-		_ = m
-		return toastWithClear(a, "Failed to copy link", 2*time.Second), true
-
 	case statusbar.MarkedUnreadMsg:
 		_ = m
 		return toastWithClear(a, "Marked unread", 2*time.Second), true
@@ -186,12 +176,12 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		for _, mp := range a.allWinModels() {
 			mp.HandleImageReady(m.Channel, m.TS, m.Key)
 		}
-		// Thread panel: v1 uses coarse cache invalidation. If any
-		// reply in the open thread has a matching TS, blow the
+		// Thread panel: v1 uses coarse cache invalidation. If the root or a
+		// reply in the open thread has a matching provider message ID, blow the
 		// thread cache so renderThreadMessage runs again with the
-		// now-cached image bytes. HasReply guards against churning
+		// now-cached image bytes. HasMessage guards against churning
 		// the thread cache on every messages-pane image arrival.
-		if a.threadPanel.HasReply(m.TS) {
+		if a.threadPanel.HasMessage(m.TS) {
 			a.threadPanel.InvalidateCache()
 		}
 		return nil, true

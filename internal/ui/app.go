@@ -25,7 +25,6 @@ import (
 	"github.com/nosovk/mmk/internal/export"
 	"github.com/nosovk/mmk/internal/ids"
 	imgpkg "github.com/nosovk/mmk/internal/image"
-	"github.com/nosovk/mmk/internal/slackurl"
 	"github.com/nosovk/mmk/internal/ui/channelfinder"
 	"github.com/nosovk/mmk/internal/ui/channelpicker"
 	"github.com/nosovk/mmk/internal/ui/compose"
@@ -50,7 +49,6 @@ import (
 	"github.com/nosovk/mmk/internal/ui/wintree"
 	"github.com/nosovk/mmk/internal/ui/workspace"
 	"github.com/nosovk/mmk/internal/ui/workspacefinder"
-	"github.com/nosovk/mmk/internal/usergroups"
 	"golang.design/x/clipboard"
 )
 
@@ -246,7 +244,6 @@ type App struct {
 	emojiCtx     messages.EmojiContext
 	emojiCustoms map[string]string
 	channelNames map[string]string
-	userGroups   map[string]string
 
 	// externalUsers tracks which user IDs are Slack Connect / shared-channel
 	// guests. Populated by main.go via SetExternalUsers as users are
@@ -332,16 +329,11 @@ type App struct {
 	// channel is no longer in the list.
 	lastChannelByTeam map[string]string
 
-	// workspaceDomains maps teamID -> slack.com subdomain, recorded
-	// from WorkspaceReadyMsg / WorkspaceSwitchedMsg. Read by the link
-	// router to match permalink hosts against the active workspace.
-	workspaceDomains map[string]string
-
-	// pendingLinkNav tracks an in-flight permalink navigation: the
-	// channel was (or is being) opened and the message-select /
-	// thread-open completes when that channel's messages land. See
+	// pendingMessageNav tracks an in-flight workspace-search navigation: the
+	// channel was (or is being) opened and the message-select or thread-open
+	// completes when that channel's messages land. See
 	// reducer_links.go.
-	pendingLinkNav *pendingLinkNav
+	pendingMessageNav *pendingMessageNav
 
 	// search is the active in-channel search (nil = none).
 	// searchInput is the prompt buffer while in ModeSearch.
@@ -538,7 +530,6 @@ func NewApp() *App {
 		channels:                   noopChannelService,
 		searchSvc:                  noopSearchService,
 		lastChannelByTeam:          map[string]string{},
-		workspaceDomains:           map[string]string{},
 		serverRevisions:            map[string]uint64{},
 		serverStates:               map[string]ServerViewState{},
 		browserOpener:              openURLCmd,
@@ -1050,61 +1041,6 @@ func (a *App) toggleReactionOnMessageItem(channelIDStr string, msg messages.Mess
 	}
 }
 
-// copyPermalinkOfSelected resolves the currently-selected message or thread
-// reply, calls the permalink fetcher, and returns a tea.Cmd that writes the
-// URL to the clipboard and emits a status-bar toast.
-func (a *App) copyPermalinkOfSelected() tea.Cmd {
-	var channelID, ts string
-	switch a.focusedPanel {
-	case PanelMessages:
-		msg, ok := a.messagepane.SelectedMessage()
-		if !ok {
-			return nil
-		}
-		channelID = a.activeChannelID
-		ts = msg.TS
-	case PanelThread:
-		reply := a.threadPanel.SelectedReply()
-		if reply == nil {
-			return nil
-		}
-		channelID = a.threadPanel.ChannelID()
-		ts = reply.TS
-	default:
-		return nil
-	}
-	if channelID == "" || ts == "" {
-		return nil
-	}
-	messageSvc := a.messageSvc
-	cID := ids.ChannelID(channelID)
-	mTS := ids.MessageTS(ts)
-
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		url, err := messageSvc.Permalink(ctx, cID, mTS)
-		if err != nil {
-			log.Printf("copy permalink: %v", err)
-			return statusbar.PermalinkCopyFailedMsg{}
-		}
-		if url == "" {
-			// No permalink wired (noop service) or Slack returned an
-			// empty URL. Silent no-op rather than copying "" with a
-			// false success toast.
-			return nil
-		}
-
-		if !a.clipboardAvailable {
-			return statusbar.PermalinkCopyFailedMsg{}
-		}
-		_ = a.clipboardWrite(clipboard.FmtText, []byte(url))
-
-		return statusbar.PermalinkCopiedMsg{}
-	}
-}
-
 // openLinksOfSelected implements the `o` keybinding: collect the
 // links in the selected message (messages pane or thread panel).
 // 0 links -> toast; 1 link -> dispatch OpenLinkMsg directly; 2+ ->
@@ -1138,28 +1074,12 @@ func (a *App) openLinksOfSelected() tea.Cmd {
 	default:
 		items := make([]linkpicker.Item, len(links))
 		for i, l := range links {
-			items[i] = linkpicker.Item{URL: l.URL, Label: l.Label, InApp: a.linkOpensInApp(l.URL)}
+			items[i] = linkpicker.Item{URL: l.URL, Label: l.Label}
 		}
 		a.linkPicker.Open(items)
 		a.SetMode(ModeLinkPicker)
 		return nil
 	}
-}
-
-// linkOpensInApp reports whether routeLink would navigate this URL
-// inside mmk (used for the picker's "[mmk]" badge). Mirrors the
-// guards at the top of routeLink.
-func (a *App) linkOpensInApp(rawURL string) bool {
-	pl, ok := slackurl.Parse(rawURL)
-	if !ok {
-		return false
-	}
-	domain := a.activeWorkspaceDomain()
-	if domain == "" || pl.Subdomain != domain {
-		return false
-	}
-	_, _, found := a.channels.Lookup(pl.ChannelID)
-	return found
 }
 
 func (a *App) saveThreadToFile() tea.Cmd {
@@ -1603,7 +1523,7 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 	}
 	parent := msg
 	if rootID != selectedID {
-		parent = messages.MessageItem{Format: msg.Format}
+		parent = messages.MessageItem{}
 		if msg.ID != "" {
 			parent.ID = rootID
 		} else {
@@ -1618,7 +1538,7 @@ func (a *App) openThreadForSelectedMessage() tea.Cmd {
 // threadTS) with the given parent row, primes replies from the thread
 // cache, and returns a cmd that fetches authoritative replies. Shared
 // by openThreadForSelectedMessage (parent taken from the pane buffer)
-// and openThreadForPermalink (parent reconstructed from cache/stub).
+// and message navigation (parent reconstructed from cache/stub).
 func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS string) tea.Cmd {
 	a.threadVisible = true
 	a.statusbar.SetInThread(true)
@@ -2410,19 +2330,6 @@ func (a *App) SetUserNames(names map[string]string) {
 	a.threadCompose.SetUsers(users)
 }
 
-// SetUserGroups passes the active workspace's usergroup map to every
-// surface that renders, previews, or composes usergroup mentions.
-func (a *App) SetUserGroups(groups map[string]string) {
-	a.userGroups = usergroups.Copy(groups)
-	a.threadsView.SetUserGroups(a.userGroups)
-	for _, m := range a.allWinModels() {
-		m.SetUserGroups(a.userGroups)
-	}
-	a.threadPanel.SetUserGroups(a.userGroups)
-	a.compose.SetUserGroups(a.userGroups)
-	a.threadCompose.SetUserGroups(a.userGroups)
-}
-
 // seedNewMessagePicker snapshots the current workspace's user list
 // into the new-message picker and configures the self-exclusion.
 // Called when ModeNewMessage is entered so the modal always sees a
@@ -2603,13 +2510,6 @@ func (a *App) activeTeamName() string {
 		return a.activeServerID
 	}
 	return "this workspace"
-}
-
-// activeWorkspaceDomain returns the slack.com subdomain of the active
-// workspace, or "" when unknown (link router then falls back to the
-// browser for all slack.com permalinks).
-func (a *App) activeWorkspaceDomain() string {
-	return a.workspaceDomains[a.activeServerID]
 }
 
 // workspaceNameForActive returns the display name of the active workspace

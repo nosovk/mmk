@@ -289,12 +289,6 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		}
 		return a.saveThreadToFile()
 
-	case key.Matches(msg, a.keys.CopyPermalink):
-		if !a.features.Allows(FeaturePermalink) {
-			return nil
-		}
-		return a.copyPermalinkOfSelected()
-
 	case key.Matches(msg, a.keys.Edit):
 		if !a.features.Allows(FeatureEditDelete) {
 			return nil

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -207,6 +208,9 @@ func TestServerRegistrySaveValidatesBeforeReplacingFile(t *testing.T) {
 }
 
 func TestServerRegistrySaveAtomicallyReplacesAndSecuresFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows replacement semantics are covered by server_registry_replace_windows_test.go")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.toml")
 	if err := os.WriteFile(path, []byte("version = 1\n"), 0644); err != nil {

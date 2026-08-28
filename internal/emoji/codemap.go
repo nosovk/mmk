@@ -1,24 +1,12 @@
 package emoji
 
-// CodeMap returns the standard-emoji shortcode→glyph map, keyed by
-// ":name:" (all Slack aliases) with bare-glyph values (no trailing
-// space). It is mmk's replacement for kyokomi/emoji's CodeMap(), sourced
-// from the bundled iamcal/emoji-data table (slacknames_gen.go).
-//
-// The returned map is shared and must not be mutated by callers (all
-// current callers only read it).
-func CodeMap() map[string]string { return slackCodeMap }
+// CodeMap returns the bundled shortcode-to-glyph map. Standard shortcode
+// aliases were provider-specific and are no longer bundled.
+func CodeMap() map[string]string { return nil }
 
-// Sprint substitutes Slack-style :shortcode: sequences in s with their
-// Unicode glyph, appending a trailing space after each — byte-for-byte
-// compatible with the kyokomi/emoji Sprint() it replaces. Unknown
-// shortcodes and non-shortcode text (including ASCII emoticons like ":)")
-// pass through unchanged.
+// Sprint preserves provider-owned :shortcode: sequences and other text.
 func Sprint(s string) string {
 	return shortcodeRe.ReplaceAllStringFunc(s, func(match string) string {
-		if glyph, ok := slackCodeMap[match]; ok {
-			return glyph + " "
-		}
 		return match
 	})
 }

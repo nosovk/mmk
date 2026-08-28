@@ -15,11 +15,9 @@ import (
 	emojiutil "github.com/nosovk/mmk/internal/emoji"
 	imgpkg "github.com/nosovk/mmk/internal/image"
 	"github.com/nosovk/mmk/internal/ui/imgrender"
-	"github.com/nosovk/mmk/internal/ui/messages/blockkit"
 	"github.com/nosovk/mmk/internal/ui/scrollbar"
 	"github.com/nosovk/mmk/internal/ui/selection"
 	"github.com/nosovk/mmk/internal/ui/styles"
-	"github.com/nosovk/mmk/internal/usergroups"
 )
 
 type MessageItem struct {
@@ -32,7 +30,6 @@ type MessageItem struct {
 	DeliveryGeneration uint64
 	CreatedAt          int64
 	RootID             string
-	Format             MessageFormat
 	TS                 string
 	UserName           string
 	UserID             string
@@ -44,19 +41,9 @@ type MessageItem struct {
 	Reactions          []ReactionItem
 	Attachments        []Attachment
 	IsEdited           bool
-	// Subtype mirrors Slack's `subtype` field on a message event.
-	// Currently we only act on "thread_broadcast" (a thread reply that
-	// was also sent to the channel) so we can render a label above it.
+	// Subtype identifies special message event variants. Currently only
+	// "thread_broadcast" affects rendering.
 	Subtype string
-
-	// Blocks holds parsed Slack Block Kit blocks. Rendered between
-	// the body Text and the file Attachments by Phase 5.
-	Blocks []blockkit.Block
-
-	// LegacyAttachments holds parsed entries from the legacy
-	// `attachments` field (color stripe + title + fields style bot
-	// cards). Rendered after Blocks.
-	LegacyAttachments []blockkit.LegacyAttachment
 }
 
 type DeliveryState uint8
@@ -65,13 +52,6 @@ const (
 	DeliverySent DeliveryState = iota
 	DeliveryPending
 	DeliveryFailed
-)
-
-type MessageFormat uint8
-
-const (
-	FormatSlack MessageFormat = iota
-	FormatMattermostPlain
 )
 
 func (m MessageItem) MessageID() string {
@@ -115,19 +95,19 @@ func (m MessageItem) DisplayTime() string {
 
 // Attachment represents a file or image attached to a message.
 // Kind is "image" for image/* mimetypes, "file" otherwise.
-// URL is the user-facing permalink (preferred) or fallback to url_private.
+// URL is the user-facing attachment URL.
 type Attachment struct {
 	Kind string // "image" or "file"
 	Name string // display filename / title
 	URL  string // permalink (preferred) or url_private
 
 	// Populated only for Kind == "image":
-	FileID string      // Slack file ID for cache key
+	FileID string      // provider file ID for cache key
 	Mime   string      // e.g. "image/png"
 	Thumbs []ThumbSpec // sorted ascending; empty for non-image
 }
 
-// ThumbSpec is one Slack thumbnail variant.
+// ThumbSpec is one thumbnail variant.
 //
 // This is intentionally distinct from image.ThumbSpec in the internal/image
 // package to avoid coupling the messages UI package to the image package's
@@ -296,7 +276,6 @@ type Model struct {
 	avatarFn     AvatarFunc        // optional: returns half-block avatar for a userID
 	userNames    map[string]string // user ID -> display name for mention resolution
 	channelNames map[string]string // channel ID -> name for bare <#CID> resolution
-	userGroups   map[string]string // usergroup ID -> handle for bare subteam resolution
 
 	// searchTerms are folded word-prefix terms of the active in-channel
 	// search; non-empty enables highlight rendering. nil = no search.
@@ -614,25 +593,7 @@ func (m *Model) HandleImageFailed(key string) {
 // could change.
 func (m *Model) Version() int64 { return m.version }
 
-// MessageTextSource returns the mrkdwn string that should be rendered
-// as the visible message body. For most messages it's just msg.Text,
-// but for messages whose body originated as a rich_text block (typical
-// of bot apps like GitHub Pending Reviews, PagerDuty, etc.) Slack's
-// text fallback collapses standalone "\n" elements into spaces — so
-// we reconstruct a newline-faithful mrkdwn from the parsed block when
-// one is available. See blockkit.RichTextToMrkdwn.
-//
-// When no RichTextBlock is present (the overwhelmingly common case
-// for user-typed messages) this is a zero-cost passthrough of
-// msg.Text.
 func MessageTextSource(msg MessageItem) string {
-	for _, b := range msg.Blocks {
-		if rt, ok := b.(blockkit.RichTextBlock); ok {
-			if reconstructed := blockkit.RichTextToMrkdwn(rt); reconstructed != "" {
-				return reconstructed
-			}
-		}
-	}
 	return msg.Text
 }
 
@@ -1825,19 +1786,6 @@ func (m *Model) SetChannelNames(names map[string]string) {
 	m.dirty()
 }
 
-// SetUserGroups sets the workspace-scoped usergroup ID -> handle map used
-// to resolve bare <!subteam^SID> mentions. No-op when the new map matches
-// the current one -- App.SetUserGroups fires on every workspace switch,
-// and busting the render cache for an identical set is pure waste.
-func (m *Model) SetUserGroups(groups map[string]string) {
-	if usergroups.Equal(m.userGroups, groups) {
-		return
-	}
-	m.userGroups = usergroups.Copy(groups)
-	m.cache = nil
-	m.dirty()
-}
-
 // EmojiContext bundles the emoji-image rendering dependencies. Held
 // by the Model and threaded through RenderSlackMarkdownWith when
 // building each message's body and reaction pills.
@@ -1996,47 +1944,20 @@ func (m *Model) renderLoadingOlderHint(width int) string {
 // callers pass nil otherwise. renderMessageEntry / renderMessagePlain
 // guard every measurement with `if stats != nil` so the nil path adds
 // only a couple of branch-predicted checks per message — negligible
-// compared to the lipgloss / regex / blockkit work it surrounds.
+// compared to the lipgloss and image work it surrounds.
 //
 // Fields measure cumulative time across the loop, paired with a count
 // so the [perf] log can report "blockKit n=12 avg=8ms total=96ms"
-// (most messages skip blockkit; only ones with msg.Blocks pay).
+// (most messages have no attachments).
 type entryPerfStats struct {
 	count int // number of messages processed
 
 	// renderMessagePlain sub-steps
-	bodyTotal      time.Duration // RenderSlackMarkdown + WordWrap + styles.MessageText.Render
-	reactionsTotal time.Duration // pill rendering, emoji width, wrap math
-	reactionsCount int
-	blockKitTotal  time.Duration // blockkit.Render for msg.Blocks
-	blockKitCount  int
-	legacyTotal    time.Duration // blockkit.RenderLegacy for msg.LegacyAttachments
-	legacyCount    int
-	// Sub-breakdown within legacyTotal. Sums across all
-	// blockkit.RenderLegacy calls in the loop, attributing the cost
-	// across text rendering (renderTextLines for pretext / text /
-	// fields / footer), image work (computeBlockImageTarget +
-	// fetchOrPlaceholder), and other (stripe styling, title
-	// formatting, width-and-truncate math). Populated only when
-	// ctx.Perf was non-nil during the call.
-	legacyTextTotal  time.Duration
-	legacyImageTotal time.Duration
-	legacyOtherTotal time.Duration
-	legacyAttCount   int // total LegacyAttachment values processed
-
-	// Sub-breakdown within legacyImageTotal, populated by
-	// blockkit.fetchOrPlaceholder. Each (total, count) pair lets the
-	// host log avg-per-call.
-	legacyImgCachedCheckTotal time.Duration
-	legacyImgCachedCheckCount int
-	legacyImgKittyTotal       time.Duration
-	legacyImgKittyCount       int
-	legacyImgRenderImageTotal time.Duration
-	legacyImgRenderImageCount int
-	legacyImgPlaceholderTotal time.Duration
-	legacyImgPlaceholderCount int
-	attachmentsTotal          time.Duration // imgRenderer.RenderBlock loop over msg.Attachments
-	attachmentsCount          int
+	bodyTotal        time.Duration // RenderMattermostPlain + styles.MessageText.Render
+	reactionsTotal   time.Duration // pill rendering, emoji width, wrap math
+	reactionsCount   int
+	attachmentsTotal time.Duration // imgRenderer.RenderBlock loop over msg.Attachments
+	attachmentsCount int
 
 	// renderMessageEntry sub-steps (post renderMessagePlain)
 	borderWrapTotal time.Duration // borderFill/borderInvis/borderSelect renders + RepaintBgToSelectionTint
@@ -2178,7 +2099,7 @@ func (m *Model) buildCache(width int) {
 
 	// Perf instrumentation: allocate the per-sub-step stats sink when
 	// MMK_DEBUG is on so we can attribute buildCache's wall-clock across
-	// body / reactions / blockKit / legacy / attachments / borderWrap /
+	// body / reactions / attachments / borderWrap /
 	// plainLines. Aggregated into a single [perf] line after the loop
 	// to keep log volume O(1) per buildCache rather than O(N) per
 	// message. nil disables every call site's timing (see
@@ -2234,16 +2155,9 @@ func (m *Model) buildCache(width int) {
 	m.recomputeEntryOffsets()
 
 	if stats != nil {
-		debuglog.Perf("messages.buildCache.breakdown N=%d body=%s reactions(n=%d)=%s blockKit(n=%d)=%s legacy(n=%d, atts=%d)=%s [text=%s image=%s other=%s] img[cachedCheck(n=%d)=%s kitty(n=%d)=%s renderImage(n=%d)=%s placeholder(n=%d)=%s] attachments(n=%d)=%s borderWrap=%s plainLines=%s",
+		debuglog.Perf("messages.buildCache.breakdown N=%d body=%s reactions(n=%d)=%s attachments(n=%d)=%s borderWrap=%s plainLines=%s",
 			stats.count, stats.bodyTotal,
 			stats.reactionsCount, stats.reactionsTotal,
-			stats.blockKitCount, stats.blockKitTotal,
-			stats.legacyCount, stats.legacyAttCount, stats.legacyTotal,
-			stats.legacyTextTotal, stats.legacyImageTotal, stats.legacyOtherTotal,
-			stats.legacyImgCachedCheckCount, stats.legacyImgCachedCheckTotal,
-			stats.legacyImgKittyCount, stats.legacyImgKittyTotal,
-			stats.legacyImgRenderImageCount, stats.legacyImgRenderImageTotal,
-			stats.legacyImgPlaceholderCount, stats.legacyImgPlaceholderTotal,
 			stats.attachmentsCount, stats.attachmentsTotal,
 			stats.borderWrapTotal, stats.plainLinesTotal)
 	}
@@ -2259,7 +2173,7 @@ func (m *Model) buildCache(width int) {
 // Critical perf invariant: this function MUST NOT call
 // renderMessagePlain for any message that isn't in m.staleEntries.
 // The whole point of per-entry invalidation is to skip the per-message
-// lipgloss / wordwrap / blockkit work for siblings during an image
+// lipgloss / wordwrap work for siblings during an image
 // burst.
 //
 // Preconditions enforced by the caller (the View()-time guard):
@@ -2297,60 +2211,6 @@ func (m *Model) partialRebuild(width int) {
 	m.recomputeEntryOffsets()
 }
 
-// blockkitContext bundles the blockkit-package dependencies sourced
-// from the model's image context, theme, and per-message identity.
-// Wired here rather than in the constructor so it picks up runtime
-// changes to imgCtx (e.g., when image_protocol is reconfigured).
-func (m *Model) blockkitContext(msg MessageItem, userNames, channelNames map[string]string) blockkit.Context {
-	var imgCtx imgrender.ImageContext
-	if m.imgRenderer != nil {
-		imgCtx = m.imgRenderer.Context()
-	}
-	send := imgCtx.SendMsg
-	return blockkit.Context{
-		Protocol:    imgCtx.Protocol,
-		Fetcher:     imgCtx.Fetcher,
-		KittyRender: imgCtx.KittyRender,
-		CellPixels:  imgCtx.CellPixels,
-		MaxRows:     imgCtx.MaxRows,
-		MaxCols:     imgCtx.MaxCols,
-		UserNames:   userNames,
-		MessageTS:   msg.MessageID(),
-		Channel:     m.channelName,
-		// Capture channelNames in a closure so blockkit's two-arg
-		// RenderText signature stays stable; channel-name resolution
-		// is a host concern.
-		//
-		// blockkit's RenderText is called from inside block rendering
-		// where the per-call flush accumulator isn't accessible. Pass
-		// the emoji opts but no flush collector: warm-path emoji
-		// flushes inside rich-text blocks are best-effort in v1
-		// (they'll be re-collected on the next render when the
-		// per-message buildCache walks the entry again). Worst case:
-		// one extra frame of cold-cache spacing for a block-kit
-		// emoji on first reveal. Acceptable.
-		RenderText: func(s string, un map[string]string) string {
-			return RenderSlackMarkdownWith(s, RenderSlackMarkdownOpts{
-				UserNames:    un,
-				ChannelNames: channelNames,
-				UserGroups:   m.userGroups,
-				PlaceCtx:     m.emojiCtx.PlaceCtx,
-				EmojiCells:   m.emojiCtx.Cells,
-				Customs:      m.emojiCtx.Customs,
-				EmojiFlushes: nil,
-			})
-		},
-		WrapText: WordWrap,
-		SendMsg: func(v any) {
-			// tea.Msg is interface{}, so any non-nil v satisfies the inner
-			// send signature. The nil-guard is the only meaningful check.
-			if send != nil {
-				send(v)
-			}
-		},
-	}
-}
-
 // renderMessagePlain renders a message without selection highlight.
 //
 // Returns the message content (multi-line string), per-frame flushes
@@ -2383,24 +2243,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	if stats != nil {
 		bodyT0 = time.Now()
 	}
-	// Emoji-image opts pass through the active EmojiContext; when
-	// image mode is off (or PlaceCtx.Fetcher is nil) RenderSlackMarkdownWith
-	// falls through to the legacy glyph/shortcode-text path. Warm-path
-	// emoji flushes land in the same per-message `flushes` named-return
-	// slice the View() loop walks for inline-image attachments.
-	bodyOpts := RenderSlackMarkdownOpts{
-		UserNames:    userNames,
-		ChannelNames: channelNames,
-		UserGroups:   m.userGroups,
-		PlaceCtx:     m.emojiCtx.PlaceCtx,
-		EmojiCells:   m.emojiCtx.Cells,
-		Customs:      m.emojiCtx.Customs,
-		EmojiFlushes: &flushes,
-	}
-	rendered := RenderSlackMarkdownWith(MessageTextSource(msg), bodyOpts)
-	if msg.Format == FormatMattermostPlain {
-		rendered = RenderMattermostPlain(msg.Text, contentWidth)
-	}
+	rendered := RenderMattermostPlain(msg.Text, contentWidth)
 	if len(m.searchTerms) > 0 {
 		// SearchHighlightSGR's close sequence restores the theme bg/fg
 		// after the highlight's reset so plain body text doesn't bleed
@@ -2580,13 +2423,11 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	}
 
 	var deliveryLine string
-	if msg.Format == FormatMattermostPlain {
-		switch msg.DeliveryState {
-		case DeliveryPending:
-			deliveryLine = "\n" + styles.Timestamp.Render("[pending]")
-		case DeliveryFailed:
-			deliveryLine = "\n" + lipgloss.NewStyle().Foreground(styles.Error).Background(styles.Background).Render("[failed: press enter to retry]")
-		}
+	switch msg.DeliveryState {
+	case DeliveryPending:
+		deliveryLine = "\n" + styles.Timestamp.Render("[pending]")
+	case DeliveryFailed:
+		deliveryLine = "\n" + lipgloss.NewStyle().Foreground(styles.Error).Background(styles.Background).Render("[failed: press enter to retry]")
 	}
 
 	// Pre-attachment row count, so attachment rows can compute their
@@ -2629,94 +2470,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	var allFlushes []func(io.Writer) error
 	allSixel := map[int]sixelEntry{}
 
-	// Block Kit blocks render between the body text and file attachments.
-	bkCtx := m.blockkitContext(msg, userNames, channelNames)
-	var bkLines []string
-	bkInteractive := false
-	if msg.Format != FormatMattermostPlain && len(msg.Blocks) > 0 {
-		var bkT0 time.Time
-		if stats != nil {
-			bkT0 = time.Now()
-		}
-		startInBk := len(bkLines)
-		res := blockkit.Render(msg.Blocks, bkCtx, contentWidth)
-		if stats != nil {
-			stats.blockKitTotal += time.Since(bkT0)
-			stats.blockKitCount++
-		}
-		bkLines = append(bkLines, res.Lines...)
-		allFlushes = append(allFlushes, res.Flushes...)
-		rowOffset := preAttachmentRows + startInBk
-		for k, v := range res.SixelRows {
-			allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height}
-		}
-		// Note: res.Hits is intentionally NOT appended to `hits` in
-		// v1. App-level click routing (app.go) currently uses entryHit
-		// to look up file attachments by attIdx; routing for "BK-"
-		// (Block Kit URL-keyed) hits is deferred. Recording them here
-		// without routing would mis-route clicks to msg.Attachments[0].
-		// See Phase 7 of the plan for the future wiring.
-		_ = res.Hits
-		bkInteractive = bkInteractive || res.Interactive
-	}
-	if msg.Format != FormatMattermostPlain && len(msg.LegacyAttachments) > 0 {
-		var lgT0 time.Time
-		var lgPerf *blockkit.LegacyPerf
-		legacyCtx := bkCtx
-		if stats != nil {
-			lgT0 = time.Now()
-			lgPerf = &blockkit.LegacyPerf{}
-			legacyCtx.Perf = lgPerf
-		}
-		startInBk := len(bkLines)
-		res := blockkit.RenderLegacy(msg.LegacyAttachments, legacyCtx, contentWidth)
-		if stats != nil {
-			stats.legacyTotal += time.Since(lgT0)
-			stats.legacyCount++
-			stats.legacyTextTotal += lgPerf.TextTotal()
-			stats.legacyImageTotal += lgPerf.ImageTotal()
-			stats.legacyOtherTotal += lgPerf.OtherTotal()
-			stats.legacyAttCount += lgPerf.AttachmentCount()
-			ccTotal, ccCount := lgPerf.ImgCachedCheck()
-			stats.legacyImgCachedCheckTotal += ccTotal
-			stats.legacyImgCachedCheckCount += ccCount
-			kTotal, kCount := lgPerf.ImgKitty()
-			stats.legacyImgKittyTotal += kTotal
-			stats.legacyImgKittyCount += kCount
-			riTotal, riCount := lgPerf.ImgRenderImage()
-			stats.legacyImgRenderImageTotal += riTotal
-			stats.legacyImgRenderImageCount += riCount
-			phTotal, phCount := lgPerf.ImgPlaceholder()
-			stats.legacyImgPlaceholderTotal += phTotal
-			stats.legacyImgPlaceholderCount += phCount
-		}
-		bkLines = append(bkLines, res.Lines...)
-		allFlushes = append(allFlushes, res.Flushes...)
-		rowOffset := preAttachmentRows + startInBk
-		for k, v := range res.SixelRows {
-			allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height}
-		}
-		// Note: res.Hits is intentionally NOT appended to `hits` in
-		// v1. App-level click routing (app.go) currently uses entryHit
-		// to look up file attachments by attIdx; routing for "BK-"
-		// (Block Kit URL-keyed) hits is deferred. Recording them here
-		// without routing would mis-route clicks to msg.Attachments[0].
-		// See Phase 7 of the plan for the future wiring.
-		_ = res.Hits
-		bkInteractive = bkInteractive || res.Interactive
-	}
-	if bkInteractive {
-		hint := styles.Timestamp.Render("↗ open in Slack to interact")
-		bkLines = append(bkLines, hint)
-	}
-	preAttachmentRows += len(bkLines)
-
-	bkBlock := ""
-	if len(bkLines) > 0 {
-		bkBlock = "\n" + strings.Join(bkLines, "\n")
-	}
-
-	if msg.Format != FormatMattermostPlain && len(msg.Attachments) > 0 {
+	if len(msg.Attachments) > 0 {
 		var attT0 time.Time
 		if stats != nil {
 			attT0 = time.Now()
@@ -2767,7 +2521,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		attachmentLineCount = len(flat)
 	}
 
-	msgContent := broadcastLabel + line + editedMark + "\n" + text + bkBlock + attachmentLines + threadLine + reactionLine + deliveryLine
+	msgContent := broadcastLabel + line + editedMark + "\n" + text + attachmentLines + threadLine + reactionLine + deliveryLine
 
 	// Translate per-pill specs into entry-relative reaction hit rects.
 	// reactionRowBase is the row index (within linesNormal) where the
@@ -2804,7 +2558,7 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	}
 	// Merge body-text + reaction-pill emoji flushes (the named-return
 	// `flushes` slice, appended to at lines ~1811 / ~1914) with
-	// blockkit / legacy-attachment / image-attachment flushes
+	// image-attachment flushes
 	// (`allFlushes`). The two parallel accumulators are a v1 quirk of
 	// Phase 6's wiring; without this merge the body+reaction emoji
 	// kitty uploads would be silently dropped here and the terminal

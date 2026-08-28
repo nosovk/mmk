@@ -173,11 +173,6 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return nil, true
 
-	case UserGroupsLoadedMsg:
-		if m.TeamID == a.activeServerID {
-			a.SetUserGroups(m.UserGroups)
-		}
-		return nil, true
 	}
 	return nil, false
 }
@@ -272,7 +267,6 @@ func activateServer(a *App, state ServerViewState, preserveSelection bool) tea.C
 	a.SetExternalUsers(nil)
 	a.SetUserNames(state.UserNames)
 	a.SetCustomEmoji(nil)
-	a.SetUserGroups(nil)
 	a.SetCurrentUserID(state.UserID)
 	a.activeServerID = string(state.ServerID)
 	a.activeChannelID = ""
@@ -400,9 +394,6 @@ func (a *App) acceptServerSwitchedState(state ServerViewState) ServerViewState {
 func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 	a.features = SlackFeatures()
 	a.bootstrap.MarkReady(m.TeamName)
-	if m.Domain != "" {
-		a.workspaceDomains[m.TeamID] = m.Domain
-	}
 	var batch []tea.Cmd
 	// Only the workspace flagged InitialActive auto-claims active
 	// state. main.go computes this deterministically
@@ -441,7 +432,6 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		a.SetExternalUsers(m.ExternalUsers)
 		a.SetUserNames(m.UserNames)
 		a.SetCustomEmoji(m.CustomEmoji)
-		a.SetUserGroups(m.UserGroups)
 		// Route through the setter so messagepane/threadPanel also learn
 		// the current user — production never calls SetCurrentUserID
 		// otherwise, which would leave live self-reactions unstyled.
@@ -491,9 +481,6 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	if a.compose.Uploading() || a.threadCompose.Uploading() {
 		return a.uploadToastCmd("Upload in progress", 2*time.Second)
 	}
-	if m.Domain != "" {
-		a.workspaceDomains[m.TeamID] = m.Domain
-	}
 	// Remember which channel we were on in the workspace we're
 	// leaving so that switching back lands the user on the same
 	// channel rather than always snapping to the sidebar's first
@@ -542,7 +529,6 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	a.SetExternalUsers(m.ExternalUsers)
 	a.SetUserNames(m.UserNames)
 	a.SetCustomEmoji(m.CustomEmoji)
-	a.SetUserGroups(m.UserGroups)
 	// Route through the setter so messagepane/threadPanel also learn the
 	// current user (see WorkspaceReadyMsg above).
 	a.SetCurrentUserID(m.UserID)

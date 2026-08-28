@@ -63,7 +63,6 @@ func (s mattermostUISendService) Send(ctx context.Context, request ui.Mattermost
 			CorrelationID: message.CorrelationID,
 			CreatedAt:     message.CreatedAt,
 			RootID:        message.RootID,
-			Format:        messages.FormatMattermostPlain,
 			UserID:        message.UserID,
 			UserName:      userName,
 			Text:          message.Text,

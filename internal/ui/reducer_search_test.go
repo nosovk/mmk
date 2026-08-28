@@ -353,8 +353,8 @@ func TestWorkspaceSearchSelectNavigates(t *testing.T) {
 	if selected.Name != "ops" || selected.Type != "im" {
 		t.Fatalf("ChannelSelectedMsg not resolved via Lookup: %+v", selected)
 	}
-	if app.pendingLinkNav == nil || app.pendingLinkNav.messageTS != "2.0" {
-		t.Fatalf("pending nav = %+v", app.pendingLinkNav)
+	if app.pendingMessageNav == nil || app.pendingMessageNav.messageTS != "2.0" {
+		t.Fatalf("pending nav = %+v", app.pendingMessageNav)
 	}
 	if app.mode != ModeNormal || app.searchResults.IsVisible() {
 		t.Fatal("modal not closed")
@@ -386,8 +386,8 @@ func TestWorkspaceSearchSelectNonMemberToastsInsteadOfNavigating(t *testing.T) {
 	if !strings.Contains(toast, "Not a member of #random") {
 		t.Fatalf("expected non-member toast, got %q (msgs: %v)", toast, msgs)
 	}
-	if app.pendingLinkNav != nil {
-		t.Fatalf("pendingLinkNav leaked: %+v", app.pendingLinkNav)
+	if app.pendingMessageNav != nil {
+		t.Fatalf("pendingMessageNav leaked: %+v", app.pendingMessageNav)
 	}
 	if app.mode != ModeNormal || app.searchResults.IsVisible() {
 		t.Fatal("modal not closed")

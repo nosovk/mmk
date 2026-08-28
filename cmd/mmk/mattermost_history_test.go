@@ -29,7 +29,7 @@ func (c *contextHistoryClient) RunWebSocket(ctx context.Context, _ func(), _ fun
 
 func TestMattermostHistoryItemsCarryTransportCorrelationWithoutPersistence(t *testing.T) {
 	source := []service.MattermostHistoryMessage{{Message: mattermost.Message{ID: "opaque/post:id", CorrelationID: "opaque/correlation:id", Text: "body"}, UserName: "alice"}}
-	want := []messages.MessageItem{{ID: "opaque/post:id", CorrelationID: "opaque/correlation:id", Format: messages.FormatMattermostPlain, UserName: "alice", Text: "body"}}
+	want := []messages.MessageItem{{ID: "opaque/post:id", CorrelationID: "opaque/correlation:id", UserName: "alice", Text: "body"}}
 	if got := mattermostHistoryItems(source); !reflect.DeepEqual(got, want) {
 		t.Fatalf("items=%#v want %#v", got, want)
 	}

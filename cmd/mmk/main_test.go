@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -20,6 +22,28 @@ func TestApplicationIdentity(t *testing.T) {
 	}
 	if got.displayName != "mmk" {
 		t.Errorf("display name = %q, want %q", got.displayName, "mmk")
+	}
+}
+
+func TestVersionTextIsMattermostOnly(t *testing.T) {
+	got := versionText("1.2.3", "abc123", "2026-08-18")
+	for _, want := range []string{"mmk 1.2.3", "commit abc123", "built 2026-08-18"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("version text missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "Slack") {
+		t.Fatalf("version text contains Slack disclaimer: %q", got)
+	}
+}
+
+func TestEmptyServerRegistryReturnsAddServerInstruction(t *testing.T) {
+	err := requireMattermostServers(0)
+	if err == nil || !strings.Contains(err.Error(), "mmk --add-server") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := requireMattermostServers(1); err != nil {
+		t.Fatalf("non-empty registry error = %v", err)
 	}
 }
 
@@ -111,6 +135,95 @@ func TestGoSourcesPreserveIdentityAndUpstreamReferences(t *testing.T) {
 		if err != nil {
 			t.Fatalf("scan %s Go sources: %v", sourceRoot, err)
 		}
+	}
+}
+
+func TestGoSourcesDoNotImportRemovedRuntimePackages(t *testing.T) {
+	root := filepath.Join("..", "..")
+	forbidden := slackRuntimeImportPattern()
+	if err := walkGoSources(root, func(path string) {
+		assertForbidden(t, path, readIdentityFile(t, path), forbidden)
+	}); err != nil {
+		t.Fatalf("scan repository Go sources: %v", err)
+	}
+	for _, dir := range forbiddenSlackRuntimeDirs() {
+		path := filepath.Join(root, "internal", dir)
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("deleted runtime directory exists: %s", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+	}
+}
+
+func slackRuntimeImportPattern() *regexp.Regexp {
+	return regexp.MustCompile("[\"`]github\\.com/(?:slack-go/slack(?:/[^\"`]*)?|nosovk/mmk/internal/(?:slack(?:desktop|fmt|http|url)?|usergroups)(?:/[^\"`]*)?)[\"`]")
+}
+
+func forbiddenSlackRuntimeDirs() []string {
+	return []string{"slack", "slackdesktop", "slackfmt", "slackhttp", "slackurl", "usergroups"}
+}
+
+func walkGoSources(root string, visit func(path string)) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) == ".go" {
+			visit(path)
+		}
+		return nil
+	})
+}
+
+func TestSlackRuntimeGuardCoversTestImportsAndDeletedPackageDirectories(t *testing.T) {
+	pattern := slackRuntimeImportPattern()
+	for _, source := range []string{
+		`import "github.com/` + `slack-go/slack"`,
+		"import `github.com/" + "slack-go/slack`",
+		`import slackhttp "github.com/nosovk/mmk/internal/` + `slackhttp"`,
+		`import "github.com/nosovk/mmk/internal/` + `usergroups"`,
+	} {
+		if !pattern.MatchString(source) {
+			t.Fatalf("guard did not match %q", source)
+		}
+	}
+	for _, source := range []string{
+		`// historical attribution: github.com/` + `slack-go/slack`,
+		`const path = "internal/` + `slackhttp"`,
+	} {
+		if pattern.MatchString(source) {
+			t.Fatalf("guard matched non-import reference %q", source)
+		}
+	}
+	want := []string{"slack", "slackdesktop", "slackfmt", "slackhttp", "slackurl", "usergroups"}
+	if got := forbiddenSlackRuntimeDirs(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("forbiddenSlackRuntimeDirs() = %v, want %v", got, want)
+	}
+}
+
+func TestWalkGoSourcesIncludesPackagesOutsideCmdAndInternal(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "tools", "guard_fixture.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("package tools\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	if err := walkGoSources(root, func(path string) { got = append(got, path) }); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{path}) {
+		t.Fatalf("walkGoSources() = %v, want %v", got, []string{path})
 	}
 }
 

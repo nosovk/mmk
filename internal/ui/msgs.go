@@ -224,20 +224,6 @@ type (
 		RootID    string
 		Context   context.Context
 	}
-	ThreadReplySentMsg struct {
-		ChannelID string
-		ThreadTS  string
-		LocalTS   string // optimistic-placeholder id; see MessageSentMsg.LocalTS
-		Message   messages.MessageItem
-	}
-	// ThreadReplySendFailedMsg is returned when chat.postMessage for a
-	// thread reply fails. Mirrors MessageSendFailedMsg.
-	ThreadReplySendFailedMsg struct {
-		ChannelID string
-		ThreadTS  string
-		LocalTS   string
-		Reason    string
-	}
 	// ThreadsViewActivatedMsg is dispatched when the user picks the
 	// synthetic Threads sidebar row. The App switches the message pane to
 	// the threads-list view and (re)fetches the involved-threads list.
@@ -340,7 +326,6 @@ type (
 		ExternalUsers map[string]bool
 		UserID        string
 		CustomEmoji   map[string]string
-		UserGroups    map[string]string
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
@@ -443,7 +428,6 @@ type (
 		ExternalUsers map[string]bool
 		UserID        string
 		CustomEmoji   map[string]string
-		UserGroups    map[string]string
 		// SectionsProvider supplies Slack-native sidebar sections for this
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
@@ -470,13 +454,6 @@ type (
 	CustomEmojisLoadedMsg struct {
 		TeamID      string
 		CustomEmoji map[string]string
-	}
-	// UserGroupsLoadedMsg is sent when a workspace's usergroups.list
-	// fetch finishes in the background. App refreshes render caches and
-	// compose mention entries only when TeamID matches the active workspace.
-	UserGroupsLoadedMsg struct {
-		TeamID     string
-		UserGroups map[string]string
 	}
 	WorkspaceFailedMsg struct {
 		TeamName string
@@ -548,27 +525,6 @@ type threadFetchDebounceMsg struct {
 	channelID string
 	threadTS  string
 	gen       uint64
-}
-
-// MessageSentMsg is returned after a message is successfully sent.
-// LocalTS, if non-empty, identifies the optimistic placeholder added
-// when the user pressed Enter. The handler uses it to swap the
-// placeholder for the authoritative Message in place. LocalTS may be
-// empty for legacy/test callers that fire this message without a
-// preceding SendMessageMsg.
-type MessageSentMsg struct {
-	ChannelID string
-	LocalTS   string
-	Message   messages.MessageItem
-}
-
-// MessageSendFailedMsg is returned when chat.postMessage fails. The
-// App's handler removes the optimistic placeholder identified by
-// LocalTS (if any) and shows a toast.
-type MessageSendFailedMsg struct {
-	ChannelID string
-	LocalTS   string
-	Reason    string
 }
 
 // EditMessageMsg is emitted when the user submits an edit. App.Update

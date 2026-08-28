@@ -2,7 +2,6 @@
 package ui
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -177,6 +176,27 @@ func TestAppModeTransitions(t *testing.T) {
 	app.SetMode(ModeNormal)
 	if app.mode != ModeNormal {
 		t.Error("expected normal mode after escape")
+	}
+}
+
+func TestNewAppProvidesCanonicalEmojiAutocomplete(t *testing.T) {
+	app := NewApp()
+	app.compose.Focus()
+	for _, r := range ":roc" {
+		app.compose, _ = app.compose.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+
+	if !app.compose.IsEmojiActive() {
+		t.Fatal("fresh App did not open emoji autocomplete for :roc")
+	}
+	view := app.compose.EmojiPickerView(80)
+	if !strings.Contains(view, ":rocket:") || !strings.Contains(view, "🚀") {
+		t.Fatalf("emoji picker view=%q want canonical :rocket: and preview", view)
+	}
+
+	app.compose, _ = app.compose.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := app.compose.Value(); got != ":rocket: " {
+		t.Fatalf("compose value=%q want %q", got, ":rocket: ")
 	}
 }
 
@@ -438,204 +458,6 @@ func TestHandleInsertMode_EmptyEnterStaysInInsert(t *testing.T) {
 
 	if app.mode != ModeInsert {
 		t.Errorf("empty Enter changed mode to %v, want ModeInsert", app.mode)
-	}
-}
-
-func TestCopyPermalink_FromMessagesPane(t *testing.T) {
-	app := NewApp()
-	app.SetClipboardAvailable(true)
-	app.SetClipboardWriter(func(format clipboard.Format, data []byte) <-chan struct{} {
-		return nil
-	})
-	app.activeChannelID = "C123"
-	app.focusedPanel = PanelMessages
-	app.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1700000001.000200", UserName: "alice", Text: "hi"},
-	})
-
-	var gotCh, gotTS string
-	app.setPermalinkFetcherForTest(func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
-		gotCh = string(channelID)
-		gotTS = string(ts)
-		return "https://example.slack.com/archives/C123/p1700000001000200", nil
-	})
-
-	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'C', Text: "C"})
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd from C key")
-	}
-	msg := cmd()
-	// cmd returns a tea.BatchMsg containing tea.SetClipboard cmd + permalink-copied msg.
-	// Easiest assertion: drain the batch and look for our marker types.
-	found := drainForPermalinkCopied(t, msg)
-	if !found {
-		t.Fatalf("expected statusbar.PermalinkCopiedMsg in batch, got %#v", msg)
-	}
-	if gotCh != "C123" {
-		t.Errorf("channel = %q, want C123", gotCh)
-	}
-	if gotTS != "1700000001.000200" {
-		t.Errorf("ts = %q, want 1700000001.000200", gotTS)
-	}
-}
-
-func TestCopyPermalink_FromThreadPane(t *testing.T) {
-	app := NewApp()
-	app.SetClipboardAvailable(true)
-	app.SetClipboardWriter(func(format clipboard.Format, data []byte) <-chan struct{} {
-		return nil
-	})
-	parent := messages.MessageItem{TS: "1700000000.000100"}
-	replies := []messages.MessageItem{
-		{TS: "1700000000.000100", UserName: "alice", Text: "parent"},
-		{TS: "1700000050.000400", UserName: "bob", Text: "reply"},
-	}
-	app.threadPanel.SetThread(parent, replies, "C999", "1700000000.000100")
-	app.threadVisible = true
-	app.focusedPanel = PanelThread
-	// SetThread initializes selection to 0; advance to the second reply.
-	for i := 0; i < len(replies); i++ {
-		sel := app.threadPanel.SelectedReply()
-		if sel != nil && sel.TS == "1700000050.000400" {
-			break
-		}
-		app.threadPanel.MoveDown()
-	}
-	if sel := app.threadPanel.SelectedReply(); sel == nil || sel.TS != "1700000050.000400" {
-		t.Fatalf("could not select reply ts=1700000050.000400; got %+v", sel)
-	}
-
-	var gotCh, gotTS string
-	app.setPermalinkFetcherForTest(func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
-		gotCh = string(channelID)
-		gotTS = string(ts)
-		return "https://example.slack.com/archives/C999/p1700000050000400?thread_ts=1700000000.000100&cid=C999", nil
-	})
-
-	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'C', Text: "C"})
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd from C key")
-	}
-	if !drainForPermalinkCopied(t, cmd()) {
-		t.Fatal("expected PermalinkCopiedMsg")
-	}
-	if gotCh != "C999" {
-		t.Errorf("channel = %q, want C999", gotCh)
-	}
-	if gotTS != "1700000050.000400" {
-		t.Errorf("ts = %q, want reply ts 1700000050.000400", gotTS)
-	}
-}
-
-func TestCopyPermalink_NothingSelectedNoop(t *testing.T) {
-	app := NewApp()
-	app.activeChannelID = "C123"
-	app.focusedPanel = PanelMessages
-	// No messages set.
-	app.setPermalinkFetcherForTest(func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
-		t.Fatal("fetcher must not be called when nothing is selected")
-		return "", nil
-	})
-	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'C', Text: "C"})
-	if cmd != nil {
-		// cmd may be non-nil but must not invoke the fetcher; drain it.
-		_ = cmd()
-	}
-}
-
-func TestCopyPermalink_FetcherErrorEmitsFailedMsg(t *testing.T) {
-	app := NewApp()
-	app.activeChannelID = "C123"
-	app.focusedPanel = PanelMessages
-	app.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1.0", UserName: "alice", Text: "hi"},
-	})
-	app.setPermalinkFetcherForTest(func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
-		return "", errors.New("boom")
-	})
-
-	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'C', Text: "C"})
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd")
-	}
-	msg := cmd()
-	if _, ok := msg.(statusbar.PermalinkCopyFailedMsg); !ok {
-		t.Fatalf("expected PermalinkCopyFailedMsg, got %T", msg)
-	}
-}
-
-func TestApp_PermalinkCopiedMsgShowsToast(t *testing.T) {
-	a := NewApp()
-	_, cmd := a.Update(statusbar.PermalinkCopiedMsg{})
-	if !strings.Contains(a.statusbar.View(80), "Copied permalink") {
-		t.Fatalf("expected 'Copied permalink' toast; got %q", a.statusbar.View(80))
-	}
-	if cmd == nil {
-		t.Fatal("expected a clear-tick cmd")
-	}
-}
-
-func TestApp_PermalinkCopyFailedMsgShowsToast(t *testing.T) {
-	a := NewApp()
-	a.Update(statusbar.PermalinkCopyFailedMsg{})
-	if !strings.Contains(a.statusbar.View(80), "Failed to copy link") {
-		t.Fatalf("expected 'Failed to copy link' toast; got %q", a.statusbar.View(80))
-	}
-}
-
-// drainForPermalinkCopied walks tea.BatchMsg / tea.Cmd structures looking for
-// a statusbar.PermalinkCopiedMsg.
-func drainForPermalinkCopied(t *testing.T, msg tea.Msg) bool {
-	t.Helper()
-	switch v := msg.(type) {
-	case statusbar.PermalinkCopiedMsg:
-		return true
-	case tea.BatchMsg:
-		for _, c := range v {
-			if c == nil {
-				continue
-			}
-			if drainForPermalinkCopied(t, c()) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func TestCopyPermalink_ShiftYTriggersCopy(t *testing.T) {
-	app := NewApp()
-	app.SetClipboardAvailable(true)
-	app.SetClipboardWriter(func(format clipboard.Format, data []byte) <-chan struct{} {
-		return nil
-	})
-	app.activeChannelID = "C123"
-	app.focusedPanel = PanelMessages
-	app.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1700000001.000200", UserName: "alice", Text: "hi"},
-	})
-
-	called := 0
-	var gotCh, gotTS string
-	app.setPermalinkFetcherForTest(func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error) {
-		called++
-		gotCh = string(channelID)
-		gotTS = string(ts)
-		return "https://example.slack.com/x", nil
-	})
-
-	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'Y', Text: "Y"})
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd from Y key")
-	}
-	if !drainForPermalinkCopied(t, cmd()) {
-		t.Fatal("expected PermalinkCopiedMsg in batch")
-	}
-	if called != 1 {
-		t.Fatalf("expected fetcher called once, got %d", called)
-	}
-	if gotCh != "C123" || gotTS != "1700000001.000200" {
-		t.Errorf("fetcher got (%q, %q); want (\"C123\", \"1700000001.000200\")", gotCh, gotTS)
 	}
 }
 
@@ -1240,146 +1062,6 @@ func TestApp_WorkspaceSwitchedTriggersThreadsListFetchAndSelectsThreadsRow(t *te
 	}
 }
 
-func TestApp_ThreadReplySentOptimisticallyAddsToThreadPanel(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-	parent := messages.MessageItem{TS: "1700000000.000100"}
-	app.threadPanel.SetThread(parent, nil, "C1", "1700000000.000100")
-	app.threadVisible = true
-
-	app.Update(ThreadReplySentMsg{
-		ChannelID: "C1",
-		ThreadTS:  "1700000000.000100",
-		Message: messages.MessageItem{
-			TS:       "1700000050.000400",
-			UserID:   "USELF",
-			UserName: "you",
-			Text:     "my reply",
-			ThreadTS: "1700000000.000100",
-		},
-	})
-
-	if got := app.threadPanel.ReplyCount(); got != 1 {
-		t.Fatalf("expected 1 reply added optimistically, got %d", got)
-	}
-	if !app.selfSend.IsSelfSent("1700000050.000400") {
-		t.Errorf("expected TS to be recorded as self-sent for echo dedup")
-	}
-}
-
-// TestSendThreadReply_InstantDisplay asserts that a thread reply
-// appears in the thread panel the moment SendThreadReplyMsg is
-// dispatched, before any HTTP round-trip. The placeholder is
-// swapped in place when ThreadReplySentMsg lands.
-func TestSendThreadReply_InstantDisplay(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-	parent := messages.MessageItem{TS: "1700000000.000100"}
-	app.threadPanel.SetThread(parent, nil, "C1", "1700000000.000100")
-	app.threadVisible = true
-
-	app.Update(SendThreadReplyMsg{
-		ChannelID: "C1",
-		ThreadTS:  "1700000000.000100",
-		Text:      "instant reply",
-	})
-
-	if got := app.threadPanel.ReplyCount(); got != 1 {
-		t.Fatalf("instant-display: expected 1 placeholder reply, got %d", got)
-	}
-
-	// Capture the placeholder's local TS for the swap.
-	localTS := app.threadPanel.Replies()[0].TS
-	if !strings.HasPrefix(localTS, "local:") {
-		t.Errorf("placeholder reply TS = %q, want local:... id", localTS)
-	}
-
-	app.Update(ThreadReplySentMsg{
-		ChannelID: "C1",
-		ThreadTS:  "1700000000.000100",
-		LocalTS:   localTS,
-		Message: messages.MessageItem{
-			TS: "1700000050.000400", UserID: "USELF", UserName: "you",
-			Text: "instant reply", ThreadTS: "1700000000.000100",
-		},
-	})
-
-	if got := app.threadPanel.ReplyCount(); got != 1 {
-		t.Fatalf("post-swap: expected 1 reply, got %d", got)
-	}
-	if got := app.threadPanel.Replies()[0].TS; got != "1700000050.000400" {
-		t.Errorf("post-swap TS = %q, want real Slack TS", got)
-	}
-}
-
-func TestApp_NewMessageEchoOfSelfSentIsSkipped(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-	parent := messages.MessageItem{TS: "1700000000.000100"}
-	app.threadPanel.SetThread(parent, nil, "C1", "1700000000.000100")
-	app.threadVisible = true
-
-	// Optimistic add via the HTTP-response path.
-	app.Update(ThreadReplySentMsg{
-		ChannelID: "C1",
-		ThreadTS:  "1700000000.000100",
-		Message: messages.MessageItem{
-			TS: "1700000050.000400", UserID: "USELF", Text: "hi",
-			ThreadTS: "1700000000.000100",
-		},
-	})
-	if app.threadPanel.ReplyCount() != 1 {
-		t.Fatalf("setup: expected 1 reply after optimistic add, got %d", app.threadPanel.ReplyCount())
-	}
-
-	// WS echo for the same TS must be ignored, not double-appended.
-	app.Update(NewMessageMsg{
-		ChannelID: "C1",
-		Message: messages.MessageItem{
-			TS: "1700000050.000400", UserID: "USELF", Text: "hi",
-			ThreadTS: "1700000000.000100",
-		},
-	})
-	if got := app.threadPanel.ReplyCount(); got != 1 {
-		t.Errorf("WS echo of self-sent reply double-added; want 1 reply, got %d", got)
-	}
-
-	// A different TS (e.g. someone else's reply) should still be added.
-	app.Update(NewMessageMsg{
-		ChannelID: "C1",
-		Message: messages.MessageItem{
-			TS: "1700000060.000500", UserID: "U2", Text: "yo",
-			ThreadTS: "1700000000.000100",
-		},
-	})
-	if got := app.threadPanel.ReplyCount(); got != 2 {
-		t.Errorf("non-self reply not appended; want 2 replies, got %d", got)
-	}
-}
-
-func TestApp_MessageSentOptimisticallyAppendsToMessagepane(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-
-	beforeVer := app.messagepane.Version()
-	app.Update(MessageSentMsg{
-		ChannelID: "C1",
-		Message: messages.MessageItem{
-			TS: "1700000999.000001", UserID: "USELF", Text: "hello",
-		},
-	})
-	if app.messagepane.Version() == beforeVer {
-		t.Errorf("expected messagepane version to advance after optimistic append")
-	}
-	if !app.selfSend.IsSelfSent("1700000999.000001") {
-		t.Errorf("expected TS to be recorded for echo dedup")
-	}
-}
-
 func TestApp_WorkspaceReadyAppliesPerWorkspaceTheme(t *testing.T) {
 	app := NewApp()
 	// Theme application should fire when a per-workspace theme is set
@@ -1398,46 +1080,6 @@ func TestApp_WorkspaceReadyAppliesPerWorkspaceTheme(t *testing.T) {
 	afterVer := styles.Version()
 	if afterVer == beforeVer {
 		t.Errorf("expected styles.Version() to advance after WorkspaceReadyMsg with non-empty Theme")
-	}
-}
-
-// Defends Bug A: a duplicate of the same TS (e.g. WS echo arriving before
-// the optimistic-add path can record the TS) must not produce two messages
-// in the pane. The optimistic version (which carries the locally-converted
-// mrkdwn from compose) must REPLACE the WS-echo version, not be silently
-// dropped — Slack normalises wire-form text, so the WS echo's Text may
-// differ from what mmk's renderer expects.
-func TestApp_DuplicateMessageEventDoesNotDoubleAppend(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-
-	// Simulate the race: WS echo arrives FIRST with text Slack flattened
-	// (no \n, single line) — the user composed "Hello\nWorld".
-	app.Update(NewMessageMsg{
-		ChannelID: "C1",
-		Message: messages.MessageItem{
-			TS: "1700000999.000001", UserID: "USELF", Text: "Hello World",
-		},
-	})
-	// Then the HTTP-response optimistic path fires with the converted
-	// mrkdwn text that preserves the line break.
-	app.Update(MessageSentMsg{
-		ChannelID: "C1",
-		Message: messages.MessageItem{
-			TS: "1700000999.000001", UserID: "USELF", Text: "Hello\nWorld",
-		},
-	})
-
-	// The model contains exactly one message (no duplicate).
-	got := app.messagepane.Messages()
-	if len(got) != 1 {
-		t.Fatalf("expected 1 message in pane, got %d (duplicate)", len(got))
-	}
-	// And its Text is the optimistic, line-preserving version — not the
-	// flattened WS-echo text.
-	if got[0].Text != "Hello\nWorld" {
-		t.Errorf("Text = %q, want %q (optimistic should win over WS-echo)", got[0].Text, "Hello\nWorld")
 	}
 }
 
@@ -3085,172 +2727,6 @@ func TestConversationOpenedMsg_InactiveWorkspaceIgnored(t *testing.T) {
 	}
 }
 
-// TestSelfSendInFlight_SuppressesEarlyWSEcho asserts that when a mmk-
-// originated send has been marked in-flight for a channel, an
-// arriving WS echo from the same user is dropped. Without this guard,
-// the WS echo (with Slack's normalised text) would render alongside
-// the instant-display placeholder, double-rendering the same message.
-//
-// Cross-session messages (where lastSelfSendByChannel is NOT updated
-// for that channel because the user sent from another tool) must
-// still pass through.
-func TestSelfSendInFlight_SuppressesEarlyWSEcho(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-
-	// User submits a mmk-originated send. SendMessageMsg appends an
-	// optimistic placeholder (instant-display) AND records the
-	// in-flight timestamp.
-	app.Update(SendMessageMsg{ChannelID: "C1", Text: "Hello\nWorld"})
-
-	// Instant-display placeholder is in the pane immediately.
-	if got := len(app.messagepane.Messages()); got != 1 {
-		t.Fatalf("expected 1 optimistic placeholder after SendMessageMsg, got %d", got)
-	}
-	if got := app.messagepane.Messages()[0].Text; got != "Hello\nWorld" {
-		t.Errorf("placeholder Text = %q, want %q", got, "Hello\nWorld")
-	}
-
-	// Slack's WS echo arrives BEFORE chat.postMessage HTTP responds.
-	// selfSendInFlight must drop it so we don't double-render.
-	app.Update(NewMessageMsg{
-		ChannelID: "C1",
-		Message: messages.MessageItem{
-			TS: "1700000999.000001", UserID: "USELF", Text: "Hello World",
-		},
-	})
-	if got := len(app.messagepane.Messages()); got != 1 {
-		t.Errorf("WS echo double-rendered alongside placeholder; got %d messages, want 1", got)
-	}
-
-	// MessageSentMsg arrives with the converted-mrkdwn text. The
-	// LocalTS field — assigned in the SendMessageMsg handler and
-	// threaded through the sender closure — lets the handler swap the
-	// placeholder for the authoritative message in place. The
-	// test simulates that wiring by reading the placeholder's TS.
-	localTS := app.messagepane.Messages()[0].TS
-	app.Update(MessageSentMsg{
-		ChannelID: "C1",
-		LocalTS:   localTS,
-		Message: messages.MessageItem{
-			TS: "1700000999.000001", UserID: "USELF", Text: "Hello\nWorld",
-		},
-	})
-
-	got := app.messagepane.Messages()
-	if len(got) != 1 {
-		t.Fatalf("expected 1 message after swap, got %d", len(got))
-	}
-	if got[0].TS != "1700000999.000001" {
-		t.Errorf("after swap TS = %q, want real Slack TS", got[0].TS)
-	}
-	if got[0].Text != "Hello\nWorld" {
-		t.Errorf("Text = %q, want %q", got[0].Text, "Hello\nWorld")
-	}
-}
-
-// TestSendMessage_InstantDisplay asserts the quality-of-life
-// guarantee: the user's message must appear in the active channel
-// pane the moment SendMessageMsg is dispatched — before any HTTP
-// round-trip. The placeholder is replaced in place when MessageSentMsg
-// lands; its position in the list is preserved.
-func TestSendMessage_InstantDisplay(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-	app.userNames = map[string]string{"USELF": "you"}
-
-	app.Update(SendMessageMsg{ChannelID: "C1", Text: "hello"})
-
-	msgs := app.messagepane.Messages()
-	if len(msgs) != 1 {
-		t.Fatalf("instant-display: expected 1 message after SendMessageMsg, got %d", len(msgs))
-	}
-	if msgs[0].Text != "hello" {
-		t.Errorf("placeholder Text = %q, want %q", msgs[0].Text, "hello")
-	}
-	if msgs[0].UserID != "USELF" {
-		t.Errorf("placeholder UserID = %q, want USELF", msgs[0].UserID)
-	}
-	if msgs[0].UserName != "you" {
-		t.Errorf("placeholder UserName = %q, want you", msgs[0].UserName)
-	}
-	if !strings.HasPrefix(msgs[0].TS, "local:") {
-		t.Errorf("placeholder TS = %q, want a local:... id", msgs[0].TS)
-	}
-
-	// Once the HTTP response arrives, the placeholder is swapped for
-	// the authoritative message. The list length stays at 1; the TS
-	// changes from local:... to the real Slack TS.
-	localTS := msgs[0].TS
-	app.Update(MessageSentMsg{
-		ChannelID: "C1",
-		LocalTS:   localTS,
-		Message: messages.MessageItem{
-			TS: "1700000999.000003", UserID: "USELF", UserName: "you", Text: "hello",
-		},
-	})
-
-	msgs = app.messagepane.Messages()
-	if len(msgs) != 1 {
-		t.Fatalf("post-swap: expected 1 message, got %d", len(msgs))
-	}
-	if msgs[0].TS != "1700000999.000003" {
-		t.Errorf("post-swap TS = %q, want real Slack TS", msgs[0].TS)
-	}
-}
-
-// TestSendMessage_InstantDisplayConvertsCommonMarkToSlackMrkdwn locks
-// in the bug fix where the optimistic placeholder was storing the
-// user's raw CommonMark text. The mmk renderer expects Slack mrkdwn
-// (single-asterisk bold, single-underscore italic, single-backtick
-// code), so without conversion the placeholder rendered "**bold**"
-// literally and then re-rendered with proper styling once the HTTP
-// response brought back the converted text. We now convert in the
-// App before storing.
-func TestSendMessage_InstantDisplayConvertsCommonMarkToSlackMrkdwn(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-
-	app.Update(SendMessageMsg{ChannelID: "C1", Text: "**bold** and _italic_"})
-
-	msgs := app.messagepane.Messages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 placeholder, got %d", len(msgs))
-	}
-	// mrkdwn.Convert("**bold** and _italic_") => "*bold* and _italic_"
-	if got, want := msgs[0].Text, "*bold* and _italic_"; got != want {
-		t.Errorf("placeholder Text = %q, want %q (CommonMark should be converted to Slack mrkdwn)", got, want)
-	}
-}
-
-// TestSendMessage_FailureRollsBackPlaceholder asserts that when
-// MessageSendFailedMsg arrives, the optimistic placeholder is removed
-// so the user can see the send did not go through.
-func TestSendMessage_FailureRollsBackPlaceholder(t *testing.T) {
-	app := NewApp()
-	app.SetCurrentUserID("USELF")
-	app.activeChannelID = "C1"
-
-	app.Update(SendMessageMsg{ChannelID: "C1", Text: "oops"})
-	if got := len(app.messagepane.Messages()); got != 1 {
-		t.Fatalf("setup: expected 1 placeholder, got %d", got)
-	}
-	localTS := app.messagepane.Messages()[0].TS
-
-	app.Update(MessageSendFailedMsg{
-		ChannelID: "C1",
-		LocalTS:   localTS,
-		Reason:    "network error",
-	})
-
-	if got := len(app.messagepane.Messages()); got != 0 {
-		t.Errorf("after failure expected placeholder removed, got %d messages", got)
-	}
-}
-
 // TestSelfSendInFlight_PassesThroughCrossSession asserts that a
 // WS echo for the current user that arrived with no mmk-originated
 // send in flight (i.e. cross-session: the user sent from the
@@ -3938,53 +3414,6 @@ func TestUserResolvedMsg_DropsForOtherWorkspace(t *testing.T) {
 	got := app.messagepane.Messages()
 	if got[0].UserName != "U1" {
 		t.Errorf("UserName changed despite wrong team; got %q", got[0].UserName)
-	}
-}
-
-func TestUserGroupsLoadedMsgPatchesActiveWorkspace(t *testing.T) {
-	app := NewApp()
-	app.activeServerID = "T1"
-	app.messagepane.SetMessages([]messages.MessageItem{
-		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "ping <!subteam^S0TESTGRP01>"},
-	})
-	messageVersion := app.messagepane.Version()
-	threadVersion := app.threadPanel.Version()
-
-	app.Update(UserGroupsLoadedMsg{
-		TeamID:     "T1",
-		UserGroups: map[string]string{"S0TESTGRP01": "platform-team"},
-	})
-
-	found := false
-	for _, u := range app.compose.MentionUsers() {
-		if u.ID == "usergroup:S0TESTGRP01" && u.DisplayName == "platform-team" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("active workspace usergroup missing from compose picker: %+v", app.compose.MentionUsers())
-	}
-	if app.messagepane.Version() == messageVersion {
-		t.Error("message pane version did not change after active usergroups loaded")
-	}
-	if app.threadPanel.Version() == threadVersion {
-		t.Error("thread panel version did not change after active usergroups loaded")
-	}
-}
-
-func TestUserGroupsLoadedMsgDropsOtherWorkspace(t *testing.T) {
-	app := NewApp()
-	app.activeServerID = "T1"
-
-	app.Update(UserGroupsLoadedMsg{
-		TeamID:     "T-other",
-		UserGroups: map[string]string{"S0TESTGRP01": "side-team"},
-	})
-
-	for _, u := range app.compose.MentionUsers() {
-		if u.ID == "usergroup:S0TESTGRP01" {
-			t.Fatalf("inactive workspace usergroup leaked into compose picker: %+v", app.compose.MentionUsers())
-		}
 	}
 }
 

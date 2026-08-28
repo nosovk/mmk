@@ -33,9 +33,6 @@ type Config struct {
 // integer. Channels matching a pattern with an explicit N are placed
 // above un-annotated channels within the section, sorted by N
 // ascending. Example: channels = ["general:1", "alerts:2", "random"].
-// The ":N" syntax is only honored when use_slack_sections = false
-// (or as a fallback when Slack's section endpoint is unreachable);
-// in Slack-native mode, channel order is taken from Slack.
 type SectionDef struct {
 	Channels []string `toml:"channels"`
 	Order    int      `toml:"order"` // lower = higher in sidebar
@@ -45,9 +42,7 @@ type SectionDef struct {
 // pattern and order components. If the suffix after the last ':' is
 // not a non-negative integer, the whole input is returned as the
 // pattern with order 0 (so e.g. accidentally-included colons in
-// patterns are treated as literal characters, not orders). Slack
-// channel names cannot contain ':', so well-formed configs are never
-// ambiguous.
+// patterns are treated as literal characters, not orders).
 func parseChannelPattern(s string) (pattern string, order int) {
 	i := strings.LastIndex(s, ":")
 	if i < 0 {
@@ -62,11 +57,6 @@ func parseChannelPattern(s string) (pattern string, order int) {
 
 type General struct {
 	DefaultWorkspace string `toml:"default_workspace"`
-	// UseSlackSections opts in/out of using the user's actual Slack
-	// sidebar sections (via users.channelSections.list + WS events)
-	// instead of the config-glob [sections.*] system. Pointer so we
-	// can distinguish "unset" (default true) from explicit false.
-	UseSlackSections *bool `toml:"use_slack_sections"`
 }
 
 type Appearance struct {
@@ -87,7 +77,7 @@ type Appearance struct {
 	// terminal behavior). Clamped to >= 1 at load time.
 	MouseWheelLines int `toml:"mouse_wheel_lines"`
 	// EmojiImages controls whether emoji are rendered as PNG images
-	// (from Slack's CDN) via the kitty graphics protocol. One of:
+	// via the kitty graphics protocol. One of:
 	// "on" (default) or "off". On non-kitty terminals this is silently
 	// treated as "off"; see internal/emoji/place.go.
 	EmojiImages string `toml:"emoji_images"`
@@ -149,8 +139,7 @@ type Sidebar struct {
 
 // Workspace holds per-workspace user preferences. The TOML key for
 // the surrounding map can be either a user-chosen slug (with TeamID
-// set explicitly via team_id) or — for backward compatibility —
-// a raw Slack team ID (with TeamID left empty; Load fills it in
+// set explicitly via team_id) or a legacy team ID (with TeamID left empty; Load fills it in
 // from the key).
 type Workspace struct {
 	TeamID string `toml:"team_id"`
@@ -159,18 +148,9 @@ type Workspace struct {
 	// digit-key mapping (1-9). Positive values are explicit positions
 	// ascending; 0 or unset means "unordered" (sorts after ordered
 	// workspaces, alphabetically by slug). Ties in Order break by slug.
-	Order        int `toml:"order"`
-	SidebarWidth int `toml:"sidebar_width"`
-	// UseSlackSections overrides [general].use_slack_sections for this
-	// workspace. Nil means "fall through to global".
-	UseSlackSections *bool                 `toml:"use_slack_sections"`
-	Sections         map[string]SectionDef `toml:"sections"`
-	// VersionTS caches the Slack build timestamp last reported by
-	// client.shouldReload, sent as _x_version_ts on every workspace-API
-	// request. Empty means "use the compiled-in fallback and refresh on
-	// boot". Persisted so the second and later runs start with a
-	// current value rather than a stale compiled-in one.
-	VersionTS string `toml:"version_ts"`
+	Order        int                   `toml:"order"`
+	SidebarWidth int                   `toml:"sidebar_width"`
+	Sections     map[string]SectionDef `toml:"sections"`
 }
 
 type Theme struct {
@@ -365,20 +345,6 @@ func matchSectionAndOrderIn(sections map[string]SectionDef, channelName string) 
 		}
 	}
 	return "", 0
-}
-
-// EffectiveUseSlackSections returns whether Slack-native sidebar sections
-// are enabled for the given workspace. Resolution: per-workspace value
-// wins when set; otherwise the global [general].use_slack_sections;
-// default true.
-func (c Config) EffectiveUseSlackSections(teamID string) bool {
-	if ws, ok := c.WorkspaceByTeamID(teamID); ok && ws.UseSlackSections != nil {
-		return *ws.UseSlackSections
-	}
-	if c.General.UseSlackSections != nil {
-		return *c.General.UseSlackSections
-	}
-	return true
 }
 
 // ResolveWidth returns the sidebar width to use for the given workspace,

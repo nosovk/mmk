@@ -437,7 +437,7 @@ func (f *fakeUIHistory) FetchOlder(_ context.Context, request HistoryRequest, be
 
 func TestMattermostHistorySelectionCacheFirstAndColdLoading(t *testing.T) {
 	a := newMattermostHistoryApp(t, "s1")
-	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "cached", Format: messages.FormatMattermostPlain}}}}
+	h := &fakeUIHistory{cached: map[string][]messages.MessageItem{"s1:c1:": {{ID: "cached"}}}}
 	a.SetMattermostHistoryService(h)
 	_, cmd := a.Update(ChannelSelectedMsg{ID: "c1", Name: "One"})
 	if got := historyItemIDs(a.messagepane.Messages()); !reflect.DeepEqual(got, []string{"cached"}) || a.messagepane.IsLoading() {
@@ -527,7 +527,7 @@ func TestMattermostHistoryCorrelationReconciliationFansOutToSameChannelWindows(t
 		t.Fatal("split failed")
 	}
 	w2 := a.focusedWin
-	authoritative := messages.MessageItem{ID: "opaque/post:id", CorrelationID: correlationID, Format: messages.FormatMattermostPlain, Text: "history authoritative"}
+	authoritative := messages.MessageItem{ID: "opaque/post:id", CorrelationID: correlationID, Text: "history authoritative"}
 	_, _ = a.Update(MattermostMessagesLoadedMsg{Request: request, AuthoritativeIDs: []string{"opaque/post:id"}, Messages: []messages.MessageItem{authoritative}, HasMore: false})
 	for _, win := range []wintree.LeafID{w1, w2} {
 		rows := a.winModels[win].Messages()

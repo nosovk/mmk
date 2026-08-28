@@ -1,9 +1,12 @@
 package thread
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	stdimage "image"
+	"image/color"
+	imgpng "image/png"
 	"io"
 	"strings"
 	"testing"
@@ -574,13 +577,116 @@ func TestThread_LegacyTextFallback_WhenImageContextOff(t *testing.T) {
 	}
 }
 
-func TestBlockkitContextUsesProviderNeutralMessageID(t *testing.T) {
-	m := New()
-	m.SetThread(messages.MessageItem{ID: "root-post-1"}, nil, "channel-1", "root-post-1")
+func TestThreadProviderNeutralImageAttachmentRetainsKittyFlush(t *testing.T) {
+	cache, err := imgpkg.NewCache(t.TempDir(), 10)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	fetcher := imgpkg.NewFetcher(cache, nil)
+	imageData := stdimage.NewRGBA(stdimage.Rect(0, 0, 320, 240))
+	for y := 0; y < 240; y++ {
+		for x := 0; x < 320; x++ {
+			imageData.Set(x, y, color.RGBA{R: 32, G: 96, B: 160, A: 255})
+		}
+	}
+	var encoded bytes.Buffer
+	if err := imgpng.Encode(&encoded, imageData); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	const key = "provider-image-320"
+	if _, err := cache.Put(key, "png", encoded.Bytes()); err != nil {
+		t.Fatalf("cache.Put: %v", err)
+	}
+	if _, err := fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
+		Key: key, URL: "unused://disk-cache", Target: stdimage.Pt(424, 320),
+	}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
 
-	ctx := m.blockkitContext(messages.MessageItem{ID: "reply-post-1"}, nil, nil)
-	if ctx.MessageTS != "reply-post-1" {
-		t.Fatalf("blockkit message identity = %q, want reply-post-1", ctx.MessageTS)
+	m := New()
+	m.SetImageContext(imgrender.ImageContext{
+		Protocol:    imgpkg.ProtoKitty,
+		Fetcher:     fetcher,
+		KittyRender: imgpkg.NewKittyRenderer(imgpkg.NewRegistry()),
+		CellPixels:  stdimage.Pt(8, 16),
+		MaxRows:     20,
+	})
+	msg := messages.MessageItem{
+		ID: "reply-1", UserName: "alice", Text: "image",
+		Attachments: []messages.Attachment{{
+			Kind: "image", Name: "diagram.png", URL: "https://mattermost.example/files/diagram.png",
+			FileID: "provider-image", Mime: "image/png",
+			Thumbs: []messages.ThumbSpec{{URL: "https://mattermost.example/files/diagram-preview.png", W: 320, H: 240}},
+		}},
+	}
+	rendered, flushes, _ := m.renderThreadMessage(msg, 80, nil, nil, false)
+	if rendered == "" {
+		t.Fatal("provider-neutral image attachment was dropped")
+	}
+	if len(flushes) == 0 {
+		t.Fatal("provider-neutral image attachment lost its kitty flush")
+	}
+	var uploaded bytes.Buffer
+	for _, flush := range flushes {
+		if err := flush(&uploaded); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+	}
+	if !strings.Contains(uploaded.String(), "\x1b_G") {
+		t.Fatalf("kitty flush emitted %d bytes without a graphics escape", uploaded.Len())
+	}
+}
+
+func TestThreadViewEmitsRootImageKittyFlush(t *testing.T) {
+	cache, err := imgpkg.NewCache(t.TempDir(), 10)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	fetcher := imgpkg.NewFetcher(cache, nil)
+	imageData := stdimage.NewRGBA(stdimage.Rect(0, 0, 320, 240))
+	for y := 0; y < 240; y++ {
+		for x := 0; x < 320; x++ {
+			imageData.Set(x, y, color.RGBA{R: 32, G: 96, B: 160, A: 255})
+		}
+	}
+	var encoded bytes.Buffer
+	if err := imgpng.Encode(&encoded, imageData); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	const key = "root-image-320"
+	if _, err := cache.Put(key, "png", encoded.Bytes()); err != nil {
+		t.Fatalf("cache.Put: %v", err)
+	}
+	if _, err := fetcher.Fetch(context.Background(), imgpkg.FetchRequest{
+		Key: key, URL: "unused://disk-cache", Target: stdimage.Pt(256, 192),
+	}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	m := New()
+	m.SetImageContext(imgrender.ImageContext{
+		Protocol:    imgpkg.ProtoKitty,
+		Fetcher:     fetcher,
+		KittyRender: imgpkg.NewKittyRenderer(imgpkg.NewRegistry()),
+		CellPixels:  stdimage.Pt(8, 16),
+		MaxRows:     12,
+	})
+	m.SetThread(messages.MessageItem{
+		ID: "root-1", UserName: "alice", Text: "root image",
+		Attachments: []messages.Attachment{{
+			Kind: "image", Name: "root.png", URL: "https://mattermost.example/files/root.png",
+			FileID: "root-image", Mime: "image/png",
+			Thumbs: []messages.ThumbSpec{{URL: "https://mattermost.example/files/root-preview.png", W: 320, H: 240}},
+		}},
+	}, nil, "channel-1", "root-1")
+
+	saved := imgpkg.KittyOutput
+	t.Cleanup(func() { imgpkg.KittyOutput = saved })
+	var uploaded bytes.Buffer
+	imgpkg.KittyOutput = &uploaded
+	_ = m.View(40, 60)
+	if !strings.Contains(uploaded.String(), "\x1b_G") {
+		t.Fatalf("thread root image flush was not emitted; got %d side-channel bytes", uploaded.Len())
 	}
 }
 
@@ -901,19 +1007,15 @@ func TestThreadModel_HandleEmojiImageReady_BumpsVersion(t *testing.T) {
 	}
 }
 
-// TestThreadModel_RenderReplyWithImageEmoji_WarmCache wires a fake
-// emoji prerender cache and asserts that a thread reply's body text
-// containing :thumbsup: renders the kitty placeholder rune sequence
-// (warm path), not the literal shortcode text. Mirrors the
-// integration test in the messages pane (Phase 6 Task 6.10).
-func TestThreadModel_RenderReplyWithImageEmoji_WarmCache(t *testing.T) {
+func TestThreadModel_RenderReplyPreservesLiteralMattermostEmojiShortcode(t *testing.T) {
 	emojiutil.SetImageMode(true, 2)
 	t.Cleanup(func() { emojiutil.SetImageMode(false, 2) })
 
-	thumbURL := emojiutil.CDNBaseURL + "1f44d.png"
+	customURL := "https://mattermost.example/emoji/party_parrot.png"
+	customs := map[string]string{"party_parrot": customURL}
 
 	ff := newFakePlaceFetcher()
-	ff.setPrerendered(emojiutil.EmojiCacheKey(thumbURL), stdimage.Pt(2, 1), imgpkg.Render{
+	ff.setPrerendered(emojiutil.EmojiCacheKey(customURL), stdimage.Pt(2, 1), imgpkg.Render{
 		Cells: stdimage.Pt(2, 1),
 		Lines: []string{"\U0010EEEE\U0010EEEE"},
 	})
@@ -922,21 +1024,21 @@ func TestThreadModel_RenderReplyWithImageEmoji_WarmCache(t *testing.T) {
 	m.SetEmojiContext(EmojiContext{
 		PlaceCtx: emojiutil.PlaceContext{Fetcher: ff},
 		Cells:    2,
-		Customs:  nil,
+		Customs:  customs,
 	})
 	parent := messages.MessageItem{TS: "1.0", UserName: "alice", Text: "p"}
 	m.SetThread(parent, []messages.MessageItem{
 		{TS: "1.1", UserName: "alice", UserID: "U1", Text: "reply :thumbsup:",
-			Reactions: []messages.ReactionItem{{Emoji: "thumbsup", Count: 1}},
+			Reactions: []messages.ReactionItem{{Emoji: "party_parrot", Count: 1}},
 		},
 	}, "C1", "1.0")
 
 	out := m.View(80, 24)
 	if !strings.Contains(out, "\U0010EEEE") {
-		t.Errorf("thread view does not contain kitty placeholder runes; image mode appears inactive\noutput=%q", out)
+		t.Errorf("thread reaction does not contain kitty placeholder runes; image mode appears inactive\noutput=%q", out)
 	}
-	if strings.Contains(out, ":thumbsup:") {
-		t.Errorf("thread view contains literal :thumbsup: text; image mode did not replace it\noutput=%q", out)
+	if !strings.Contains(out, ":thumbsup:") {
+		t.Errorf("thread view did not preserve literal Mattermost shortcode\noutput=%q", out)
 	}
 }
 

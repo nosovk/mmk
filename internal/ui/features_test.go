@@ -86,7 +86,7 @@ func TestMattermostThreadHelpersNoOpAtOperationBoundary(t *testing.T) {
 	for name, cmd := range map[string]tea.Cmd{
 		"selected message": a.openThreadForSelectedMessage(),
 		"threads view":     a.openSelectedThreadCmd(false),
-		"permalink":        a.openThreadForPermalink("c1", "1"),
+		"message nav":      a.openThreadForMessageNav("c1", "1"),
 	} {
 		if cmd != nil {
 			t.Errorf("%s helper returned command", name)
@@ -117,23 +117,20 @@ func TestMattermostThreadsPanelEnabledWhileSidebarThreadsRemainDisabled(t *testi
 }
 
 func TestMattermostThreadPanelReplyAllowedWhileGlobalThreadsDestinationRejected(t *testing.T) {
-	a := NewApp()
-	_, _ = a.Update(ServerReadyMsg{Server: ServerViewState{ServerID: "server-1", InitialActive: true}})
-	a.activeChannelID = "channel-1"
+	a := newMattermostSendApp(t, &recordingMattermostSendService{})
+	a.features = MattermostTask14Features()
+	a.activeChannelID = a.activeHistoryRequest.ChannelID
 	a.messagepane.SetMessages([]messages.MessageItem{{ID: "root-post-1", Text: "root"}})
 	a.SetThreadService(NewThreadService(ThreadServiceFuncs{
 		Fetch: func(_ ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
-			return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: []messages.MessageItem{}}
-		},
-		SendReply: func(_ ids.ChannelID, _ ids.ThreadTS, _ string) tea.Msg {
-			return ThreadReplySentMsg{}
+			return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS)}
 		},
 	}))
 
 	if cmd := a.openThreadForSelectedMessage(); cmd == nil || !a.threadVisible {
 		t.Fatal("Mattermost channel thread panel should open")
 	}
-	if _, cmd := a.Update(SendThreadReplyMsg{ChannelID: "channel-1", ThreadTS: "root-post-1", Text: "reply"}); cmd == nil {
+	if _, cmd := a.Update(mattermostThreadReplyMsg(a, "reply")); cmd == nil {
 		t.Fatal("Mattermost channel thread reply should cross the panel capability gate")
 	}
 

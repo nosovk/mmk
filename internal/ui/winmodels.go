@@ -23,7 +23,6 @@ func (a *App) newWindowModel(chName string) *messages.Model {
 	m.SetAvatarFunc(a.avatarFn)
 	m.SetUserNames(a.userNames)
 	m.SetChannelNames(a.channelNames)
-	m.SetUserGroups(a.userGroups)
 	m.SetEmojiContext(a.emojiCtx)
 	if a.emojiCustoms != nil {
 		// SetCustomEmoji ran after SetEmojiContext: its customs map
@@ -77,8 +76,8 @@ func (a *App) modelsForChannel(chID string) []*messages.Model {
 // UpdateReaction writes elements in place and shifts on remove, so a
 // shared array would let one window's reaction event corrupt another
 // window's view. ReactionItem.UserIDs needs no copy: Append /
-// RemoveUserID are copy-on-write. Attachments / Blocks /
-// LegacyAttachments are never mutated in place by the model.
+// RemoveUserID are copy-on-write. Attachments and
+// Attachment values are never mutated in place by the model.
 func cloneMessageItem(item messages.MessageItem) messages.MessageItem {
 	if len(item.Reactions) > 0 {
 		item.Reactions = append([]messages.ReactionItem(nil), item.Reactions...)

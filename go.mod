@@ -7,7 +7,6 @@ require (
 	charm.land/bubbletea/v2 v2.0.6
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.3
-	github.com/billgraziano/dpapi v0.5.0
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/gen2brain/beeep v0.11.2
 	github.com/gorilla/websocket v1.5.3
@@ -15,16 +14,11 @@ require (
 	github.com/muesli/reflow v0.3.0
 	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/rivo/uniseg v0.4.7
-	github.com/slack-go/slack v0.23.0
-	github.com/syndtr/goleveldb v1.0.0
-	github.com/yuin/goldmark v1.7.13
 	golang.design/x/clipboard v0.7.1
-	golang.org/x/crypto v0.54.0
 	golang.org/x/image v0.39.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
-	golang.org/x/term v0.45.0
 	golang.org/x/text v0.40.0
 	modernc.org/sqlite v1.49.1
 	r00t2.io/gosecret v1.1.5
@@ -47,7 +41,6 @@ require (
 	github.com/esiqveland/notify v0.13.3 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
@@ -57,11 +50,11 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sergeymakinen/go-bmp v1.0.0 // indirect
 	github.com/sergeymakinen/go-ico v1.0.0-beta.0 // indirect
 	github.com/soniakeys/quant v1.0.0 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect

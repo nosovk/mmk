@@ -30,10 +30,6 @@ func (a *App) setThreadsListFetcherForTest(fn ThreadsListFetchFunc) {
 	a.SetThreadService(NewThreadService(ThreadServiceFuncs{ListFetch: fn}))
 }
 
-func (a *App) setPermalinkFetcherForTest(fn PermalinkFetchFunc) {
-	a.SetMessageService(NewMessageService(MessageServiceFuncs{Permalink: fn}))
-}
-
 // channelFuncsForTest returns a copy of the current ChannelService's
 // closures so per-method test helpers can read-modify-write without
 // overwriting previously-set funcs. Tests that chain

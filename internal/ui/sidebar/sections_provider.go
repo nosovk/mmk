@@ -2,9 +2,8 @@ package sidebar
 
 // SectionsProvider supplies ordered sidebar sections to the model.
 // When non-nil and Ready returns true, the model uses provider data
-// instead of the config-glob path. Implementations live in the service
-// layer (SectionStore); this interface keeps the sidebar package free
-// of cross-package dependencies.
+// instead of the config-glob path. The interface keeps the sidebar
+// package free of cross-package dependencies.
 type SectionsProvider interface {
 	Ready() bool
 	// OrderedSections returns sections in the order they should

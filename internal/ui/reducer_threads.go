@@ -2,7 +2,7 @@
 //
 // Thread-family reducer for App.Update (Phase 4h).
 //
-// Owns the nine Update arms that drive the thread panel, the
+// Owns the seven Update arms that drive the thread panel, the
 // threads-list view, and the thread-reply send path:
 //
 //	ThreadMarkedRemoteMsg       - apply a remote subscriptions.thread.mark
@@ -21,13 +21,8 @@
 //	                              the highlighted thread if visible.
 //	ThreadsListDirtyMsg         - a debounced "list might be stale"
 //	                              trigger: kick a refresh fetch.
-//	SendThreadReplyMsg          - user sent a reply: optimistic
-//	                              placeholder + chat.postMessage call.
-//	ThreadReplySentMsg          - reply landed: swap placeholder for
-//	                              authoritative message, bump parent
-//	                              reply count, mark threads list dirty.
-//	ThreadReplySendFailedMsg    - reply failed: roll back the
-//	                              placeholder + fire SendFailed toast.
+//	SendThreadReplyMsg          - user sent a Mattermost reply:
+//	                              optimistic placeholder + scoped send.
 //
 // Free reducer (not controller-absorbed): these arms cooperate on
 // the thread panel, the threads-list view, the sidebar's threads
@@ -45,9 +40,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nosovk/mmk/internal/ids"
-	"github.com/nosovk/mmk/internal/slack/mrkdwn"
 	"github.com/nosovk/mmk/internal/ui/messages"
-	"github.com/nosovk/mmk/internal/ui/statusbar"
 )
 
 var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
@@ -210,90 +203,8 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		if !a.allows(FeatureThreadPanel) || !a.allows(FeatureSend) {
 			return nil, true
 		}
-		if a.features.kind == ContextMattermost && a.activeHistoryRequest.ChannelID != "" {
-			return reduceMattermostThreadReply(a, m), true
-		}
-		a.selfSend.MarkInFlight(m.ChannelID)
-		// Instant-display: append an optimistic placeholder to the
-		// thread panel immediately, before the chat.postMessage HTTP
-		// round-trip. Mirrors the SendMessageMsg path; see there for
-		// the LocalTS / swap-or-remove contract and the
-		// mrkdwn.Convert rationale.
-		localTS := a.selfSend.NextLocalTS()
-		optimisticText, _ := mrkdwn.Convert(m.Text)
-		if a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS() && m.ChannelID == a.threadPanel.ChannelID() {
-			a.threadPanel.AddReply(messages.MessageItem{
-				TS:        localTS,
-				UserID:    a.currentUserID,
-				UserName:  a.userNameFor(a.currentUserID),
-				Text:      optimisticText,
-				Timestamp: a.nowFormatted(),
-				ThreadTS:  m.ThreadTS,
-			})
-		}
-		threads := a.threads
-		chID := ids.ChannelID(m.ChannelID)
-		ts := ids.ThreadTS(m.ThreadTS)
-		text := m.Text
-		return func() tea.Msg {
-			result := threads.SendReply(chID, ts, text)
-			switch r := result.(type) {
-			case ThreadReplySentMsg:
-				r.LocalTS = localTS
-				return r
-			case ThreadReplySendFailedMsg:
-				r.LocalTS = localTS
-				return r
-			}
-			return result
-		}, true
+		return reduceMattermostThreadReply(a, m), true
 
-	case ThreadReplySentMsg:
-		// chat.postMessage for the thread reply landed. If a
-		// "local:..." placeholder is in the thread panel from the
-		// instant-display path (SendThreadReplyMsg above), swap it
-		// for the authoritative message; otherwise fall back to
-		// UpsertSelfSentReply.
-		//
-		// Note: the internal Slack flannel WebSocket does not always
-		// echo self-posted thread replies as a plain "message" event,
-		// so we cannot rely on the WS echo alone -- the HTTP response
-		// must apply all the side effects (parent reply count, threads
-		// dirty) here.
-		if m.Message.TS == "" {
-			return nil, true
-		}
-		a.selfSend.RecordSent(m.Message.TS)
-		// Update the thread panel whenever the visible thread
-		// matches, regardless of activeChannelID. When a thread is
-		// opened from the threads view, activeChannelID is not
-		// switched to the thread's channel, so gating on it here
-		// meant the user's own reply was sent to Slack but never
-		// appended locally -- they had to leave and re-enter the
-		// thread to see it.
-		if a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS() && m.ChannelID == a.threadPanel.ChannelID() {
-			if !a.threadPanel.SwapLocalSentReply(m.LocalTS, m.Message) {
-				a.threadPanel.UpsertSelfSentReply(m.Message)
-			}
-		}
-		for _, mm := range a.modelsForChannel(m.ChannelID) {
-			mm.IncrementReplyCount(m.ThreadTS, m.Message.TS)
-		}
-		if c := a.scheduleThreadsDirty(); c != nil {
-			return c, true
-		}
-		return nil, true
-
-	case ThreadReplySendFailedMsg:
-		// chat.postMessage for the thread reply failed; roll back
-		// the optimistic placeholder. Mirrors MessageSendFailedMsg.
-		if a.threadVisible && m.ThreadTS == a.threadPanel.ThreadTS() && m.ChannelID == a.threadPanel.ChannelID() && m.LocalTS != "" {
-			a.threadPanel.RemoveLocalSentReply(m.LocalTS)
-		}
-		reason := m.Reason
-		return func() tea.Msg {
-			return statusbar.SendFailedMsg{Reason: reason}
-		}, true
 	}
 	return nil, false
 }
@@ -351,7 +262,5 @@ func isThreadParentStub(msg messages.MessageItem, rootID string) bool {
 		len(msg.Reactions) == 0 &&
 		len(msg.Attachments) == 0 &&
 		!msg.IsEdited &&
-		msg.Subtype == "" &&
-		len(msg.Blocks) == 0 &&
-		len(msg.LegacyAttachments) == 0
+		msg.Subtype == ""
 }
