@@ -1,56 +1,40 @@
 # mmk
 
-> **A blazingly fast Slack TUI.**
-> Keyboard-driven, beautifully themed, and under 20MB. One static binary. No Electron required.
+> **A fast, keyboard-driven Mattermost TUI.**
+> One terminal application for channels, direct messages, threads, and multiple Mattermost servers.
 
-`mmk` is derived from [gammons/slk](https://github.com/gammons/slk). It retains
-Slack functionality during the Mattermost-only transition and is maintained as
-an independent project.
+`mmk` is an independent, unofficial Mattermost client written in Go with
+[Bubble Tea](https://github.com/charmbracelet/bubbletea) and
+[Lip Gloss](https://github.com/charmbracelet/lipgloss). It is derived from
+[gammons/slk](https://github.com/gammons/slk); the mature terminal UI and project
+history were retained while the runtime, authentication, models, cache, and
+formatting were migrated to Mattermost.
 
-![mmk screenshot](docs/assets/screenshot.png)
+## Current MVP
 
-`mmk` is a daily-driver replacement for the official Slack desktop client, built in Go with [bubbletea](https://github.com/charmbracelet/bubbletea) and [lipgloss](https://github.com/charmbracelet/lipgloss).
+- Multiple Mattermost servers connected independently, with all teams grouped under each server
+- Cache-first startup and channel history, including older-history pagination
+- Public channels, private channels, direct messages, and group messages
+- Realtime new posts over authenticated WebSockets
+- Message sending with optimistic pending state and server-event reconciliation
+- Thread viewing and replies, including realtime thread replies
+- Unread indicators and Mattermost channel-view read synchronization
+- Automatic reconnect with per-server state and active-channel reconciliation
+- Vim-inspired modal navigation, fuzzy local channel finder, built-in themes, and emoji autocomplete
+- SQLite-backed offline scrollback when live requests are unavailable
 
-## Why mmk?
+The current Mattermost runtime deliberately does not enable reactions, file
+uploads, message edit/delete, message search, status controls, typing indicators,
+desktop notifications, new DM creation, message permalinks, or the
+workspace-wide Threads view. See [Implementation Status](docs/STATUS.md) for the
+authoritative coverage and limitations.
 
-- **Fast.** Cold start in milliseconds. Render-cached messages. SQLite-backed scrollback. Real-time over WebSocket.
-- **Tiny.** ~19 MB on disk. ~60 MB RSS for a live multi-workspace session vs. 500 MB–1.5 GB for the official client. No node_modules, no Chromium, no 1Gb RAM tax.
-- **Keyboard-first.** Vim-style modal editing. `j/k`, `h/l`, `i`, `Esc`.
-- **Pretty.** 59 built-in themes, lipgloss-styled panels, true-pixel avatars on kitty (half-block fallback elsewhere), emoji shortcodes, day separators, and pill-style reactions.
-- **Multi-workspace.** All your workspaces stay connected in parallel. `1`–`9` to instantly jump between them, with live unread badges in the rail.
-- **Yours.** TOML config, custom themes, custom channel sections via glob, XDG-compliant paths.
+## Install
 
-## Highlights
-
-- Real-time messages, edits, deletes, reactions, typing indicators
-- Inline images (kitty graphics / sixel / half-block fallback) with full-screen preview
-- Threads side panel + a workspace-wide threads view
-- Smart paste: clipboard images, file paths, or text — multiple attachments + caption in one send
-- Slack-native sidebar sections, kept live; or glob-based config sections
-- Automatic auth from the Slack desktop app — no tokens to copy, no Slack App required
-- Vim-style modal keybindings, fuzzy channel finder, workspace picker
-- 59 themes + drop-in custom themes, live theme switcher
-- OS desktop notifications on DMs, mentions, and configurable keywords
-
-Full feature breakdown: **[[Features|https://github.com/nosovk/mmk/wiki/Features]]**
-
-## Quick install
-
-**Homebrew** (macOS and Linux):
+**Homebrew** (macOS):
 
 ```bash
 brew install nosovk/tap/mmk
-```
-
-**Linux/macOS tarball** (auto-resolves the latest version):
-
-```bash
-VERSION=$(curl -fsSL https://api.github.com/repos/nosovk/mmk/releases/latest | grep -oE '"tag_name": *"v[^"]+"' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//')
-# Linux x86_64
-curl -fsSL "https://github.com/nosovk/mmk/releases/latest/download/mmk_${VERSION}_linux_x86_64.tar.gz" | tar xz
-# macOS Apple Silicon
-curl -fsSL "https://github.com/nosovk/mmk/releases/latest/download/mmk_${VERSION}_darwin_arm64.tar.gz" | tar xz
-sudo mv mmk /usr/local/bin/
 ```
 
 **Go:**
@@ -59,154 +43,129 @@ sudo mv mmk /usr/local/bin/
 go install -ldflags="-s -w" -trimpath github.com/nosovk/mmk/cmd/mmk@latest
 ```
 
-For `.deb` / `.rpm` / `.apk` packages, Windows, build-from-source, and checksums, see the [Installation wiki page](https://github.com/nosovk/mmk/wiki/Installation).
-
-## Setup
-
-mmk reads your session directly from the **Slack desktop app** — no DevTools,
-no tokens to copy. Make sure you're signed in to the desktop app, then:
+**Build from source:**
 
 ```bash
-mmk --add-workspace
+git clone https://github.com/nosovk/mmk.git
+cd mmk
+go build -o bin/mmk ./cmd/mmk
 ```
 
-mmk lists the workspaces you're signed in to; pick the ones you want and
-you're done.
+Releases also provide Linux and macOS `.tar.gz` archives, a Windows `.zip`,
+checksums, and Linux `.deb`, `.rpm`, and `.apk` packages.
 
-Full walkthrough: [Setup wiki page](https://github.com/nosovk/mmk/wiki/Setup).
+## Mattermost Setup
 
-## Enterprise Grid
+`mmk` authenticates with a Mattermost Personal Access Token (PAT). The token has
+the same access as its Mattermost account, so create a dedicated token, do not
+share it, and revoke it if it is exposed.
 
-mmk reuses the **desktop app's** existing signed-in session (the same session
-your admin already sanctioned) rather than a browser session, which avoids the
-session-anomaly alerts that browser-token extraction can trigger. If you're on
-Enterprise Grid and still hit a sign-out or security alert after adding a
-workspace, please file an issue — include your OS and Slack desktop version.
-
-See [#5](https://github.com/nosovk/mmk/issues/5) for history.
-
-## Inline images in tmux
-
-If you run `mmk` inside tmux on a Kitty-capable terminal (Kitty, Ghostty,
-WezTerm), images render natively as long as tmux passthrough is enabled:
-
-```tmux
-set -g allow-passthrough on
-```
-
-Reload tmux for the setting to take effect (`tmux kill-server`, then
-reattach). Verify with:
+1. Ask a Mattermost system administrator to enable personal access tokens under
+   **System Console > Integrations > Integration Management** if the option is
+   unavailable. Mattermost disables PAT creation by default, and an administrator
+   may also need to grant your account permission to create one.
+2. In Mattermost, open **Profile > Security > Personal Access Tokens** (shown as
+   **User Settings > Security** in some versions), create a token with a useful
+   description, and record the token when it is displayed.
+3. Run the masked interactive setup:
 
 ```bash
-tmux show -gv allow-passthrough
+mmk --add-server
 ```
 
-Expected output: `on` (or `all`).
+Enter the deployment root, such as `https://chat.example.com`, or a URL ending in
+`/api/v4`. Deployment subpaths such as `https://example.com/mattermost` are also
+supported. `mmk` validates the token and team access before saving the server.
 
-If passthrough is off, `mmk` detects this at startup and falls back to
-half-block rendering automatically — no config change needed. To force a
-specific renderer regardless of detection, set `image_protocol` in
-`config.toml` to `kitty`, `sixel`, `halfblock`, or `off`.
+The PAT is stored in the operating system credential store, not in TOML:
 
-## Unread indicator in tmux
+- Linux: Secret Service through the desktop keyring
+- macOS: Keychain Services
+- Windows: Credential Manager
 
-`mmk` sets the terminal window title to reflect unread state — for
-example `mmk SW (3) +1` means three channels-with-unreads in the active
-workspace and at least one other workspace also has unreads. The
-two-letter prefix is the active workspace's initials (matching the
-left-rail label).
+The non-secret server registry is stored at `~/.config/mmk/servers.toml` by
+default. If the credential store is locked or unavailable, unlock it and ensure
+you are running inside a desktop session. There is no plaintext-token fallback.
 
-Outside tmux this just works — modern terminals (Kitty, WezTerm,
-Alacritty, Ghostty, iTerm2, Windows Terminal, gnome-terminal) render
-title changes in their tab/window chrome.
+Run `mmk --add-server` again with the same server URL to update that server's PAT
+or display name. Run it with another URL to add another server. Every team the
+authenticated account belongs to appears under its server; you do not add teams
+separately.
 
-Inside tmux there's an extra step. tmux intercepts the title escape
-from mmk, and only re-emits it to the outer terminal when title
-forwarding is on, *and* it uses its own title template by default
-(`#W` = window name) rather than the pane's title. Add both lines to
-`~/.tmux.conf`:
+Start the client with:
+
+```bash
+mmk
+```
+
+Full path, registry, and configuration details are in
+[docs/configuration.md](docs/configuration.md).
+
+## Terminal Notes
+
+The current Mattermost vertical slice renders text messages and does not wire
+Mattermost file attachments into the retained inline-image UI. Terminal image
+protocol settings therefore do not currently affect Mattermost messages.
+
+`mmk` updates the terminal title with unread state. Inside tmux, forward the
+active pane title with:
 
 ```tmux
 set -g set-titles on
 set -g set-titles-string '#T'
 ```
 
-`#T` (active pane title) is what carries mmk's string. Reload tmux for
-the setting to take effect (`tmux kill-server`, then reattach). Verify
-with:
-
-```bash
-tmux show -gv set-titles
-tmux show -gv set-titles-string
-```
-
-Expected output: `on` and `#T`.
-
-If you'd prefer mmk's unread indicator to work in tmux without any
-config change at all, that's tracked as a follow-up — it requires
-passing the title escape through tmux's DCS passthrough rather than
-relying on `set-titles`. Not in this release.
-
 ## Debugging
 
-Set `MMK_DEBUG=1` to enable a comprehensive debug log written to
-`mmk-debug.log` in the current working directory. The file is
-**truncated each run**, so reproduce the issue, quit mmk, then copy
-the file before relaunching. Log lines are categorized
-(`[cache]`, `[imgfetch]`, `[imgrender]`, `[ws]`, `[general]`) so
-`grep '\[cache\]' mmk-debug.log` slices to one focus area.
+Set `MMK_DEBUG=1` to write `mmk-debug.log` in the current working directory:
+
+```bash
+MMK_DEBUG=1 mmk
+```
+
+The file is truncated on each run. Debug logging redacts configured Mattermost
+tokens from handled client errors, but logs can still contain server, channel,
+user, and message metadata. Review a log before sharing it.
 
 ## Documentation
 
-Everything lives in the [**wiki**](https://github.com/nosovk/mmk/wiki):
-
-- [Installation](https://github.com/nosovk/mmk/wiki/Installation) — prebuilt binaries, Go install, build from source
-- [Setup](https://github.com/nosovk/mmk/wiki/Setup) — desktop-app auth, adding workspaces
-- [Features](https://github.com/nosovk/mmk/wiki/Features) — full feature breakdown
-- [Keybindings](https://github.com/nosovk/mmk/wiki/Keybindings) — every key, every mode
-- [Configuration](https://github.com/nosovk/mmk/wiki/Configuration) — `config.toml`, custom themes, XDG paths
-- [Terminal Compatibility](https://github.com/nosovk/mmk/wiki/Terminal-Compatibility) — what each terminal supports
-- [Clipboard and OSC 52](https://github.com/nosovk/mmk/wiki/Clipboard-and-OSC-52) — copy/paste setup notes
-- [Tradeoffs and Non-Goals](https://github.com/nosovk/mmk/wiki/Tradeoffs-and-Non-Goals) — roadmap, caveats, TOS notice
-- [Architecture](https://github.com/nosovk/mmk/wiki/Architecture) — service layout, data layer
+- [Configuration and credentials](docs/configuration.md)
+- [Development and verification](docs/development.md)
+- [Implementation status and limitations](docs/STATUS.md)
+- [Mattermost-only design](docs/plans/2026-08-08-mattermost-only-design.md)
 
 ## Contributing
 
-Contributions are welcome. A few ground rules:
+Contributions are welcome. For large features, open an issue before beginning an
+implementation. Every change should be understood by its author and pass:
 
-- **AI-assisted PRs are accepted** — and in fact encouraged — but only if
-  they're driven by a **frontier model** (e.g. Claude Opus, GPT-5,
-  Gemini Pro) running with **high thinking effort**. Low-effort,
-  small-model output that nobody reviewed tends to create more work than
-  it saves, and will be closed.
-- Ideally, drive the work with the
-  [superpowers](https://github.com/obra/superpowers) framework (or an
-  equivalent skills/TDD-disciplined workflow). Brainstorm the design
-  first, write tests, then implement.
-- **For large feature additions, open an issue first.** Before sinking
-  time into a big change, file an issue to discuss the idea and approach
-  so we can agree on direction. Bug fixes and small improvements can go
-  straight to a PR.
-- Whether human- or AI-written, **you are responsible for your PR.**
-  Understand the diff, make sure it builds and passes `go vet ./...` and
-  `go test ./...`, and be ready to explain your choices in review.
+```bash
+go test ./...
+go vet ./...
+go build ./cmd/mmk
+```
 
-### Release hosting
+See [docs/development.md](docs/development.md) for repository layout, focused
+test commands, race testing, and release checks.
 
-The release configuration assumes this repository is hosted at
-`github.com/nosovk/mmk`. When the workflow runs in `nosovk/mmk`, GitHub's
-automatically generated repository-scoped `GITHUB_TOKEN` is suitable for
-publishing there. When the workflow runs from another repository, such as the
-upstream `gammons/slk`, that repository's `GITHUB_TOKEN` cannot publish across
-repositories to `nosovk/mmk`; doing so requires a separate PAT or GitHub App
-credential with access to `nosovk/mmk`, plus a workflow change to use it.
+### Release Hosting
+
+The release workflow assumes this repository is hosted at
+`github.com/nosovk/mmk`. In that repository, GitHub's automatically generated,
+repository-scoped `GITHUB_TOKEN` can publish releases. A workflow running in
+another repository, including the upstream `gammons/slk`, cannot publish to
+`nosovk/mmk` with that repository's token. Cross-repository publishing requires
+a separate PAT or GitHub App credential with access to `nosovk/mmk`, plus a
+workflow change that uses it.
 
 ## Disclaimer
 
-`mmk` is an independent, unofficial project. It is not affiliated with, endorsed by, or sponsored by Slack Technologies, LLC or Salesforce, Inc. "Slack" is a trademark of Slack Technologies, LLC; it is used here only to describe the service this client interoperates with.
+`mmk` is an independent, unofficial project. It is not affiliated with,
+endorsed by, or sponsored by Mattermost, Inc.
 
-mmk talks to Slack via the same internal browser protocol the official web client uses. This is unofficial and not sanctioned by Slack — see [Tradeoffs and Non-Goals](https://github.com/nosovk/mmk/wiki/Tradeoffs-and-Non-Goals#unofficial--tos-caveat) for details.
+## License And Attribution
 
-## License
+[MIT](LICENSE) © Grant Ammons.
 
-[MIT](LICENSE) © Grant Ammons
+`mmk` is derived from [gammons/slk](https://github.com/gammons/slk) and retains
+the upstream license and copyright notice.
